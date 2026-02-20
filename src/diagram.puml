@@ -1,0 +1,78 @@
+@startuml
+
+class Edifici {
+  adreca : String
+  numero : int
+  codiPostal : String
+  districte : String
+  anyConstruccio : int
+  tipologia : TipusEdifici
+  superficieTotal : float
+  reglament : String
+  orientacioPrincipal : Orientacio
+}
+
+class Habitatge {
+  referenciaCadastral : String
+  idHabitatge : String
+  planta : int
+  porta : String
+  superficie : float
+  anyReforma : int
+}
+
+class CertificatEnergetic {
+  lletra : LletraEnergetica
+  consumKwhM2Any : float
+  emissionsCO2Any : float
+  energiaRefrigerant : float
+  energiaCalefaccio : float
+  aillamentTermic : float
+  dataEmissio : Date
+}
+
+class IndicadorEnergetic {
+  consumEstimado : float
+  indexResiliencia : float
+  heatRiskScore : float
+  rankingDistricte : int
+}
+
+class Usuari {
+  idUsuari : String
+  nom : String
+  email : String
+  rol : String
+  dataRegistre : Date
+}
+
+enum LletraEnergetica {
+  A
+  B
+  C
+  D
+  E
+  F
+  G
+}
+
+enum TipusEdifici {
+  Residencial
+  Comercial
+  Mixt
+}
+
+enum Orientacio {
+  Nord
+  Sud
+  Est
+  Oest
+}
+
+' Relacions
+Edifici "1" -- "1..*" Habitatge
+Habitatge "1" -- "1" CertificatEnergetic
+Edifici "1" -- "1" IndicadorEnergetic
+Usuari "1" -- "0..*" Habitatge
+
+@enduml

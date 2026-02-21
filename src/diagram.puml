@@ -46,6 +46,11 @@ class Usuari {
   dataRegistre : Date
 }
 
+class Propietari/Llogater{}
+class Administrador{}
+Administrador --|> Usuari
+"Propietari/Llogater" --|> Usuari
+
 enum LletraEnergetica {
   A
   B

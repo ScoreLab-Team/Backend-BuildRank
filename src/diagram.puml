@@ -1,38 +1,60 @@
 @startuml
 
 class Edifici {
-  adreca : String
-  numero : int
-  codiPostal : String
-  districte : String
-  anyConstruccio : int
-  tipologia : TipusEdifici
-  superficieTotal : float
-  reglament : String
-  orientacioPrincipal : Orientacio
+    anyConstruccio : int
+    tipologia : TipusEdifici
+    superficieTotal : float
+    reglament : String
+    orientacioPrincipal : Orientacio
 }
 
 class Habitatge {
   referenciaCadastral : String
   idHabitatge : String
-  planta : int
+  pis : String
   porta : String
   superficie : float
   anyReforma : int
 }
 
+class Localitzacio {
+  adreca : String
+  numero : int
+  codiPostal : String
+  barri : String
+  latitud : float
+  longitud : float
+  zonaClimatica : String
+}
 class CertificatEnergetic {
-  lletra : LletraEnergetica
-  consumKwhM2Any : float
-  emissionsCO2Any : float
-  energiaRefrigerant : float
-  energiaCalefaccio : float
-  aillamentTermic : float
-  dataEmissio : Date
+    qualificacioGlobal : LletraEnergetica
+    consumEnergiaPrimaria : float
+    consumEnergiaFinal : float
+    emissionsCO2 : float
+    costAnualEnergia : float
+
+    energiaCalefaccio : float
+    energiaRefrigeracio : float
+    energiaACS : float
+    energiaEnllumenament : float
+
+    emissionsCalefaccio : float
+    emissionsRefrigeracio : float
+    emissionsACS : float
+    emissionsEnllumenament : float
+
+    aillamentTermic : float
+    valorFinestres : float
+
+    normativa : String
+    einaCertificacio : String
+    motiuCertificacio : String
+    rehabilitacioEnergetica : boolean
+    dataEntrada : Date
 }
 
 class IndicadorEnergetic {
-  consumEstimado : float
+  consumEstimat : float
   indexResiliencia : float
   heatRiskScore : float
   rankingDistricte : int
@@ -47,7 +69,16 @@ class Usuari {
 }
 
 class Propietari/Llogater{}
-class Administrador{}
+class AdministradorFinca{}
+
+class InstalacioEnergetica {
+  solarFotovoltaica : boolean
+  solarTermica : boolean
+  biomassa : boolean
+  geotermica : boolean
+  xarxaDistricte : boolean
+  vehicleElectric : boolean
+}
 
 enum LletraEnergetica {
   A
@@ -73,11 +104,14 @@ enum Orientacio {
 }
 
 ' Relacions
-Edifici "1" -- "1..*" Habitatge
-Habitatge "1" -- "1" CertificatEnergetic
-Edifici "1" -- "1" IndicadorEnergetic
-Usuari "1" -- "0..*" Habitatge
-Administrador --|> Usuari
+Edifici "1" -- "1" Localitzacio : ubicat_en >
+Edifici "1" -- "1..*" Habitatge : format_per >
+Habitatge "1" -- "1" CertificatEnergetic : disposa_de >
+Edifici "1" -- "1" IndicadorEnergetic : genera
+Usuari "1" -- "*" Habitatge : resideix
+"Propietari/Llogater" "*" -- "0..1" AdministradorFinca : gestiona
+Edifici "1" -- "0..1" InstalacioEnergetica : incorpora
+AdministradorFinca --|> Usuari
 "Propietari/Llogater" --|> Usuari
 
 @enduml

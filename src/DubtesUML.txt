@@ -1,0 +1,2 @@
+- Habitatge com a Subclasse de Edifici? Es comunica amb Edifici o Habitatge?
+- Classe separada de localització o dins de Edifici / Habitatge?

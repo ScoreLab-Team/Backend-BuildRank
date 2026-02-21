@@ -80,6 +80,54 @@ class InstalacioEnergetica {
   vehicleElectric : boolean
 }
 
+class Temporada {
+  idTemporada : String
+  nom : String
+  dataInici : Date
+  dataFi : Date
+  activa : boolean
+}
+class Lliga {
+  nom : String
+  categoria : CategoriaRanking
+}
+
+class Participacio {
+  puntuacio : float
+  posicio : int
+  divisio : String
+}
+
+class GrupComparable {
+  zonaClimatica : String
+  tipologia : TipusEdifici
+  rangSuperficie : String
+}
+class Missio {
+  titol : String
+  descripcio : String
+  punts : int
+  categoria : CategoriaRanking
+}
+class MissioEdifici {
+  completada : boolean
+  dataCompletada : Date
+}
+
+class SimulacioMillora {
+  descripcio : String
+  reduccioConsumPrevista : float
+  reduccioEmissionsPrevista : float
+  costEstimado : float
+  dataSimulacio : Date
+}
+
+enum CategoriaRanking {
+  EFICIENCIA
+  RESILIENCIA
+  PROGRES
+}
+
 enum LletraEnergetica {
   A
   B
@@ -113,5 +161,16 @@ Usuari "1" -- "*" Habitatge : resideix
 Edifici "1" -- "0..1" InstalacioEnergetica : incorpora
 AdministradorFinca --|> Usuari
 "Propietari/Llogater" --|> Usuari
+
+Temporada "1" -- "*" Lliga
+Lliga "1" -- "*" Participacio
+Edifici "1" -- "*" Participacio
+
+
+Participacio "1" -- "*" GrupComparable
+
+Participacio "1" -- "*" MissioEdifici
+Missio "1" -- "*" MissioEdifici
+Edifici "1" -- "*" MissioEdifici
 
 @enduml

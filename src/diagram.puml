@@ -48,8 +48,6 @@ class Usuari {
 
 class Propietari/Llogater{}
 class Administrador{}
-Administrador --|> Usuari
-"Propietari/Llogater" --|> Usuari
 
 enum LletraEnergetica {
   A
@@ -79,5 +77,7 @@ Edifici "1" -- "1..*" Habitatge
 Habitatge "1" -- "1" CertificatEnergetic
 Edifici "1" -- "1" IndicadorEnergetic
 Usuari "1" -- "0..*" Habitatge
+Administrador --|> Usuari
+"Propietari/Llogater" --|> Usuari
 
 @enduml

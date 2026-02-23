@@ -68,7 +68,9 @@ class Usuari {
   dataRegistre : Date
 }
 
-class Propietari/Llogater{}
+class Resident{
+  tipus : TipusResident
+}
 class AdministradorFinca{}
 
 class InstalacioEnergetica {
@@ -122,6 +124,11 @@ class SimulacioMillora {
   dataSimulacio : Date
 }
 
+class Informe {
+  dataGeneracio : Date
+  resum : String
+}
+
 enum CategoriaRanking {
   EFICIENCIA
   RESILIENCIA
@@ -144,6 +151,11 @@ enum TipusEdifici {
   Mixt
 }
 
+enum TipusResident {
+  Propietari
+  Llogater
+}
+
 enum Orientacio {
   Nord
   Sud
@@ -156,17 +168,21 @@ Edifici "1" -- "1" Localitzacio : ubicat_en >
 Edifici "1" -- "1..*" Habitatge : format_per >
 Habitatge "1" -- "1" CertificatEnergetic : disposa_de >
 Edifici "1" -- "1" IndicadorEnergetic : genera
+Edifici "1" -- "*" Informe
+
+' Per un habitatge només hi haurà un compte d'usuari
 Usuari "1" -- "*" Habitatge : resideix
-"Propietari/Llogater" "*" -- "0..1" AdministradorFinca : gestiona
+Edifici "*" -- "0..1" AdministradorFinca : gestiona <
 Edifici "1" -- "0..1" InstalacioEnergetica : incorpora
 AdministradorFinca --|> Usuari
-"Propietari/Llogater" --|> Usuari
+Resident --|> Usuari
+AdministradorFinca "1" -- "0..*" Informe : crea >
 
 Temporada "1" -- "*" Lliga
 Lliga "1" -- "*" Participacio
 Edifici "1" -- "*" Participacio
 
-
+' Potser millor: Edifici "1" -- "*" GrupComparable : pertany_a >, ja que el grup comparable no depen de la lliga
 Participacio "1" -- "*" GrupComparable
 
 Participacio "1" -- "*" MissioEdifici

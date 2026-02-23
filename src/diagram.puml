@@ -164,7 +164,7 @@ enum Orientacio {
 }
 
 ' Relacions
-Edifici "1" -- "1" Localitzacio : ubicat_en >
+Edifici "1" -up- "1" Localitzacio : ubicat_en >
 Edifici "1" -- "1..*" Habitatge : format_per >
 Habitatge "1" -- "1" CertificatEnergetic : disposa_de >
 Edifici "1" -- "1" IndicadorEnergetic : genera

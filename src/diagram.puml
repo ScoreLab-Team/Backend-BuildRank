@@ -1,6 +1,7 @@
 @startuml
 
 class Edifici {
+    idEdifici : String
     anyConstruccio : int
     tipologia : TipusEdifici
     superficieTotal : float
@@ -89,9 +90,11 @@ class Temporada {
   dataFi : Date
   activa : boolean
 }
+
 class Lliga {
   nom : String
   categoria : CategoriaRanking
+  divisio : DivisioLliga
 }
 
 class Participacio {
@@ -121,7 +124,16 @@ class SimulacioMillora {
   reduccioConsumPrevista : float
   reduccioEmissionsPrevista : float
   costEstimado : float
+  estalviAnual: float
   dataSimulacio : Date
+}
+
+class Millora {
+  nom : String
+  descripcio : String
+  categoria : String
+  impactePunts : float
+  parametres : String
 }
 
 class Informe {
@@ -129,10 +141,26 @@ class Informe {
   resum : String
 }
 
+class Xat {
+  nom : String
+}
+
+class Missatge {
+  text: String
+  DataEnviament: Date
+}
+
+
 enum CategoriaRanking {
   EFICIENCIA
   RESILIENCIA
   PROGRES
+}
+
+enum DivisioLliga {
+  Bronze
+  Silver
+  Gold
 }
 
 enum LletraEnergetica {
@@ -165,20 +193,20 @@ enum Orientacio {
 
 ' Relacions
 Edifici "1" -up- "1" Localitzacio : ubicat_en >
-Edifici "1" -- "1..*" Habitatge : format_per >
+Edifici "1" *-- "1..*" Habitatge : format_per >
 Habitatge "1" -- "1" CertificatEnergetic : disposa_de >
-Edifici "1" -- "1" IndicadorEnergetic : genera
+Edifici "1" -left- "1" IndicadorEnergetic : genera
 Edifici "1" -- "*" Informe
 
 ' Per un habitatge només hi haurà un compte d'usuari
 Usuari "1" -- "*" Habitatge : resideix
-Edifici "*" -- "0..1" AdministradorFinca : gestiona <
-Edifici "1" -- "0..1" InstalacioEnergetica : incorpora
+Edifici "1..*" -- "0..1" AdministradorFinca : gestiona <
+Edifici "1" -right- "0..1" InstalacioEnergetica : incorpora
 AdministradorFinca --|> Usuari
 Resident --|> Usuari
 AdministradorFinca "1" -- "0..*" Informe : crea >
 
-Temporada "1" -- "*" Lliga
+Temporada "1" *-- "*" Lliga
 Lliga "1" -- "*" Participacio
 Edifici "1" -- "*" Participacio
 
@@ -188,5 +216,13 @@ Participacio "1" -- "*" GrupComparable
 Participacio "1" -- "*" MissioEdifici
 Missio "1" -- "*" MissioEdifici
 Edifici "1" -- "*" MissioEdifici
+
+SimulacioMillora "*" -- "*" Millora
+Edifici "1" -- "*" SimulacioMillora
+
+Xat "1" -- "1" Edifici : Té >
+Xat "1..*" -- "1..*" Usuari
+Xat "1" -- "0..*" Missatge : Pertany <
+Usuari "1" -- "0..*" Missatge : envia >
 
 @enduml

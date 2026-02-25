@@ -7,6 +7,7 @@ class Edifici {
     superficieTotal : float
     reglament : String
     orientacioPrincipal : Orientacio
+    puntuacioBase: float
 }
 
 class Habitatge {

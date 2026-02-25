@@ -233,4 +233,8 @@ Xat "1..*" -- "1..*" Usuari
 Xat "1" -- "0..*" Missatge : Pertany <
 Usuari "1" -- "0..*" Missatge : envia >
 
+note right of Usuari
+{overlapping, incomplete}
+end note
+
 @enduml

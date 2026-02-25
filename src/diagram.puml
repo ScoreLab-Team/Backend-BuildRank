@@ -135,6 +135,10 @@ class Millora {
   impactePunts : float
   parametres : String
 }
+class Vot {
+  valor : float
+  data : Date
+}
 
 class Informe {
   dataGeneracio : Date
@@ -195,30 +199,34 @@ enum Orientacio {
 Edifici "1" -up- "1" Localitzacio : ubicat_en >
 Edifici "1" *-- "1..*" Habitatge : format_per >
 Habitatge "1" -- "1" CertificatEnergetic : disposa_de >
-Edifici "1" -left- "1" IndicadorEnergetic : genera
+Edifici "1" -up- "1" IndicadorEnergetic : genera
 Edifici "1" -- "*" Informe
 
 ' Per un habitatge només hi haurà un compte d'usuari
 Usuari "1" -- "*" Habitatge : resideix
 Edifici "1..*" -- "0..1" AdministradorFinca : gestiona <
-Edifici "1" -right- "0..1" InstalacioEnergetica : incorpora
+Edifici "1" -up- "0..1" InstalacioEnergetica : incorpora
 AdministradorFinca --|> Usuari
 Resident --|> Usuari
 AdministradorFinca "1" -- "0..*" Informe : crea >
 
 Temporada "1" *-- "*" Lliga
-Lliga "1" -- "*" Participacio
-Edifici "1" -- "*" Participacio
+Lliga "1" -- "*" Participacio : inclou
+Edifici "1" -left- "*" Participacio
 
-' Potser millor: Edifici "1" -- "*" GrupComparable : pertany_a >, ja que el grup comparable no depen de la lliga
-Participacio "1" -- "*" GrupComparable
+Edifici "1..*" -right- "1" GrupComparable : pertany >
 
+Temporada "*" -- "1..*" Missio : activa >
 Participacio "1" -- "*" MissioEdifici
 Missio "1" -- "*" MissioEdifici
+' Equivalent a classe associativa, missió - edf
 Edifici "1" -- "*" MissioEdifici
 
-SimulacioMillora "*" -- "*" Millora
-Edifici "1" -- "*" SimulacioMillora
+Edifici "1" -- "0..*" SimulacioMillora : proposa >
+SimulacioMillora "1" -- "1" Millora
+
+Usuari "1" -left- "0..*" Vot
+SimulacioMillora "0..1" -right- "*" Vot
 
 Xat "1" -- "1" Edifici : Té >
 Xat "1..*" -- "1..*" Usuari

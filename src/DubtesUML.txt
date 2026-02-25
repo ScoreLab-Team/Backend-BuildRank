@@ -1,2 +1,4 @@
-- Habitatge com a Subclasse de Edifici? Es comunica amb Edifici o Habitatge?
-- Classe separada de localització o dins de Edifici / Habitatge? Bernat: Per mi separada millor
+Missions iguals a tots els edificis per temporada o no?
+
+Pendent:
+Xat entre administradors?

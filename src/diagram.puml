@@ -12,8 +12,7 @@ class Edifici {
 
 class Habitatge {
   referenciaCadastral : String
-  idHabitatge : String
-  pis : String
+  planta : String
   porta : String
   superficie : float
   anyReforma : int
@@ -109,6 +108,7 @@ class Participacio {
 }
 
 class GrupComparable {
+  idGrup : int
   zonaClimatica : String
   tipologia : TipusEdifici
   rangSuperficie : String
@@ -134,6 +134,7 @@ class SimulacioMillora {
 }
 
 class Millora {
+  idMillora : int
   nom : String
   descripcio : String
   categoria : String
@@ -146,19 +147,14 @@ class Vot {
 }
 
 class Informe {
+  idInforme : int
   dataGeneracio : Date
   resum : String
 }
 
 class Xat {
-  nom : String
+  idXatExtern : String
 }
-
-class Missatge {
-  text: String
-  DataEnviament: Date
-}
-
 
 enum CategoriaRanking {
   EFICIENCIA
@@ -208,7 +204,7 @@ Edifici "1" -up- "1" IndicadorEnergetic : genera
 Edifici "1" -- "*" Informe
 
 ' Per un habitatge només hi haurà un compte d'usuari
-Usuari "1" -- "*" Habitatge : resideix
+Usuari "0..1" -- "*" Habitatge : resideix >
 Edifici "1..*" -- "0..1" AdministradorFinca : gestiona <
 Edifici "1" -up- "0..1" InstalacioEnergetica : incorpora
 AdministradorFinca --|> Usuari
@@ -231,16 +227,16 @@ Edifici "1" -- "*" MissioEdifici
 Edifici "1" -- "0..*" SimulacioMillora : proposa >
 SimulacioMillora "1" -- "1" Millora
 
-Usuari "1" -left- "0..*" Vot
-SimulacioMillora "0..1" -right- "*" Vot
+Usuari "1" -down- "*" Vot
+SimulacioMillora "1" -right- "*" Vot
+
+Usuari "*" -- "*" SimulacioMillora : visualitza >
 
 Xat "1" -- "1" Edifici : Té >
-Xat "1..*" -- "1..*" Usuari
-Xat "1" -- "0..*" Missatge : Pertany <
-Usuari "1" -- "0..*" Missatge : envia >
+Xat "1..*" -- "1..*" Usuari : participa <
 
 note right of Usuari
-{overlapping, incomplete}
+{overlapping, complete}
 end note
 
 @enduml

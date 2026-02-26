@@ -1,4 +1,4 @@
-@startuml
+ @startuml
 
 class Edifici {
     idEdifici : String
@@ -92,6 +92,10 @@ class Temporada {
   activa : boolean
 }
 
+class Event {
+  titol : String
+  data: Date
+}
 class Lliga {
   nom : String
   categoria : CategoriaRanking
@@ -211,7 +215,8 @@ AdministradorFinca --|> Usuari
 Resident --|> Usuari
 AdministradorFinca "1" -- "0..*" Informe : crea >
 
-Temporada "1" *-- "*" Lliga
+Temporada "*" -right- "*" Event
+Temporada "1" *-- "3" Lliga
 Lliga "1" -- "*" Participacio : inclou
 Edifici "1" -left- "*" Participacio
 

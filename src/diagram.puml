@@ -27,7 +27,7 @@ class Localitzacio {
   longitud : float
   zonaClimatica : String
 }
-class CertificatEnergetic {
+class DadesEnergetiques {
     qualificacioGlobal : LletraEnergetica
     consumEnergiaPrimaria : float
     consumEnergiaFinal : float
@@ -54,7 +54,7 @@ class CertificatEnergetic {
     dataEntrada : Date
 }
 
-class IndicadorEnergetic {
+class IndicadorBuildRank {
   consumEstimat : float
   indexResiliencia : float
   heatRiskScore : float
@@ -75,12 +75,7 @@ class Resident{
 class AdministradorFinca{}
 
 class InstalacioEnergetica {
-  solarFotovoltaica : boolean
-  solarTermica : boolean
-  biomassa : boolean
-  geotermica : boolean
-  xarxaDistricte : boolean
-  vehicleElectric : boolean
+  tipus : TipusInstalacio
 }
 
 class Temporada {
@@ -198,17 +193,26 @@ enum Orientacio {
   Oest
 }
 
+enum TipusInstalacio {
+  SolarFotovoltaica
+  SolarTermica
+  Biomassa
+  Geotermica
+  XarxaDistricte
+  VehicleElectric
+}
+
 ' Relacions
 Edifici "1" -up- "1" Localitzacio : ubicat_en >
 Edifici "1" *-- "1..*" Habitatge : format_per >
-Habitatge "1" -- "1" CertificatEnergetic : disposa_de >
-Edifici "1" -up- "1" IndicadorEnergetic : genera
+Habitatge "1" -- "1" DadesEnergetiques : disposa_de >
+Edifici "1" -up- "1" IndicadorBuildRank : genera >
 Edifici "1" -- "*" Informe : disposa_de >
 
 ' Per un habitatge només hi haurà un compte d'usuari
 Usuari "0..1" -- "*" Habitatge : resideix >
 Edifici "1..*" -- "0..1" AdministradorFinca : gestiona <
-Edifici "1" -up- "0..1" InstalacioEnergetica : incorpora >
+Edifici "1" -up- "*" InstalacioEnergetica : incorpora >
 AdministradorFinca --|> Usuari
 Resident --|> Usuari
 AdministradorFinca "1" -- "0..*" Informe : crea >

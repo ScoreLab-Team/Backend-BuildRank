@@ -3,3 +3,4 @@ Missions iguals a tots els edificis per temporada o no? --> SI, de base, però a
 Pendent:
 Xat entre administradors? - Arquitectura
 SM: Usuaries també poden fer simulacions --> FET
+Prova Pull Request

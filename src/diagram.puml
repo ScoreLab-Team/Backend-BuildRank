@@ -19,7 +19,7 @@ class Habitatge {
 }
 
 class Localitzacio {
-  adreca : String
+  carrer : String
   numero : int
   codiPostal : String
   barri : String
@@ -78,6 +78,7 @@ class InstalacioEnergetica {
   tipus : TipusInstalacio
 }
 
+
 class Temporada {
   idTemporada : String
   nom : String
@@ -101,13 +102,6 @@ class Participacio {
   posicio : int
   divisio : String
 }
-
-class GrupComparable {
-  idGrup : int
-  zonaClimatica : String
-  tipologia : TipusEdifici
-  rangSuperficie : String
-}
 class Missio {
   titol : String
   descripcio : String
@@ -119,6 +113,15 @@ class MissioPersonalitzada{}
 class MissioEdifici {
   completada : boolean
   dataCompletada : Date
+}
+
+
+
+class GrupComparable {
+  idGrup : int
+  zonaClimatica : String
+  tipologia : TipusEdifici
+  rangSuperficie : String
 }
 
 class SimulacioMillora {
@@ -138,6 +141,13 @@ class Millora {
   impactePunts : float
   parametres : String
 }
+class MilloraImplementada {
+  id : int
+  dataExecucio : Date
+  costReal : float
+  documentacioAdjunta : File
+  estatValidacio : EstatValidacio
+}
 class Vot {
   valor : float
   data : Date
@@ -152,6 +162,8 @@ class Informe {
 class Xat {
   idXatExtern : String
 }
+
+
 
 enum CategoriaRanking {
   EFICIENCIA
@@ -201,7 +213,11 @@ enum TipusInstalacio {
   XarxaDistricte
   VehicleElectric
 }
-
+enum EstatValidacio {
+  EnProces
+  Validada
+  Rebutjada
+}
 ' Relacions
 Edifici "1" -up- "1" Localitzacio : ubicat_en >
 Edifici "1" *-- "1..*" Habitatge : format_per >
@@ -210,7 +226,7 @@ Edifici "1" -up- "1" IndicadorBuildRank : genera >
 Edifici "1" -- "*" Informe : disposa_de >
 
 ' Per un habitatge només hi haurà un compte d'usuari
-Usuari "0..1" -- "*" Habitatge : resideix >
+Usuari "0..1" -left- "*" Habitatge : resideix >
 Edifici "1..*" -- "0..1" AdministradorFinca : gestiona <
 Edifici "1" -up- "*" InstalacioEnergetica : incorpora >
 AdministradorFinca --|> Usuari
@@ -234,7 +250,7 @@ MissioPersonalitzada "*" -- "1" Edifici : pertany >
 MissioPersonalitzada "0..1" -- "*" MissioEdifici : es_assignada >
 
 Edifici "1" -- "0..*" SimulacioMillora : proposa >
-SimulacioMillora "1" -- "1" Millora : simula >
+SimulacioMillora "*" --* "1" Millora : simula >
 
 Usuari "1" -down- "*" Vot : proporciona >
 SimulacioMillora "1" -right- "*" Vot : rep >
@@ -244,6 +260,11 @@ Usuari "*" -- "*" SimulacioMillora : visualitza >
 Xat "1" -- "1" Edifici : Té >
 Xat "1..*" -- "1..*" Usuari : participa <
 
+Edifici "1" -- "*" MilloraImplementada : executa >
+MilloraImplementada "*" -- "1" Millora : correspon_a >
+MilloraImplementada "0..1" -- "1" AdministradorFinca : valida >
+
+
 note right of Usuari
 {overlapping, complete}
 end note
@@ -251,5 +272,6 @@ end note
 note right of Missio
 {disjoint, complete}
 end note
+
 
 @enduml

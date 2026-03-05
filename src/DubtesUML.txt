@@ -5,3 +5,4 @@ Xat entre administradors? - Arquitectura
 SM: Usuaries també poden fer simulacions --> FET
 Prova Pull Request
 Segona Prova Pull Request
+Tercera Prova Pull Request

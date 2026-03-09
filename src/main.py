@@ -1,21 +1,20 @@
-# main.py
 from fixtures.edifici_exemple import crear_edifici_exemple
+from scoring.buildingHealthScore import calcular_building_health_score
 
 def main():
-    # Crear edificio de ejemplo
     edifici = crear_edifici_exemple()
-
-    # Imprimir info general del edificio
-    print("=== INFORMACIÓ EDIFICI ===")
+    print("=== EDIFICI ===")
     print(edifici)
 
-    # Separador
     print("\n=== HABITATGES ===")
-
-    # Imprimir todos los habitatges y sus dades energètiques
-    for idx, h in enumerate(edifici.habitatges, start=1):
+    for idx, h in enumerate(edifici.habitatges, 1):
         print(f"\nHabitatge #{idx}")
         print(h)
+
+        # Calcular BHS
+        resultat = calcular_building_health_score(h.dades_energetiques)
+        print(f"BHS: {resultat['score']:.2f} (v{resultat['version']})")
+        print(f"Pesos aplicats: {resultat['pesos']}")
 
 if __name__ == "__main__":
     main()

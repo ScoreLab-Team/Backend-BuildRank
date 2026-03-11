@@ -168,3 +168,25 @@ class Habitatge(models.Model):
 
     def __str__(self):
         return f"Habitatge{self.referenciaCadastral} ({self.planta}-{self.porta})"
+
+
+class AccessDenialLog(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='access_denials',
+    )
+    role = models.CharField(max_length=20, blank=True)
+    edifici_sol_licitat = models.CharField(max_length=50, blank=True)
+    accio = models.CharField(max_length=100)
+    motiu = models.CharField(max_length=255)
+    ip = models.GenericIPAddressField(null=True, blank=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-timestamp']
+
+    def __str__(self):
+        return f"[{self.timestamp}] {self.role} → {self.accio} – {self.motiu}"

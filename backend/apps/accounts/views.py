@@ -1,13 +1,20 @@
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 
-from apps.accounts.serializers import RegisterSerializer, LoginSerializer, LogoutSerializer, MeSerializer
+from apps.accounts.models import Edifici, Habitatge, RoleChoices
+from apps.accounts.permissions import IsAdminSistema, IsAdminFinca, ABACMixin
+from apps.accounts.serializers import (
+    RegisterSerializer, LoginSerializer, LogoutSerializer, MeSerializer,
+    EdificiResumSerializer, HabitatgeResumSerializer,
+    AssignarResidentSerializer, AssignarAdminSerializer,
+)
 
 
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
+    permission_classes = [AllowAny]
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -26,6 +33,8 @@ class RegisterView(generics.CreateAPIView):
         )
 
 class LoginView(APIView):
+    permission_classes = [AllowAny]
+
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -49,6 +58,8 @@ class LoginView(APIView):
         )
 
 class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def post(self, request):
         serializer = LogoutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -65,3 +76,80 @@ class MeView(APIView):
     def get(self, request):
         serializer = MeSerializer(request.user)
         return Response(serializer.data)
+
+
+# ---------------------------------------------------------------------------
+# Consulta: a quins edificis pot accedir l'usuari autenticat
+# ---------------------------------------------------------------------------
+
+class MeEdificisView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        role = getattr(getattr(user, 'profile', None), 'role', None)
+
+        if role == RoleChoices.ADMIN:
+            edificis = Edifici.objects.select_related('localitzacio').all()
+        elif role == RoleChoices.OWNER:
+            # AdminFinca: edificis de la seva cartera
+            edificis = user.edificis_administrats.select_related('localitzacio').all()
+        else:
+            # Resident/Llogater: edificis on té habitatge
+            edificis = Edifici.objects.select_related('localitzacio').filter(
+                habitatges__usuari=user
+            ).distinct()
+
+        serializer = EdificiResumSerializer(edificis, many=True)
+        return Response(serializer.data)
+
+
+# ---------------------------------------------------------------------------
+# Assignació: resident → habitatge  (AdminFinca, ABAC-B)
+# ---------------------------------------------------------------------------
+
+class AssignarResidentView(ABACMixin, APIView):
+    permission_classes = [IsAdminFinca]
+
+    def patch(self, request, ref_cadastral):
+        try:
+            habitatge = Habitatge.objects.select_related('edifici').get(
+                referenciaCadastral=ref_cadastral
+            )
+        except Habitatge.DoesNotExist:
+            return Response({"detail": "Habitatge no trobat."}, status=status.HTTP_404_NOT_FOUND)
+
+        # ABAC-B: l'edifici ha d'estar a la cartera de l'admin
+        self.check_edifici_access(request, habitatge.edifici.idEdifici)
+
+        serializer = AssignarResidentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user_id = serializer.validated_data['user_id']
+        habitatge.usuari_id = user_id
+        habitatge.save(update_fields=['usuari_id'])
+
+        return Response(HabitatgeResumSerializer(habitatge).data)
+
+
+# ---------------------------------------------------------------------------
+# Assignació: admin → edifici  (només AdminSistema)
+# ---------------------------------------------------------------------------
+
+class AssignarAdminEdificiView(APIView):
+    permission_classes = [IsAdminSistema]
+
+    def patch(self, request, id_edifici):
+        try:
+            edifici = Edifici.objects.get(idEdifici=id_edifici)
+        except Edifici.DoesNotExist:
+            return Response({"detail": "Edifici no trobat."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = AssignarAdminSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user_id = serializer.validated_data['user_id']
+        edifici.administradorFinca_id = user_id
+        edifici.save(update_fields=['administradorFinca_id'])
+
+        return Response(EdificiResumSerializer(edifici).data)

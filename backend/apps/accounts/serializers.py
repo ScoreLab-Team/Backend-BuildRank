@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from rest_framework import serializers
 
-from apps.accounts.models import Profile, RoleChoices
+from apps.accounts.models import Profile, RoleChoices, Edifici, Habitatge
 
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -27,6 +27,10 @@ class RegisterSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         if attrs["password"] != attrs["password_confirm"]:
             raise serializers.ValidationError({"password_confirm": "Les contrasenyes no coincideixen."})
+
+        requested_role = attrs.get("role")
+        if requested_role == RoleChoices.ADMIN:
+            raise serializers.ValidationError({"role": "No està permès registrar-se com a administrador."})
 
         password = attrs["password"]
 
@@ -100,3 +104,55 @@ class MeSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ("id", "email", "first_name", "last_name", "role")
+
+
+# ---------------------------------------------------------------------------
+# Edifici / Habitatge
+# ---------------------------------------------------------------------------
+
+class LocalitzacioResum(serializers.Serializer):
+    carrer = serializers.CharField()
+    numero = serializers.IntegerField()
+    codiPostal = serializers.CharField()
+    barri = serializers.CharField()
+    zonaClimatica = serializers.CharField()
+
+
+class EdificiResumSerializer(serializers.ModelSerializer):
+    localitzacio = LocalitzacioResum(read_only=True)
+
+    class Meta:
+        model = Edifici
+        fields = ("idEdifici", "tipologia", "superficieTotal", "puntuacioBase", "localitzacio")
+
+
+class HabitatgeResumSerializer(serializers.ModelSerializer):
+    edifici_id = serializers.CharField(source="edifici.idEdifici", read_only=True)
+
+    class Meta:
+        model = Habitatge
+        fields = ("referenciaCadastral", "planta", "porta", "superficie", "edifici_id")
+
+
+# ---------------------------------------------------------------------------
+# Assignació
+# ---------------------------------------------------------------------------
+
+class AssignarResidentSerializer(serializers.Serializer):
+    """Assigna un usuari (resident) a un habitatge."""
+    user_id = serializers.IntegerField()
+
+    def validate_user_id(self, value):
+        if not User.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("Usuari no trobat.")
+        return value
+
+
+class AssignarAdminSerializer(serializers.Serializer):
+    """Assigna un administrador de finca a un edifici."""
+    user_id = serializers.IntegerField(allow_null=True)
+
+    def validate_user_id(self, value):
+        if value is not None and not User.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("Usuari no trobat.")
+        return value

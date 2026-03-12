@@ -32,6 +32,8 @@ class Edifici(models.Model):
     
     def __str__(self):
         return f"Edifici {self.id_edifici}"
+    class Meta:
+        db_table = 'edifici'  
 
 class Habitatge(models.Model):
     edifici = models.ForeignKey(Edifici, related_name="habitatges", on_delete=models.CASCADE)

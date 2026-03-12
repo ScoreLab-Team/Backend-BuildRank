@@ -21,7 +21,8 @@ from django.conf import settings
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/', include('apps.accounts.urls')),
+    path('api/accounts/', include('apps.accounts.urls')),   # endpoints de comptes
+    path('api/buildings/', include('apps.buildings.urls')), # endpoints de edificis
 ]
 
 if settings.DEBUG:
@@ -29,3 +30,4 @@ if settings.DEBUG:
     urlpatterns = [
         path('__debug__/', include(debug_toolbar.urls)),
     ] + urlpatterns
+

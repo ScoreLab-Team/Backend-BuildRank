@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'apps.accounts',
 
     "debug_toolbar",
+    'apps.buildings',
 ]
 
 MIDDLEWARE = [

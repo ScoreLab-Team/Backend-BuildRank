@@ -1,6 +1,6 @@
 # apps/buildings/serializers.py
 from rest_framework import serializers
-from .models import Edifici, Habitatge, DadesEnergetiques, Localitzacio
+from apps.buildings.models import Edifici, Habitatge, DadesEnergetiques, Localitzacio
 import re
 from datetime import date
 

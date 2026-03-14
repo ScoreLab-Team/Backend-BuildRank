@@ -3,12 +3,10 @@ from django.db import transaction
 from rest_framework import serializers
 
 from apps.accounts.models import Profile, RoleChoices
+from apps.buildings.models import Edifici, Habitatge
 
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
-
-from datetime import date
-import re
 
 User = get_user_model()
 
@@ -104,7 +102,7 @@ class LogoutSerializer(serializers.Serializer):
             raise serializers.ValidationError({"refresh": "Token invàlid o ja invalidat."})
 
 
-class MeSerializer(serializers.ModelSerializer):
+class MeSerializer(serializers.Serializer):
     role = serializers.CharField(source="profile.role")
 
     class Meta:
@@ -119,14 +117,14 @@ class LocalitzacioResum(serializers.Serializer):
     barri = serializers.CharField()
     zonaClimatica = serializers.CharField()
 
-class EdificiResumSerializer(serializers.ModelSerializer):
+class EdificiResumSerializer(serializers.Serializer):
     localitzacio = LocalitzacioResum(read_only=True)
 
     class Meta:
         model = Edifici
         fields = ("idEdifici", "tipologia", "superficieTotal", "puntuacioBase", "localitzacio")
 
-class HabitatgeResumSerializer(serializers.ModelSerializer):
+class HabitatgeResumSerializer(serializers.Serializer):
     edifici_id = serializers.CharField(source="edifici.idEdifici", read_only=True)
 
     class Meta:

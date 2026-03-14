@@ -4,6 +4,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from apps.accounts.views import (
     RegisterView, LoginView, LogoutView, MeView,
     MeEdificisView, AssignarResidentView, AssignarAdminEdificiView,
+    EdificiView,
 )
 
 urlpatterns = [
@@ -13,6 +14,7 @@ urlpatterns = [
     path("refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("me/", MeView.as_view(), name="me"),
+    path("edificis/", EdificiView.as_view(), name="edificis"),
 
     # Consulta: edificis accessibles per l'usuari autenticat
     path("me/edificis/", MeEdificisView.as_view(), name="me-edificis"),

@@ -9,6 +9,7 @@ from apps.accounts.serializers import (
     RegisterSerializer, LoginSerializer, LogoutSerializer, MeSerializer,
     EdificiResumSerializer, HabitatgeResumSerializer,
     AssignarResidentSerializer, AssignarAdminSerializer,
+    EdificiSerializer, 
 )
 
 
@@ -153,3 +154,24 @@ class AssignarAdminEdificiView(APIView):
         edifici.save(update_fields=['administradorFinca_id'])
 
         return Response(EdificiResumSerializer(edifici).data)
+    
+
+# ---------------------------------------------------
+# API per crear i consultar edificis (POST / GET)
+# ---------------------------------------------------
+
+class EdificiView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Consultar (GET): retorna la llista de tots els edificis
+        edificis = Edifici.objects.select_related('localitzacio').all()
+        serializer = EdificiResumSerializer(edificis, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    def post(self, request):
+        # Crear (POST): rep les dades, les valida i crea un edifici nou
+        serializer = EdificiSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)

@@ -12,13 +12,15 @@ class RoleChoices(models.TextChoices):
 class TipusEdifici(models.TextChoices):
     RESIDENCIAL = 'Residencial', 'Residencial'
     COMERCIAL = 'Comercial', 'Comercial'
+    SANITARI = 'Sanitari', 'Sanitari'
+    EDUCATIU = 'Educatiu', 'Educatiu'
     MIXT = 'Mixt', 'Mixt'
 
 class TipusOrientacio(models.TextChoices):
     NORD = 'Nord', 'Nord'
     SUD = 'Sud', 'Sud'
     EST = 'Est', 'Est'
-    OEST = 'Oest', 'Oest
+    OEST = 'Oest', 'Oest'
 
 class LletraEnergetica(models.TextChoices):
     A = 'A', 'A'

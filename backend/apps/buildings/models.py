@@ -1,62 +1,150 @@
 # apps/buildings/models.py
 from django.db import models
 
+class TipusEdifici(models.TextChoices):
+    RESIDENCIAL = 'Residencial', 'Residencial'
+    COMERCIAL = 'Comercial', 'Comercial'
+    SANITARI = 'Sanitari', 'Sanitari'
+    EDUCATIU = 'Educatiu', 'Educatiu'
+    MIXT = 'Mixt', 'Mixt'
+
+class TipusOrientacio(models.TextChoices):
+    NORD = 'Nord', 'Nord'
+    SUD = 'Sud', 'Sud'
+    EST = 'Est', 'Est'
+    OEST = 'Oest', 'Oest'
+
+class LletraEnergetica(models.TextChoices):
+    A = 'A', 'A'
+    B = 'B', 'B'
+    C = 'C', 'C'
+    D = 'D', 'D'
+    E = 'E', 'E'
+    F = 'F', 'F'
+    G = 'G', 'G'
+
 class Localitzacio(models.Model):
-    carrer = models.CharField(max_length=100)
+    carrer = models.CharField(max_length=255)
     numero = models.IntegerField()
-    codi_postal = models.CharField(max_length=10)
+    codiPostal = models.CharField(max_length=10)
     barri = models.CharField(max_length=100)
     latitud = models.FloatField()
     longitud = models.FloatField()
-    zona_climatica = models.CharField(max_length=50)
-    
+    zonaClimatica = models.CharField(max_length=10)
+
     def __str__(self):
-        return f"{self.carrer} {self.numero}, {self.codi_postal}"
+        return f"{self.carrer}, {self.numero} ({self.codiPostal})"
+    
+class GrupComparable(models.Model):
+    idGrup = models.IntegerField()
+    zonaClimatica = models.CharField(max_length=10)
+    tipologia = models.CharField(max_length=20, choices=TipusEdifici.choices)
+    rangSuperficie = models.CharField(max_length=100)
+
+    def __str__(self):
+        return f"Grup Comparable {self.idGrup}"
+    
 
 class Edifici(models.Model):
-    TIPOLGIA_CHOICES = [
-        ("Residencial", "Residencial"),
-        ("Comercial", "Comercial"),
-        ("Mixt", "Mixt"),
-    ]
-
-    id_edifici = models.CharField(max_length=50, primary_key=True)
-    any_construccio = models.IntegerField()
-    tipologia = models.CharField(max_length=20, choices=TIPOLGIA_CHOICES)
-    superficie_total = models.FloatField()
+    idEdifici = models.CharField(max_length=50, primary_key=True)
+    anyConstruccio = models.IntegerField()
+    tipologia = models.CharField(max_length=20, choices=TipusEdifici.choices)
+    superficieTotal = models.FloatField()
     reglament = models.CharField(max_length=100)
-    orientacio_principal = models.CharField(max_length=50)
-    puntuacio_base = models.FloatField()
-    
-    localitzacio = models.ForeignKey(Localitzacio, null=True, blank=True, on_delete=models.SET_NULL)
-    
+    orientacioPrincipal = models.CharField(max_length=50, choices=TipusOrientacio.choices)
+    puntuacioBase = models.FloatField()
+
+    # relacio 1 a 1: un edifici te una unica localitzacio
+    localitzacio = models.OneToOneField(
+        Localitzacio, 
+        on_delete=models.CASCADE, 
+        related_name='edifici', 
+        null=True, 
+        blank=True
+    )
+
+    # relacio 1..* a 0..1
+    administradorFinca = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='edificis_administrats'
+    )
+
+    # relacio 1..* a 1
+    grupComparable = models.ForeignKey(
+        GrupComparable,
+        on_delete=models.PROTECT,
+        related_name='edificis'
+    )
+
     def __str__(self):
-        return f"Edifici {self.id_edifici}"
+        return f"Edifici{self.idEdifici} - {self.tipologia}"
+    
     class Meta:
         db_table = 'edifici'  
 
+
+class DadesEnergetiques(models.Model):
+    qualificacioGlobal = models.CharField(max_length=1, choices=LletraEnergetica.choices)
+    consumEnergiaPrimaria = models.FloatField()
+    consumEnergiaFinal = models.FloatField()
+    emissionsCO2 = models.FloatField()
+    costAnualEnergia = models.FloatField()
+
+    energiaCalefaccio = models.FloatField()
+    energiaRefrigeracio = models.FloatField()
+    energiaACS = models.FloatField()
+    energiaEnllumenament = models.FloatField()
+
+    emissionsCalefaccio = models.FloatField()
+    emissionsRefrigeracio = models.FloatField()
+    emissionsACS = models.FloatField()
+    emissionsEnllumenament = models.FloatField()
+
+    aillamentTermic = models.FloatField()
+    valorFinestres = models.FloatField()
+
+    normativa = models.CharField(max_length=255)
+    einaCertificacio = models.CharField(max_length=255)
+    motiuCertificacio = models.CharField(max_length=255)
+    rehabilitacioEnergetica = models.BooleanField(default=False)
+    dataEntrada = models.DateField()
+
+    def __str__(self):
+        return f"Qualificacio {self.qualificacioGlobal} - Data entrada: {self.dataEntrada}"
+
+
 class Habitatge(models.Model):
-    edifici = models.ForeignKey(Edifici, related_name="habitatges", on_delete=models.CASCADE)
-    referencia_cadastral = models.CharField(max_length=50)
+    referenciaCadastral = models.CharField(max_length=50, primary_key=True)
     planta = models.CharField(max_length=10)
     porta = models.CharField(max_length=10)
     superficie = models.FloatField()
-    any_reforma = models.IntegerField(null=True, blank=True)
+    anyReforma = models.IntegerField(null=True, blank=True)
     
-    def __str__(self):
-        return f"{self.planta}{self.porta} - {self.referencia_cadastral}"
+    # relacio 1 a *: un edifici pot tenir molts habitatges
+    edifici = models.ForeignKey(
+        Edifici,
+        on_delete=models.CASCADE,
+        related_name='habitatges'
+    )
 
-class DadesEnergetiques(models.Model):
-    habitatge = models.OneToOneField(Habitatge, related_name="dades_energetiques", on_delete=models.CASCADE)
-    qualificacio_global = models.CharField(max_length=2)
-    consum_energia_primaria = models.FloatField()
-    consum_energia_final = models.FloatField()
-    emissions_co2 = models.FloatField()
-    cost_anual_energia = models.FloatField()
-    energia_calefaccio = models.FloatField(default=0)
-    energia_refrigeracio = models.FloatField(default=0)
-    energia_acs = models.FloatField(default=0)
-    energia_enllumenament = models.FloatField(default=0)
+    ''' # relacio 0..1 a *
+    usuari = models.ForeignKey(
+        User, 
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='habitatges_on_resideix'
+    ) '''
+
+    # falta afegir relacio amb DadesEnergetiques (relacio 1 a 1)
+    dadesEnergetiques = models.OneToOneField(
+        DadesEnergetiques, 
+        on_delete=models.CASCADE, 
+        related_name='dades_energetiques', 
+        null=True, 
+        blank=True
+    )
 
     def __str__(self):
-        return f"DadesEnergetiques {self.habitatge}"
+        return f"Habitatge{self.referenciaCadastral} ({self.planta}-{self.porta})"

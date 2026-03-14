@@ -14,6 +14,21 @@ class TipusEdifici(models.TextChoices):
     COMERCIAL = 'Comercial', 'Comercial'
     MIXT = 'Mixt', 'Mixt'
 
+class TipusOrientacio(models.TextChoices):
+    NORD = 'Nord', 'Nord'
+    SUD = 'Sud', 'Sud'
+    EST = 'Est', 'Est'
+    OEST = 'Oest', 'Oest
+
+class LletraEnergetica(models.TextChoices):
+    A = 'A', 'A'
+    B = 'B', 'B'
+    C = 'C', 'C'
+    D = 'D', 'D'
+    E = 'E', 'E'
+    F = 'F', 'F'
+    G = 'G', 'G'
+
 class User(AbstractUser):
     username = None
     email = models.EmailField(unique=True)
@@ -72,7 +87,7 @@ class Edifici(models.Model):
     tipologia = models.CharField(max_length=20, choices=TipusEdifici.choices)
     superficieTotal = models.FloatField()
     reglament = models.CharField(max_length=100)
-    orientacioPrincipal = models.CharField(max_length=50)
+    orientacioPrincipal = models.CharField(max_length=50, choices=TipusOrientacio.choices)
     puntuacioBase = models.FloatField()
 
     # relacio 1 a 1: un edifici te una unica localitzacio
@@ -104,9 +119,7 @@ class Edifici(models.Model):
 
 
 class DadesEnergetiques(models.Model):
-    lletraEnergetica = [('A', 'A'), ('B', 'B'), ('C', 'C'), ('D', 'D'), ('E', 'E'), ('F', 'F'), ('G', 'G')]
-
-    qualificacioGlobal = models.CharField(max_length=1, choices=lletraEnergetica)
+    qualificacioGlobal = models.CharField(max_length=1, choices=LletraEnergetica.choices)
     consumEnergiaPrimaria = models.FloatField()
     consumEnergiaFinal = models.FloatField()
     emissionsCO2 = models.FloatField()

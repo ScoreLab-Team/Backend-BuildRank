@@ -28,7 +28,8 @@ load_dotenv(BASE_DIR / ".env")
 SECRET_KEY = 'django-insecure-fvw+7u7o-m!1$r0hy6=7q#xb*l-#f9#ink&hk4153utnf^$3w)'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv("DEBUG", "True").lower() == "true"
+ENABLE_DEBUG_TOOLBAR = os.getenv("ENABLE_DEBUG_TOOLBAR", "False").lower() == "true"
 
 ALLOWED_HOSTS = ["*"]
 
@@ -49,7 +50,6 @@ INSTALLED_APPS = [
 
     'apps.accounts',
 
-    "debug_toolbar",
     'apps.buildings',
 ]
 
@@ -62,9 +62,11 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-
-    'debug_toolbar.middleware.DebugToolbarMiddleware',
 ]
+
+if DEBUG and ENABLE_DEBUG_TOOLBAR:
+    INSTALLED_APPS += ["debug_toolbar"]
+    MIDDLEWARE += ["debug_toolbar.middleware.DebugToolbarMiddleware"]
 
 ROOT_URLCONF = 'config.urls'
 

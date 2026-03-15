@@ -57,6 +57,8 @@ jobs:
       DB_PORT: 5432
       DJANGO_SETTINGS_MODULE: config.settings
       PYTHONUNBUFFERED: 1
+      DEBUG: "False"
+      ENABLE_DEBUG_TOOLBAR: "False"
 
     steps:
       - name: Checkout repository

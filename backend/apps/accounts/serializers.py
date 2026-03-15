@@ -7,8 +7,6 @@ from apps.accounts.models import Profile, RoleChoices
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from datetime import date
-import re
 
 User = get_user_model()
 

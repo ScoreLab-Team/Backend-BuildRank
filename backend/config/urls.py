@@ -21,13 +21,13 @@ from django.conf import settings
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/accounts/', include('apps.accounts.urls')),   # endpoints de comptes
-    path('api/buildings/', include('apps.buildings.urls')), # endpoints de edificis
+    path('api/accounts/', include('apps.accounts.urls')),
+    path('api/buildings/', include('apps.buildings.urls')),
 ]
 
-if settings.DEBUG:
+if settings.DEBUG and "debug_toolbar" in settings.INSTALLED_APPS:
     import debug_toolbar
-    urlpatterns = [
+    urlpatterns += [
         path('__debug__/', include(debug_toolbar.urls)),
-    ] + urlpatterns
+    ]
 

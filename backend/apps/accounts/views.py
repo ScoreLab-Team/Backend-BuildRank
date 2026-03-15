@@ -3,7 +3,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
-from apps.accounts.models import Edifici, Habitatge, RoleChoices
+from apps.accounts.models import RoleChoices
+from apps.buildings.models import Edifici, Habitatge
 from apps.accounts.permissions import IsAdminSistema, IsAdminFinca, ABACMixin
 from apps.accounts.serializers import (
     RegisterSerializer, LoginSerializer, LogoutSerializer, MeSerializer,

@@ -3,6 +3,7 @@ from django.db import transaction
 from rest_framework import serializers
 
 from apps.accounts.models import Profile, RoleChoices
+from apps.buildings.models import Edifici, Habitatge
 
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken

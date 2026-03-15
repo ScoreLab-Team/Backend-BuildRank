@@ -95,7 +95,7 @@ class ABACMixin:
         """
         Regla C: Twin Building – els dos edificis han de compartir tipologia i zona climàtica.
         """
-        from apps.accounts.models import Edifici
+        from apps.buildings.models import Edifici
 
         accio = f"twin_building edifici_a={edifici_a_id} edifici_b={edifici_b_id}"
 

@@ -1,5 +1,6 @@
 # apps/buildings/models.py
 from django.db import models
+from django.conf import settings
 
 class TipusEdifici(models.TextChoices):
     RESIDENCIAL = 'Residencial', 'Residencial'
@@ -65,7 +66,7 @@ class Edifici(models.Model):
 
     # relacio 1..* a 0..1
     administradorFinca = models.ForeignKey(
-        User,
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         related_name='edificis_administrats'
@@ -81,8 +82,6 @@ class Edifici(models.Model):
     def __str__(self):
         return f"Edifici{self.idEdifici} - {self.tipologia}"
     
-    class Meta:
-        db_table = 'edifici'  
 
 
 class DadesEnergetiques(models.Model):
@@ -129,13 +128,14 @@ class Habitatge(models.Model):
         related_name='habitatges'
     )
 
-    ''' # relacio 0..1 a *
+    ''' # relacio 0..1 a * '''
     usuari = models.ForeignKey(
-        User, 
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
+        blank=True,
         related_name='habitatges_on_resideix'
-    ) '''
+    )
 
     # falta afegir relacio amb DadesEnergetiques (relacio 1 a 1)
     dadesEnergetiques = models.OneToOneField(

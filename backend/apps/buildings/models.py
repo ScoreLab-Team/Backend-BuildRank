@@ -1,5 +1,6 @@
 # apps/buildings/models.py
 from django.db import models
+from django.conf import settings
 
 class TipusEdifici(models.TextChoices):
     RESIDENCIAL = 'Residencial', 'Residencial'
@@ -65,7 +66,7 @@ class Edifici(models.Model):
 
     # relacio 1..* a 0..1
     administradorFinca = models.ForeignKey(
-        User,
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         related_name='edificis_administrats'

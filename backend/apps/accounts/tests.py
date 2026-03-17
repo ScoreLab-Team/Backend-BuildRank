@@ -3,16 +3,17 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.accounts.models import (
-	AccessDenialLog,
-	Edifici,
-	GrupComparable,
-	Habitatge,
-	Localitzacio,
-	Profile,
-	RoleChoices,
-	User,
+    AccessDenialLog,
+    Profile,
+    RoleChoices,
+    User,
 )
-
+from apps.buildings.models import (
+    Edifici,
+    GrupComparable,
+    Habitatge,
+    Localitzacio,
+)
 
 class BaseTestData(APITestCase):
 	"""Base class with shared test data creation utilities."""

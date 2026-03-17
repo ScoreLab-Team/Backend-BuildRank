@@ -12,7 +12,7 @@ User = get_user_model()
 class EdificiAPITests(APITestCase):
 
     def setUp(self):
-        self.user = User.objects.create_user(username='testuser', password='password123')
+        self.user = User.objects.create_user(email='test@example.com', password='password123')
         self.client.force_authenticate(user=self.user)
 
         self.grup = GrupComparable.objects.create(

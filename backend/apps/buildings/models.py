@@ -24,6 +24,11 @@ class LletraEnergetica(models.TextChoices):
     F = 'F', 'F'
     G = 'G', 'G'
 
+class EstatValidacio(models.TextChoices):
+    EN_PROCES = 'EnProces', 'En procés'
+    VALIDADA = 'Validada', 'Validada'
+    REBUTJADA = 'Rebutjada', 'Rebutjada'
+
 class Localitzacio(models.Model):
     carrer = models.CharField(max_length=255)
     numero = models.IntegerField()
@@ -51,6 +56,7 @@ class Edifici(models.Model):
     anyConstruccio = models.IntegerField()
     tipologia = models.CharField(max_length=20, choices=TipusEdifici.choices)
     superficieTotal = models.FloatField()
+    nombrePlantes = models.IntegerField(default=1)
     reglament = models.CharField(max_length=100)
     orientacioPrincipal = models.CharField(max_length=50, choices=TipusOrientacio.choices)
     puntuacioBase = models.FloatField()
@@ -137,7 +143,7 @@ class Habitatge(models.Model):
         related_name='habitatges_on_resideix'
     )
 
-    # falta afegir relacio amb DadesEnergetiques (relacio 1 a 1)
+    # relacio amb DadesEnergetiques (relacio 1 a 1)
     dadesEnergetiques = models.OneToOneField(
         DadesEnergetiques, 
         on_delete=models.CASCADE, 
@@ -148,3 +154,74 @@ class Habitatge(models.Model):
 
     def __str__(self):
         return f"Habitatge{self.referenciaCadastral} ({self.planta}-{self.porta})"
+    
+
+class CatalegMillora(models.Model):
+    idMillora = models.AutoField(primary_key=True)
+    nom = models.CharField(max_length=255)
+    descripcio = models.TextField(blank=True)
+    categoria = models.CharField(max_length=100)
+    impactePunts = models.FloatField(help_text="Punts que aporta al rànquing")
+    parametres = models.CharField(max_length=255)
+
+    def __str__(self):
+        return f"{self.nom} ({self.categoria})"
+    
+class SimulacioMillora(models.Model):
+    descripcio = models.CharField(max_length=255)
+    reduccioConsumPrevista = models.FloatField()
+    reduccioEmissionsPrevista = models.FloatField()
+    costEstimat = models.FloatField()
+    estalviAnual = models.FloatField()
+    dataSimulacio = models.DateField(auto_now_add=True)
+
+    # relacio 1 a *: una millora pot tenir moltes simulacions
+    millora = models.ForeignKey(
+        CatalegMillora,
+        on_delete=models.CASCADE,
+        related_name='simulacions'
+    )
+
+    # relacio 1 a *: una simulació es fa sobre un edifici
+    edifici = models.ForeignKey(
+        Edifici,
+        on_delete=models.CASCADE,
+        related_name='simulacions'
+    )
+
+    def __str__(self):
+        return f"Simulació {self.millora.nom} a {self.edifici.idEdifici}"
+
+
+class MilloraImplementada(models.Model):
+    # id = models.CharField(max_length=255)
+    dataExecucio = models.DateField()
+    costReal = models.FloatField()
+    documentacioAdjunta = models.FileField(upload_to='documents_millores/', blank=True, null=True)
+    estatValidacio = models.CharField(max_length=20, choices=EstatValidacio.choices, default=EstatValidacio.EN_PROCES)
+
+    # relacio 1 a *: una millora pot tenir moltes millores implementades
+    millora = models.ForeignKey(
+        CatalegMillora,
+        on_delete=models.CASCADE,
+        related_name='implementacions'
+    )
+
+    # relacio 1 a *: un edifici pot tenir moltes millores implementades
+    edifici = models.ForeignKey(
+        Edifici,
+        on_delete=models.CASCADE,
+        related_name='implementacions'
+    )
+
+    # relacio 1 a 0..1: una millora implementada es validada per un administrador de finca
+    administradorFinca = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='validacions',
+        null=True,
+        blank=True
+    )
+
+    def __str__(self):
+        return f"Implementació {self.millora.nom} a {self.edifici.idEdifici}"

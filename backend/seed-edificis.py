@@ -4,12 +4,21 @@ import django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 django.setup()
 
-from apps.buildings.models import Localitzacio, Edifici, TipusEdifici
+from apps.buildings.models import Localitzacio, Edifici, TipusEdifici, GrupComparable
 from django.db import connection
 
 def run_seed():
     print("Iniciant el procés de Seed des de la taula RAW...")
     
+    grup_comparable, _ = GrupComparable.objects.get_or_create(
+        idGrup=1,
+        defaults={
+            'zonaClimatica': 'C2',
+            'tipologia': TipusEdifici.RESIDENCIAL,
+            'rangSuperficie': '0-100'
+        }
+    )
+
     with connection.cursor() as cursor:
         cursor.execute("""
             SELECT 
@@ -48,17 +57,22 @@ def run_seed():
                     'tipologia': TipusEdifici.RESIDENCIAL,
                     'superficieTotal': net_metres,
                     'orientacioPrincipal': 'Nord',
-                    'puntuacioBase': 0
+                    'puntuacioBase': 0,
+                    'reglament': 'Desconegut',
+                    'grupComparable': grup_comparable
                 }
             )
         
             edifici.localitzacio = loc
             edifici.save()
         
-            if created: print(f"Edifici {num_cas} creat.")
+            if created: 
+                print(f"Edifici {num_cas} creat.")
+            else:
+                print(f"L'edifici {num_cas} ja existia a la DB.")
 
         except Exception as e:
-            print("Error a {num_cas}: {e}")
+            print(f"Error a l'edifici {num_cas}: {e}")
 
 if __name__ == "__main__":
     run_seed()

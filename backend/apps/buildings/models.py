@@ -72,11 +72,13 @@ class Edifici(models.Model):
         related_name='edificis_administrats'
     )
 
-    # relacio 1..* a 1
+    # relacio 1..* a 0..1
     grupComparable = models.ForeignKey(
         GrupComparable,
         on_delete=models.PROTECT,
-        related_name='edificis'
+        related_name='edificis',
+        null=True,
+        blank=True
     )
 
     def __str__(self):

@@ -97,12 +97,6 @@ class Edifici(models.Model):
     def __str__(self):
         return f"Edifici{self.idEdifici} - {self.localitzacio}"
     
-    def save(self, *args, **kwargs):
-        # Calcul de exemple.
-        if self.superficieTotal:
-            self.puntuacioBase = self.superficieTotal * 0.1
-
-        super().save(*args, **kwargs)
     
 
 
@@ -170,3 +164,18 @@ class Habitatge(models.Model):
 
     def __str__(self):
         return f"{self.edifici} - {self.planta}, {self.porta}"
+    
+class BuildingHealthScore(models.Model):
+    edificio = models.ForeignKey(
+        'Edifici', on_delete=models.CASCADE, related_name='bhs_history'
+    )
+    version = models.CharField(max_length=10)
+    score = models.FloatField()
+    pesos = models.JSONField()  # guarda los pesos usados en la versión
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"BHS {self.score} v{self.version} para Edificio {self.edificio.idEdifici}"

@@ -43,6 +43,7 @@ class HabitatgeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Habitatge
+        unique_together = ('edifici', 'planta', 'porta')
         fields = "__all__"
 
     # validacio superficie

@@ -95,7 +95,7 @@ class Edifici(models.Model):
     )
 
     def __str__(self):
-        return f"Edifici{self.idEdifici} - {self.tipologia}"
+        return f"Edifici{self.idEdifici} - {self.localitzacio}"
     
     def save(self, *args, **kwargs):
         # Calcul de exemple.
@@ -169,4 +169,4 @@ class Habitatge(models.Model):
     )
 
     def __str__(self):
-        return f"Habitatge{self.referenciaCadastral} ({self.planta}-{self.porta})"
+        return f"{self.edifici} - {self.planta}, {self.porta}"

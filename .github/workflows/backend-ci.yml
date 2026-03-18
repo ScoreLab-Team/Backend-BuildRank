@@ -1,0 +1,106 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - chore/backend-ci
+      - main
+      - Desenvolupament
+      - desenvolupament
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-ci.yml"
+
+  pull_request:
+    branches:
+      - main
+      - Desenvolupament
+      - desenvolupament
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-ci.yml"
+
+  workflow_dispatch:
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: buildrank
+          POSTGRES_USER: buildrank_user
+          POSTGRES_PASSWORD: buildrank_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U buildrank_user -d buildrank"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      DB_NAME: buildrank
+      DB_USER: buildrank_user
+      DB_PASSWORD: buildrank_pass
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DJANGO_SETTINGS_MODULE: config.settings
+      PYTHONUNBUFFERED: 1
+      DEBUG: "False"
+      ENABLE_DEBUG_TOOLBAR: "False"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Wait for PostgreSQL
+        run: |
+          python - <<'PY'
+          import socket
+          import time
+
+          host = "127.0.0.1"
+          port = 5432
+
+          for _ in range(30):
+              try:
+                  with socket.create_connection((host, port), timeout=2):
+                      print("PostgreSQL is ready")
+                      break
+              except OSError:
+                  time.sleep(2)
+          else:
+              raise SystemExit("PostgreSQL did not become ready in time")
+          PY
+
+      - name: Run migrations
+        run: python manage.py migrate --noinput
+
+      - name: Django system check
+        run: python manage.py check
+
+      - name: Run tests
+        run: python manage.py test apps.accounts apps.buildings -v 2

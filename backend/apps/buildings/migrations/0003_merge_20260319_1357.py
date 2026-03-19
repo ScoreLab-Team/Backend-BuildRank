@@ -4,7 +4,6 @@ from django.db import migrations
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('buildings', '0002_alter_edifici_grupcomparable_alter_edifici_idedifici_and_more'),
         ('buildings', '0002_catalegmillora_edifici_nombreplantes_and_more'),

@@ -8,6 +8,9 @@ from apps.buildings.models import Edifici, Habitatge
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+
 User = get_user_model()
 
 
@@ -27,19 +30,38 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         if attrs["password"] != attrs["password_confirm"]:
-            raise serializers.ValidationError({"password_confirm": "Les contrasenyes no coincideixen."})
+            raise serializers.ValidationError(
+                {"password_confirm": "Les contrasenyes no coincideixen."}
+            )
 
         requested_role = attrs.get("role")
         if requested_role == RoleChoices.ADMIN:
-            raise serializers.ValidationError({"role": "No està permès registrar-se com a administrador."})
+            raise serializers.ValidationError(
+                {"role": "No està permès registrar-se com a administrador."}
+            )
 
         password = attrs["password"]
 
         if not any(char.isalpha() for char in password):
-            raise serializers.ValidationError({"password": "La contrasenya ha de contenir almenys una lletra."})
+            raise serializers.ValidationError(
+                {"password": "La contrasenya ha de contenir almenys una lletra."}
+            )
 
         if not any(char.isdigit() for char in password):
-            raise serializers.ValidationError({"password": "La contrasenya ha de contenir almenys un número."})
+            raise serializers.ValidationError(
+                {"password": "La contrasenya ha de contenir almenys un número."}
+            )
+
+        temp_user = User(
+            email=attrs.get("email", ""),
+            first_name=attrs.get("first_name", ""),
+            last_name=attrs.get("last_name", ""),
+        )
+
+        try:
+            validate_password(password, user=temp_user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"password": list(exc.messages)})
 
         return attrs
 
@@ -55,7 +77,9 @@ class RegisterSerializer(serializers.ModelSerializer):
             **validated_data,
         )
 
-        Profile.objects.create(user=user, role=role)
+        profile, _ = Profile.objects.get_or_create(user=user)
+        profile.role = role
+        profile.save(update_fields=["role"])
 
         return user
     
@@ -102,7 +126,7 @@ class LogoutSerializer(serializers.Serializer):
             raise serializers.ValidationError({"refresh": "Token invàlid o ja invalidat."})
 
 
-class MeSerializer(serializers.Serializer):
+class MeSerializer(serializers.ModelSerializer):
     role = serializers.CharField(source="profile.role")
 
     class Meta:
@@ -117,14 +141,14 @@ class LocalitzacioResum(serializers.Serializer):
     barri = serializers.CharField()
     zonaClimatica = serializers.CharField()
 
-class EdificiResumSerializer(serializers.Serializer):
+class EdificiResumSerializer(serializers.ModelSerializer):
     localitzacio = LocalitzacioResum(read_only=True)
 
     class Meta:
         model = Edifici
         fields = ("idEdifici", "tipologia", "superficieTotal", "puntuacioBase", "localitzacio")
 
-class HabitatgeResumSerializer(serializers.Serializer):
+class HabitatgeResumSerializer(serializers.ModelSerializer):
     edifici_id = serializers.CharField(source="edifici.idEdifici", read_only=True)
 
     class Meta:

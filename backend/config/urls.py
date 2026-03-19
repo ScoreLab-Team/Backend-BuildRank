@@ -21,7 +21,7 @@ from django.conf import settings
 from django.views.generic import RedirectView
 
 urlpatterns = [
-    path('', RedirectView.as_view(url='/admin/', permanent=False)),
+    path('', RedirectView.as_view(pattern_name='admin:index', permanent=False)),
     path('admin/', admin.site.urls),
     path('api/accounts/', include('apps.accounts.urls')),
     path('api/buildings/', include('apps.buildings.urls')),

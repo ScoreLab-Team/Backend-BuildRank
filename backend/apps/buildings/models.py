@@ -34,12 +34,24 @@ class Localitzacio(models.Model):
     numero = models.IntegerField()
     codiPostal = models.CharField(max_length=10)
     barri = models.CharField(max_length=100)
-    latitud = models.FloatField()
-    longitud = models.FloatField()
-    zonaClimatica = models.CharField(max_length=10)
+    latitud = models.FloatField(null=True, blank=True)
+    longitud = models.FloatField(null=True, blank=True)
+    zonaClimatica = models.CharField(max_length=10, null=True, blank=True)
 
     def __str__(self):
         return f"{self.carrer}, {self.numero} ({self.codiPostal})"
+    def save(self, *args, **kwargs):
+        # Si la zona climática no está definida, poner un valor por defecto
+        if not self.zonaClimatica:
+            self.zonaClimatica = "N/A"
+
+        # Si latitud o longitud no están definidas, poner 0.0
+        if self.latitud is None:
+            self.latitud = 0.0
+        if self.longitud is None:
+            self.longitud = 0.0
+
+        super().save(*args, **kwargs)
     
 class GrupComparable(models.Model):
     idGrup = models.IntegerField()
@@ -52,14 +64,15 @@ class GrupComparable(models.Model):
     
 
 class Edifici(models.Model):
-    idEdifici = models.CharField(max_length=50, primary_key=True)
+    # Django crea automaticament l'id de Edifici.
+    idEdifici = models.AutoField(primary_key=True)
     anyConstruccio = models.IntegerField()
     tipologia = models.CharField(max_length=20, choices=TipusEdifici.choices)
     superficieTotal = models.FloatField()
     nombrePlantes = models.IntegerField(default=1)
     reglament = models.CharField(max_length=100)
     orientacioPrincipal = models.CharField(max_length=50, choices=TipusOrientacio.choices)
-    puntuacioBase = models.FloatField()
+    puntuacioBase = models.FloatField(editable=False, null=True)
 
     # relacio 1 a 1: un edifici te una unica localitzacio
     localitzacio = models.OneToOneField(
@@ -78,15 +91,24 @@ class Edifici(models.Model):
         related_name='edificis_administrats'
     )
 
-    # relacio 1..* a 1
+    # relacio 1..* a 0..1
     grupComparable = models.ForeignKey(
         GrupComparable,
         on_delete=models.PROTECT,
-        related_name='edificis'
+        related_name='edificis',
+        null=True,
+        blank=True
     )
 
     def __str__(self):
-        return f"Edifici{self.idEdifici} - {self.tipologia}"
+        return f"Edifici{self.idEdifici} - {self.localitzacio}"
+    
+    def save(self, *args, **kwargs):
+        # Calcul de exemple.
+        if self.superficieTotal:
+            self.puntuacioBase = self.superficieTotal * 0.1
+
+        super().save(*args, **kwargs)
     
 
 

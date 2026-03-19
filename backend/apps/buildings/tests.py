@@ -51,7 +51,9 @@ class EdificiAPITests(APITestCase):
             "tipologia": "Residencial",
             "superficieTotal": 100.0,
             "orientacioPrincipal": "Nord",
-            "puntuacioBase": 0
+            "puntuacioBase": 0,
+            "localitzacio": self.loc.id,
+            "grupComparable": self.grup.id
         }
         response = self.client.post(self.url, data)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

@@ -74,6 +74,16 @@ class EdificiDetailAPIView(APIView):
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    # PATCH /edificis/{id}/: Actualitza només una part de l'edifici
+    def patch(self, request, pk):
+        edifici = get_object_or_404(Edifici, pk=pk)
+        # el partial=True permet enviar només algunes dades
+        serializer = EdificiSerializer(edifici, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
     '''
     # DELETE /edificis/{id}/: Esborra un edifici
     def delete(self, request, pk):

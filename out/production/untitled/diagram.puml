@@ -1,0 +1,277 @@
+ @startuml
+
+class Edifici {
+    idEdifici : String
+    anyConstruccio : int
+    tipologia : TipusEdifici
+    superficieTotal : float
+    reglament : String
+    orientacioPrincipal : Orientacio
+    puntuacioBase: float
+}
+
+class Habitatge {
+  referenciaCadastral : String
+  planta : String
+  porta : String
+  superficie : float
+  anyReforma : int
+}
+
+class Localitzacio {
+  carrer : String
+  numero : int
+  codiPostal : String
+  barri : String
+  latitud : float
+  longitud : float
+  zonaClimatica : String
+}
+class DadesEnergetiques {
+    qualificacioGlobal : LletraEnergetica
+    consumEnergiaPrimaria : float
+    consumEnergiaFinal : float
+    emissionsCO2 : float
+    costAnualEnergia : float
+
+    energiaCalefaccio : float
+    energiaRefrigeracio : float
+    energiaACS : float
+    energiaEnllumenament : float
+
+    emissionsCalefaccio : float
+    emissionsRefrigeracio : float
+    emissionsACS : float
+    emissionsEnllumenament : float
+
+    aillamentTermic : float
+    valorFinestres : float
+
+    normativa : String
+    einaCertificacio : String
+    motiuCertificacio : String
+    rehabilitacioEnergetica : boolean
+    dataEntrada : Date
+}
+
+class IndicadorBuildRank {
+  consumEstimat : float
+  indexResiliencia : float
+  heatRiskScore : float
+  rankingDistricte : int
+}
+
+class Usuari {
+  idUsuari : String
+  nom : String
+  email : String
+  rol : String
+  dataRegistre : Date
+}
+
+class Resident{
+  tipus : TipusResident
+}
+class AdministradorFinca{}
+
+class InstalacioEnergetica {
+  tipus : TipusInstalacio
+}
+
+
+class Temporada {
+  idTemporada : String
+  nom : String
+  dataInici : Date
+  dataFi : Date
+  activa : boolean
+}
+
+class Event {
+  titol : String
+  data: Date
+}
+class Lliga {
+  nom : String
+  categoria : CategoriaRanking
+  divisio : DivisioLliga
+}
+
+class Participacio {
+  puntuacio : float
+  posicio : int
+  divisio : String
+}
+class Missio {
+  titol : String
+  descripcio : String
+  punts : int
+  categoria : CategoriaRanking
+}
+class MissioTemporada{}
+class MissioPersonalitzada{}
+class MissioEdifici {
+  completada : boolean
+  dataCompletada : Date
+}
+
+
+
+class GrupComparable {
+  idGrup : int
+  zonaClimatica : String
+  tipologia : TipusEdifici
+  rangSuperficie : String
+}
+
+class SimulacioMillora {
+  descripcio : String
+  reduccioConsumPrevista : float
+  reduccioEmissionsPrevista : float
+  costEstimado : float
+  estalviAnual: float
+  dataSimulacio : Date
+}
+
+class Millora {
+  idMillora : int
+  nom : String
+  descripcio : String
+  categoria : String
+  impactePunts : float
+  parametres : String
+}
+class MilloraImplementada {
+  id : int
+  dataExecucio : Date
+  costReal : float
+  documentacioAdjunta : File
+  estatValidacio : EstatValidacio
+}
+class Vot {
+  valor : float
+  data : Date
+}
+
+class Informe {
+  idInforme : int
+  dataGeneracio : Date
+  resum : String
+}
+
+class Xat {
+  idXatExtern : String
+}
+
+
+
+enum CategoriaRanking {
+  EFICIENCIA
+  RESILIENCIA
+  PROGRES
+}
+
+enum DivisioLliga {
+  Bronze
+  Silver
+  Gold
+}
+
+enum LletraEnergetica {
+  A
+  B
+  C
+  D
+  E
+  F
+  G
+}
+
+enum TipusEdifici {
+  Residencial
+  Comercial
+  Mixt
+}
+
+enum TipusResident {
+  Propietari
+  Llogater
+}
+
+enum Orientacio {
+  Nord
+  Sud
+  Est
+  Oest
+}
+
+enum TipusInstalacio {
+  SolarFotovoltaica
+  SolarTermica
+  Biomassa
+  Geotermica
+  XarxaDistricte
+  VehicleElectric
+}
+enum EstatValidacio {
+  EnProces
+  Validada
+  Rebutjada
+}
+' Relacions
+Edifici "1" -up- "1" Localitzacio : ubicat_en >
+Edifici "1" *-- "1..*" Habitatge : format_per >
+Habitatge "1" -- "1" DadesEnergetiques : disposa_de >
+Edifici "1" -up- "1" IndicadorBuildRank : genera >
+Edifici "1" -- "*" Informe : disposa_de >
+
+' Per un habitatge només hi haurà un compte d'usuari
+Usuari "0..1" -left- "*" Habitatge : resideix >
+Edifici "1..*" -- "0..1" AdministradorFinca : gestiona <
+Edifici "1" -up- "*" InstalacioEnergetica : incorpora >
+AdministradorFinca --|> Usuari
+Resident --|> Usuari
+AdministradorFinca "1" -- "0..*" Informe : crea >
+
+Temporada "*" -right- "*" Event : altera <
+Temporada "1" *-- "3" Lliga : te >
+Lliga "1" -- "*" Participacio : inclou >
+Edifici "1" -left- "*" Participacio : te >
+
+Edifici "1..*" -right- "1" GrupComparable : pertany >
+
+Temporada "*" -- "1..*" MissioTemporada : activa >
+' Equivalent a classe associativa, missió - participacio
+Participacio "1" -- "*" MissioEdifici : te_assignat >
+MissioTemporada "0..1" -- "*" MissioEdifici : es_assignada >
+MissioTemporada --|> Missio
+MissioPersonalitzada --|> Missio
+MissioPersonalitzada "*" -- "1" Edifici : pertany >
+MissioPersonalitzada "0..1" -- "*" MissioEdifici : es_assignada >
+
+Edifici "1" -- "0..*" SimulacioMillora : proposa >
+SimulacioMillora "*" --* "1" Millora : simula >
+
+Usuari "1" -down- "*" Vot : proporciona >
+SimulacioMillora "1" -right- "*" Vot : rep >
+
+Usuari "*" -- "*" SimulacioMillora : visualitza >
+
+Xat "1" -- "1" Edifici : Té >
+Xat "1..*" -- "1..*" Usuari : participa <
+
+Edifici "1" -- "*" MilloraImplementada : executa >
+MilloraImplementada "*" -- "1" Millora : correspon_a >
+MilloraImplementada "0..1" -- "1" AdministradorFinca : valida >
+
+
+note right of Usuari
+{overlapping, complete}
+end note
+
+note right of Missio
+{disjoint, complete}
+end note
+
+
+@enduml

@@ -1,0 +1,7 @@
+Missions iguals a tots els edificis per temporada o no? --> SI, de base, però a més també nhi ha de personalitzades per cada edifici.
+
+Pendent:
+Xat entre administradors? - Arquitectura
+SM: Usuaries també poden fer simulacions --> FET
+Prova Pull Request
+Segona Prova Pull Request

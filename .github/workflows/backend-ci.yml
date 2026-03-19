@@ -38,7 +38,7 @@ jobs:
           POSTGRES_USER: buildrank_user
           POSTGRES_PASSWORD: buildrank_pass
         ports:
-          - 5432:5432
+          - 5433:5433
         options: >-
           --health-cmd="pg_isready -U buildrank_user -d buildrank"
           --health-interval=10s
@@ -54,7 +54,7 @@ jobs:
       DB_USER: buildrank_user
       DB_PASSWORD: buildrank_pass
       DB_HOST: 127.0.0.1
-      DB_PORT: 5432
+      DB_PORT: 5433
       DJANGO_SETTINGS_MODULE: config.settings
       PYTHONUNBUFFERED: 1
       DEBUG: "False"
@@ -83,7 +83,7 @@ jobs:
           import time
 
           host = "127.0.0.1"
-          port = 5432
+          port = 5433
 
           for _ in range(30):
               try:

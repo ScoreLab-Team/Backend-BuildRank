@@ -30,29 +30,28 @@ class BaseTestData(APITestCase):
         user.profile.save(update_fields=["role"])
         return user
 
-	@classmethod
-	def _create_edifici(cls, administrador, grup, **kwargs):
-		"""Create a building with auto-generated idEdifici and puntuacioBase."""
-		localitzacio = Localitzacio.objects.create(
-			carrer=kwargs.get("carrer", "Carrer test"),
-			numero=kwargs.get("numero", 1),
-			codiPostal=kwargs.get("codiPostal", "08001"),
-			barri=kwargs.get("barri", "Centre"),
-			latitud=kwargs.get("latitud", 41.0),
-			longitud=kwargs.get("longitud", 2.0),
-			zonaClimatica=kwargs.get("zonaClimatica", "C2"),
-		)
-		return Edifici.objects.create(
-			anyConstruccio=kwargs.get("anyConstruccio", 2000),
-			tipologia=kwargs.get("tipologia", "Residencial"),
-			superficieTotal=kwargs.get("superficieTotal", 400),
-			reglament=kwargs.get("reglament", "CTE"),
-			orientacioPrincipal=kwargs.get("orientacioPrincipal", "Sud"),
-			localitzacio=localitzacio,
-			administradorFinca=administrador,
-			grupComparable=grup,
-		)
-
+    @classmethod
+    def _create_edifici(cls, administrador, grup, **kwargs):
+        """Create a building with auto-generated idEdifici and puntuacioBase."""
+        localitzacio = Localitzacio.objects.create(
+            carrer=kwargs.get("carrer", "Carrer test"),
+            numero=kwargs.get("numero", 1),
+            codiPostal=kwargs.get("codiPostal", "08001"),
+            barri=kwargs.get("barri", "Centre"),
+            latitud=kwargs.get("latitud", 41.0),
+            longitud=kwargs.get("longitud", 2.0),
+            zonaClimatica=kwargs.get("zonaClimatica", "C2"),
+        )
+        return Edifici.objects.create(
+            anyConstruccio=kwargs.get("anyConstruccio", 2000),
+            tipologia=kwargs.get("tipologia", "Residencial"),
+            superficieTotal=kwargs.get("superficieTotal", 400),
+            reglament=kwargs.get("reglament", "CTE"),
+            orientacioPrincipal=kwargs.get("orientacioPrincipal", "Sud"),
+            localitzacio=localitzacio,
+            administradorFinca=administrador,
+            grupComparable=grup,
+        )
 
 class RBACAuthorizationTests(BaseTestData):
     """Role-Based Access Control authorization tests."""
@@ -71,7 +70,7 @@ class RBACAuthorizationTests(BaseTestData):
             rangSuperficie="100-200",
         )
 
-		cls.edifici_1 = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
+        cls.edifici_1 = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
 
     def test_admin_sistema_can_assign_admin_to_building(self):
         """AdminSistema has permission to assign admin to any building."""
@@ -127,8 +126,8 @@ class ABACTests(BaseTestData):
             rangSuperficie="100-200",
         )
 
-		cls.edifici_1 = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
-		cls.edifici_2 = cls._create_edifici(administrador=cls.altre_admin_finca, grup=cls.grup)
+        cls.edifici_1 = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
+        cls.edifici_2 = cls._create_edifici(administrador=cls.altre_admin_finca, grup=cls.grup)
 
         cls.habitatge_1 = Habitatge.objects.create(
             referenciaCadastral="HAB-1",
@@ -181,7 +180,7 @@ class AssignmentTests(BaseTestData):
             rangSuperficie="100-200",
         )
 
-		cls.edifici_1 = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
+        cls.edifici_1 = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
 
         cls.habitatge_1 = Habitatge.objects.create(
             referenciaCadastral="HAB-1",
@@ -238,8 +237,8 @@ class QueryTests(BaseTestData):
             rangSuperficie="100-200",
         )
 
-		cls.edifici_1 = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
-		cls.edifici_2 = cls._create_edifici(administrador=cls.altre_admin_finca, grup=cls.grup)
+        cls.edifici_1 = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
+        cls.edifici_2 = cls._create_edifici(administrador=cls.altre_admin_finca, grup=cls.grup)
 
         cls.habitatge_1 = Habitatge.objects.create(
             referenciaCadastral="HAB-1",
@@ -306,7 +305,7 @@ class SecurityTests(BaseTestData):
             rangSuperficie="100-200",
         )
 
-		cls.edifici_1 = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
+        cls.edifici_1 = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
 
         cls.habitatge_1 = Habitatge.objects.create(
             referenciaCadastral="HAB-1",

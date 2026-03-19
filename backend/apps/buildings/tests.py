@@ -35,14 +35,29 @@ class EdificiAPITests(APITestCase):
         self.url = reverse('edifici-list') 
 
     def test_error_camps_obligatoris_buits(self):
+        """
+        Verifica que la API devuelve errores cuando los campos obligatorios no se envían.
+        """
+        # Solo enviamos campos opcionales o algunos no requeridos
         data = {
             "anyConstruccio": 2010,
             "superficieTotal": 150.0
-            # Falta id_edifici
+            # No enviamos tipologia, reglament ni orientacioPrincipal
         }
         response = self.client.post(self.url, data)
+
+        # Debe devolver 400 Bad Request
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('idEdifici', response.data)
+
+        # Comprobamos los campos obligatorios que faltan
+        self.assertIn('tipologia', response.data)
+        self.assertIn('reglament', response.data)
+        self.assertIn('orientacioPrincipal', response.data)
+
+        # Opcional: verificar que el código de error es 'required'
+        self.assertEqual(response.data['tipologia'][0].code, 'required')
+        self.assertEqual(response.data['reglament'][0].code, 'required')
+        self.assertEqual(response.data['orientacioPrincipal'][0].code, 'required')
 
     def test_error_any_construccio_futur(self):
         data = {

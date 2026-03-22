@@ -1,6 +1,6 @@
 # apps/buildings/serializers.py
 from rest_framework import serializers
-from apps.buildings.models import Edifici, Habitatge, DadesEnergetiques, Localitzacio
+from apps.buildings.models import Edifici, Habitatge, DadesEnergetiques, Localitzacio, carrersBarcelona
 import re
 from datetime import date
 
@@ -37,16 +37,24 @@ class LocalitzacioSerializer(serializers.ModelSerializer):
     
     # validacio localitzacio (comprovar que la direccio existeix a OSM)
     def validate(self, data):
-        print(f"Validando dirección: {data.get('numero')} {data.get('carrer')}, {data.get('barri')}")
-        existe = validar_direccion_osm(
-            data.get("carrer"),
-            data.get("numero"),
-            data.get("barri")
-        )
-        if not existe:
+        carrer = data.get("carrer")
+        numero = data.get("numero")
+
+        if not carrer or not numero:
+            raise serializers.ValidationError("Dirección incompleta")
+
+        try:
+            carrer_obj = carrersBarcelona.objects.get(nom_oficial__iexact=carrer)
+        except carrersBarcelona.DoesNotExist:
             raise serializers.ValidationError(
-                "La dirección no existe según OpenStreetMap o no coincide exactamente"
+                f"La calle '{carrer}' no existe en nuestra base de datos."
             )
+
+        if numero < carrer_obj.nre_min or numero > carrer_obj.nre_max:
+            raise serializers.ValidationError(
+                f"El número {numero} no está en el rango permitido para {carrer} ({carrer_obj.nre_min}-{carrer_obj.nre_max})"
+            )
+
         return data
 
 class DadesEnergetiquesSerializer(serializers.ModelSerializer):

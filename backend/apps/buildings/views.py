@@ -6,8 +6,9 @@ from django.shortcuts import get_object_or_404
 
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import AllowAny
+from rest_framework.decorators import api_view
 
-from .models import Edifici, Habitatge, Localitzacio, DadesEnergetiques
+from .models import Edifici, Habitatge, Localitzacio, DadesEnergetiques, carrersBarcelona
 from .serializers import EdificiSerializer, HabitatgeSerializer, LocalitzacioSerializer, DadesEnergetiquesSerializer
 
 class EdificiViewSet(viewsets.ModelViewSet):
@@ -90,3 +91,17 @@ class EdificiDetailAPIView(APIView):
         edifici = get_object_or_404(Edifici, pk=pk)
         edifici.delete()
         return Response(status=status.HTTP_204_NO_CONTENT) '''
+    
+
+@api_view(['GET'])
+def autocomplete_carrers(request):
+    query = request.GET.get('q', '').strip()
+    if not query:
+        return Response([])
+
+    resultados = (carrersBarcelona.objects
+                  .filter(nom_oficial__icontains=query)
+                  .values('nom_oficial', 'tipus_via', 'nre_min', 'nre_max')
+                  .distinct()[:5])
+
+    return Response(list(resultados))

@@ -86,6 +86,14 @@ class EdificiSerializer(serializers.ModelSerializer):
         model = Edifici
         fields = "__all__"
 
+    def get_bhs(self, obj):
+        last_bhs = obj.bhs_history.first()  # devuelve el último registrado
+        if last_bhs:
+            return {
+                "score": last_bhs.score,
+                "version": last_bhs.version,
+                "pesos": last_bhs.pesos
+            }
     # validacio any de construcció
     def validate_anyConstruccio(self, value):
         any_actual = date.today().year

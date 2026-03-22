@@ -175,7 +175,22 @@ class Habitatge(models.Model):
     )
 
     def __str__(self):
-        return f"Habitatge{self.referenciaCadastral} ({self.planta}-{self.porta})"
+        return f"{self.edifici} - {self.planta}, {self.porta}"
+    
+class BuildingHealthScore(models.Model):
+    edificio = models.ForeignKey(
+        'Edifici', on_delete=models.CASCADE, related_name='bhs_history'
+    )
+    version = models.CharField(max_length=10)
+    score = models.FloatField()
+    pesos = models.JSONField()  # guarda los pesos usados en la versión
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"BHS {self.score} v{self.version} para Edificio {self.edificio.idEdifici}"
     
 
 class CatalegMillora(models.Model):

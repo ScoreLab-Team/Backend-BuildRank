@@ -4,6 +4,8 @@ from apps.buildings.models import Edifici, Habitatge, DadesEnergetiques, Localit
 import re
 from datetime import date
 
+from apps.buildings.services.geocoding_service import validar_direccion_osm
+
 class LocalitzacioSerializer(serializers.ModelSerializer):
     class Meta:
         model = Localitzacio
@@ -32,7 +34,20 @@ class LocalitzacioSerializer(serializers.ModelSerializer):
                 "La longitud ha de ser un valor entre -180 i 180."
             )
         return value
-
+    
+    # validacio localitzacio (comprovar que la direccio existeix a OSM)
+    def validate(self, data):
+        print(f"Validando dirección: {data.get('numero')} {data.get('carrer')}, {data.get('barri')}")
+        existe = validar_direccion_osm(
+            data.get("carrer"),
+            data.get("numero"),
+            data.get("barri")
+        )
+        if not existe:
+            raise serializers.ValidationError(
+                "La dirección no existe según OpenStreetMap o no coincide exactamente"
+            )
+        return data
 
 class DadesEnergetiquesSerializer(serializers.ModelSerializer):
     class Meta:

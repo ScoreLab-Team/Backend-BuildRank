@@ -98,7 +98,7 @@ DATABASES = {
         'USER': os.getenv('DB_USER', 'buildrank_user'),
         'PASSWORD': os.getenv('DB_PASSWORD', 'buildrank_pass'),
         'HOST': os.getenv('DB_HOST', '127.0.0.1'),
-        'PORT': os.getenv('DB_PORT', '5432'),
+        'PORT': os.getenv('DB_PORT', '5433'),
     }
 }
 
@@ -162,8 +162,8 @@ AUTH_USER_MODEL = 'accounts.User'
 from datetime import timedelta
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=15),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=20),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
 }

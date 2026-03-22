@@ -3,12 +3,13 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, viewsets
 from django.shortcuts import get_object_or_404
+
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny
 
 from .models import Edifici, Habitatge, Localitzacio, DadesEnergetiques
 from .serializers import EdificiSerializer, HabitatgeSerializer, LocalitzacioSerializer, DadesEnergetiquesSerializer
 
-'''
 class EdificiViewSet(viewsets.ModelViewSet):
     """
     Aquest ViewSet gestiona automàticament:
@@ -22,7 +23,6 @@ class EdificiViewSet(viewsets.ModelViewSet):
     queryset = Edifici.objects.all()
     serializer_class = EdificiSerializer
     permission_classes = [IsAuthenticated]
-'''
 
 class HabitatgeViewSet(viewsets.ModelViewSet):
     queryset = Habitatge.objects.all()
@@ -33,7 +33,7 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
 class LocalitzacioViewSet(viewsets.ModelViewSet):
     queryset = Localitzacio.objects.all()
     serializer_class = LocalitzacioSerializer
-    # permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]  # permite POST sin login
 
 
 class DadesEnergetiquesViewSet(viewsets.ModelViewSet):

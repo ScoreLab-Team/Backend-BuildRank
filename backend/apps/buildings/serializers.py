@@ -4,7 +4,6 @@ from apps.buildings.models import Edifici, Habitatge, DadesEnergetiques, Localit
 import re
 from datetime import date
 
-from apps.buildings.services.geocoding_service import validar_direccion_osm
 
 class LocalitzacioSerializer(serializers.ModelSerializer):
     class Meta:

@@ -4,12 +4,12 @@ from rest_framework.response import Response
 from rest_framework import status, viewsets
 from django.shortcuts import get_object_or_404
 
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, action
 
 
 from .models import Edifici, Habitatge, Localitzacio, DadesEnergetiques, carrersBarcelona
-from .serializers import EdificiSerializer, HabitatgeSerializer, LocalitzacioSerializer, DadesEnergetiquesSerializer
+from .serializers import EdificiDetailSerializer, EdificiListSerializer, HabitatgeDetailSerializer, HabitatgeResumSerializer, LocalitzacioSerializer, DadesEnergetiquesSerializer
 from .permissions import EsAdminOPropietariEdifici
 
 class EdificiViewSet(viewsets.ModelViewSet):
@@ -23,8 +23,37 @@ class EdificiViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Edifici.objects.all()
-    serializer_class = EdificiSerializer
-    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return EdificiListSerializer
+        return EdificiDetailSerializer  # retrieve, update, create...permission_classes = [IsAuthenticated]
+    
+    # GET /edificis/{id}/habitatges/
+    @action(detail=True, methods=['get'], permission_classes=[AllowAny])
+    def habitatges(self, request, pk=None):
+        edifici = self.get_object()
+        habitatges = edifici.habitatges.all()
+        serializer = HabitatgeResumSerializer(habitatges, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici],
+        url_path='habitatges/(?P<referenciaCadastral>[A-Za-z0-9]+)')
+    def habitatge_detail(self, request, pk=None, referenciaCadastral=None):
+        edifici = self.get_object()
+
+        try:
+            habitatge = edifici.habitatges.get(referenciaCadastral=referenciaCadastral)
+        except Habitatge.DoesNotExist:
+            return Response({"detail": "Habitatge no trobat."}, status=404)
+
+        # Propietari només pot veure el seu
+        if edifici.administradorFinca != request.user:
+            if habitatge.usuari != request.user:
+                return Response({"detail": "No tens permisos."}, status=403)
+
+        serializer = HabitatgeDetailSerializer(habitatge, context={'request': request})
+        return Response(serializer.data)
     
     @action(detail=True, methods=['get'], permission_classes=[EsAdminOPropietariEdifici])
     def dades_energetiques(self, request, pk=None):
@@ -56,9 +85,12 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
 class HabitatgeViewSet(viewsets.ModelViewSet):
     queryset = Habitatge.objects.all()
-    serializer_class = HabitatgeSerializer
-    # permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated]
 
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return HabitatgeResumSerializer
+        return HabitatgeDetailSerializer
 
 class LocalitzacioViewSet(viewsets.ModelViewSet):
     queryset = Localitzacio.objects.all()
@@ -76,12 +108,12 @@ class EdificiListAPIView(APIView):
     # GET /edificis/: Llista tots els edificis
     def get(self, request):
         edificis = Edifici.objects.all()
-        serializer = EdificiSerializer(edificis, many=True)
+        serializer = EdificiListSerializer(edificis, many=True)
         return Response(serializer.data)
 
     # POST /edificis/: Crea un nou edifici
     def post(self, request):
-        serializer = EdificiSerializer(data=request.data)
+        serializer = EdificiDetailSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save() # Guarda a la base de dades
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -92,13 +124,13 @@ class EdificiDetailAPIView(APIView):
     # GET /edificis/{id}/: Retorna un edifici concret
     def get(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
-        serializer = EdificiSerializer(edifici)
+        serializer = EdificiDetailSerializer(edifici)
         return Response(serializer.data)
 
     # PUT /edificis/{id}/: Actualitza tot un edifici
     def put(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
-        serializer = EdificiSerializer(edifici, data=request.data)
+        serializer = EdificiDetailSerializer(edifici, data=request.data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
@@ -108,7 +140,7 @@ class EdificiDetailAPIView(APIView):
     def patch(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
         # el partial=True permet enviar només algunes dades
-        serializer = EdificiSerializer(edifici, data=request.data, partial=True)
+        serializer = EdificiDetailSerializer(edifici, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)

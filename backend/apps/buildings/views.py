@@ -10,7 +10,7 @@ from rest_framework.decorators import api_view, action
 
 from .models import Edifici, Habitatge, Localitzacio, DadesEnergetiques, carrersBarcelona
 from .serializers import EdificiDetailSerializer, EdificiListSerializer, HabitatgeDetailSerializer, HabitatgeResumSerializer, LocalitzacioSerializer, DadesEnergetiquesSerializer
-from .permissions import EsAdminOPropietariEdifici
+from .permissions import EsAdminEdifici, EsAdminOPropietariEdifici, EsAdminOPropietariHabitatge
 
 class EdificiViewSet(viewsets.ModelViewSet):
     """
@@ -28,6 +28,14 @@ class EdificiViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             return EdificiListSerializer
         return EdificiDetailSerializer  # retrieve, update, create...permission_classes = [IsAuthenticated]
+    
+    def get_permissions(self):
+        if self.action in ['update', 'partial_update', 'destroy']:
+            return [IsAuthenticated(), EsAdminEdifici()]
+        elif self.action in ['retrieve', 'dades_energetiques', 'habitatge_detail']:
+            return [IsAuthenticated(), EsAdminOPropietariEdifici()]
+        # list, create, habitatges (resum públic)
+        return [AllowAny()]
     
     # GET /edificis/{id}/habitatges/
     @action(detail=True, methods=['get'], permission_classes=[AllowAny])
@@ -91,6 +99,13 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             return HabitatgeResumSerializer
         return HabitatgeDetailSerializer
+    def get_permissions(self):
+        if self.action in ['update', 'partial_update', 'destroy']:
+            return [IsAuthenticated(), EsAdminOPropietariHabitatge()]
+        elif self.action == 'retrieve':
+            return [IsAuthenticated(), EsAdminOPropietariHabitatge()]
+        # list
+        return [AllowAny()]
 
 class LocalitzacioViewSet(viewsets.ModelViewSet):
     queryset = Localitzacio.objects.all()

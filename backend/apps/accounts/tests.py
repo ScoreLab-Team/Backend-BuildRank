@@ -1,13 +1,16 @@
 import os
 import threading
 import unittest
+from datetime import timedelta
 
 from django.test import TransactionTestCase
 from django.db import connections
 from django.urls import reverse
+from django.conf import settings
 from rest_framework import status
 from rest_framework.test import APITestCase, APIClient
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.models import (
     AccessDenialLog,
@@ -279,6 +282,11 @@ class QueryTests(BaseTestData):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["idEdifici"], self.edifici_1.idEdifici)
+        self.assertIn("idEdifici", response.data[0])
+        self.assertIn("localitzacio", response.data[0])
+        self.assertNotIn("administradorFinca", response.data[0])
+        self.assertNotIn("habitatges", response.data[0])
+        self.assertNotIn("dadesEnergetiques", response.data[0])
 
     def test_admin_finca_me_edificis_returns_only_managed_buildings(self):
         """AdminFinca can see only buildings they manage."""
@@ -299,6 +307,16 @@ class QueryTests(BaseTestData):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         returned_ids = {item["idEdifici"] for item in response.data}
         self.assertEqual(returned_ids, {self.edifici_1.idEdifici, self.edifici_2.idEdifici})
+
+    @unittest.skip("TODO(security-debt): ABAC not enforced on building detail endpoint for cross-building tenant access")
+    def test_tenant_cannot_access_other_building_detail(self):
+        """Security debt: tenant should not access details of unrelated buildings."""
+        self.client.force_authenticate(user=self.resident)
+
+        response = self.client.get(reverse("edifici-detail", args=[self.edifici_2.idEdifici]))
+
+        # Expected behavior after hardening: return 403 for unrelated building details.
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class SecurityTests(BaseTestData):
@@ -524,6 +542,77 @@ class AuthEndpointTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("refresh", response.data)
 
+    def test_logout_then_refresh_reuse_fails(self):
+        user = User.objects.create_user(email="logout-reuse@example.com", password="Password123")
+
+        login_response = self.client.post(
+            reverse("login"),
+            {"email": "logout-reuse@example.com", "password": "Password123"},
+            format="json",
+        )
+        self.assertEqual(login_response.status_code, status.HTTP_200_OK)
+
+        access_token = login_response.data["access"]
+        refresh_token = login_response.data["refresh"]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+        logout_response = self.client.post(
+            reverse("logout"),
+            {"refresh": refresh_token},
+            format="json",
+        )
+        self.assertEqual(logout_response.status_code, status.HTTP_200_OK)
+
+        refresh_response = self.client.post(
+            reverse("token_refresh"),
+            {"refresh": refresh_token},
+            format="json",
+        )
+        self.assertIn(
+            refresh_response.status_code,
+            [status.HTTP_401_UNAUTHORIZED, status.HTTP_400_BAD_REQUEST],
+        )
+
+    def test_me_with_tampered_access_token_fails(self):
+        user = User.objects.create_user(email="tampered-token@example.com", password="Password123")
+        refresh = RefreshToken.for_user(user)
+        token = str(refresh.access_token)
+        tampered = token[:-1] + ("a" if token[-1] != "a" else "b")
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tampered}")
+        response = self.client.get(reverse("me"))
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_me_with_expired_access_token_fails(self):
+        user = User.objects.create_user(email="expired-token@example.com", password="Password123")
+        refresh = RefreshToken.for_user(user)
+        access = refresh.access_token
+        access.set_exp(lifetime=timedelta(seconds=-1))
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(access)}")
+        response = self.client.get(reverse("me"))
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @unittest.skipUnless(
+        bool(settings.REST_FRAMEWORK.get("DEFAULT_THROTTLE_CLASSES")),
+        "Rate limit test skipped because DRF throttling is not configured.",
+    )
+    def test_login_rate_limit(self):
+        User.objects.create_user(email="ratelimit@example.com", password="Password123")
+        status_codes = []
+
+        for _ in range(20):
+            response = self.client.post(
+                reverse("login"),
+                {"email": "ratelimit@example.com", "password": "wrong-password"},
+                format="json",
+            )
+            status_codes.append(response.status_code)
+
+        self.assertIn(status.HTTP_429_TOO_MANY_REQUESTS, status_codes)
+
     def test_me_requires_authentication(self):
         response = self.client.get(reverse("me"))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
@@ -611,6 +700,8 @@ class TemporaryConcurrencyRegistrationTests(TransactionTestCase):
         # Diagnostic baseline while concurrency handling is not yet implemented:
         # exactly one row should exist regardless of response distribution.
         self.assertEqual(User.objects.filter(email=email).count(), 1)
+        self.assertEqual(Profile.objects.filter(user__email=email).count(), 1)
+        self.assertEqual(TokenLoginLog.objects.filter(user__email=email).count(), 0)
 
 
 @unittest.skipUnless(
@@ -671,3 +762,5 @@ class StrictConcurrencyRegistrationTests(TransactionTestCase):
             f"Expected only 201/400 responses, got: {statuses}",
         )
         self.assertEqual(User.objects.filter(email=email).count(), 1)
+        self.assertEqual(Profile.objects.filter(user__email=email).count(), 1)
+        self.assertEqual(TokenLoginLog.objects.filter(user__email=email).count(), 0)

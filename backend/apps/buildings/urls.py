@@ -16,6 +16,7 @@ urlpatterns = [
     path('edificis/', EdificiListAPIView.as_view(), name='edifici-list'),
     path('edificis/<str:pk>/', EdificiDetailAPIView.as_view(), name='edifici-detail'),
     path('carrers/autocomplete/', autocomplete_carrers, name='autocomplete-carrers'),
+    path('carrers/autocomplete/', autocomplete_carrers, name='autocomplete-carrers'),
     # Afegim tota la resta de rutes automàtiques del router
     path('', include(router.urls)),
 ]

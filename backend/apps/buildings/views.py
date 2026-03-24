@@ -70,7 +70,7 @@ class EdificiVeureAPIView(ABACMixin, APIView):
 
 class EdificiEditarAPIView(ABACMixin, APIView):
     permission_classes = [IsAuthenticated]
-    
+
     # PUT /edificis/{id}/editar/: Actualitza tot un edifici
     def put(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
@@ -98,6 +98,19 @@ class EdificiEditarAPIView(ABACMixin, APIView):
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
+
+class EdificiEsborrarAPIView(ABACMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    # DELETE /edificis/{id}/esborrar: Esborra un edifici
+    def delete(self, request, pk):
+        edifici = get_object_or_404(Edifici, pk=pk)
+
+        self.check_edifici_access(request, edifici.idEdifici)
+
+        edifici.delete()
+        return Response({"detail": "Edifici esborrat correctament."}, status=status.HTTP_204_NO_CONTENT)
+
 
 @api_view(['GET'])
 def autocomplete_carrers(request):

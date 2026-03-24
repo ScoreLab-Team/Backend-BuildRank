@@ -2,7 +2,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (EdificiVeureAPIView, EdificiEditarAPIView, 
-    EdificisMostrarAPIView, EdificiCrearAPIView, 
+    EdificisMostrarAPIView, EdificiCrearAPIView, EdificiEsborrarAPIView,
     HabitatgeViewSet, LocalitzacioViewSet, DadesEnergetiquesViewSet, autocomplete_carrers
 )
 
@@ -23,6 +23,8 @@ urlpatterns = [
     path('edificis/<int:pk>/veure/', EdificiVeureAPIView.as_view(), name='edifici-veure'),
     # patch i put d'un edifici concret
     path('edificis/<int:pk>/editar/', EdificiEditarAPIView.as_view(), name='edifici-editar'),
+    # delete un edifici
+    path('edificis/<int:pk>/esborrar/', EdificiEsborrarAPIView.as_view(), name='edifici-esborrar'),
 
     path('carrers/autocomplete/', autocomplete_carrers, name='autocomplete-carrers'),
     # Afegim tota la resta de rutes automàtiques del router

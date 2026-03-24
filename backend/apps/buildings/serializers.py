@@ -1,4 +1,5 @@
 # apps/buildings/serializers.py
+from requests import Response
 from rest_framework import serializers
 from apps.buildings.models import Edifici, Habitatge, DadesEnergetiques, Localitzacio, carrersBarcelona
 import re
@@ -60,7 +61,7 @@ class DadesEnergetiquesSerializer(serializers.ModelSerializer):
     class Meta:
         model = DadesEnergetiques
         fields = "__all__"
-
+    
 
 class HabitatgeSerializer(serializers.ModelSerializer):
     dades_energetiques = DadesEnergetiquesSerializer(read_only=True)

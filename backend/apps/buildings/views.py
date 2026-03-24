@@ -5,11 +5,12 @@ from rest_framework import status, viewsets
 from django.shortcuts import get_object_or_404
 
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.permissions import AllowAny
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, action
+
 
 from .models import Edifici, Habitatge, Localitzacio, DadesEnergetiques, carrersBarcelona
 from .serializers import EdificiSerializer, HabitatgeSerializer, LocalitzacioSerializer, DadesEnergetiquesSerializer
+from .permissions import EsAdminOPropietariEdifici
 
 class EdificiViewSet(viewsets.ModelViewSet):
     """
@@ -24,6 +25,34 @@ class EdificiViewSet(viewsets.ModelViewSet):
     queryset = Edifici.objects.all()
     serializer_class = EdificiSerializer
     permission_classes = [IsAuthenticated]
+    
+    @action(detail=True, methods=['get'], permission_classes=[EsAdminOPropietariEdifici])
+    def dades_energetiques(self, request, pk=None):
+        edifici = self.get_object()  # ja aplica check_object_permissions automàticament
+
+        # Filtrem segons rol
+        if edifici.administradorFinca == request.user:
+            habitatges = edifici.habitatges.select_related('dadesEnergetiques').all()
+        else:
+            habitatges = edifici.habitatges.select_related('dadesEnergetiques').filter(usuari=request.user)
+
+        dades = []
+        for habitatge in habitatges:
+            if habitatge.dadesEnergetiques:
+                serializer = DadesEnergetiquesSerializer(
+                    habitatge.dadesEnergetiques,
+                    context={'request': request}
+                )
+                dades.append({
+                    "habitatge": f"{habitatge.planta}-{habitatge.porta}",
+                    "referenciaCadastral": habitatge.referenciaCadastral,
+                    "dadesEnergetiques": serializer.data
+                })
+
+        if not dades:
+            return Response({"detail": "No hi ha dades energètiques disponibles."}, status=404)
+
+        return Response(dades)
 
 class HabitatgeViewSet(viewsets.ModelViewSet):
     queryset = Habitatge.objects.all()
@@ -34,7 +63,7 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
 class LocalitzacioViewSet(viewsets.ModelViewSet):
     queryset = Localitzacio.objects.all()
     serializer_class = LocalitzacioSerializer
-    permission_classes = [AllowAny]  # permite POST sin login
+    permission_classes = [IsAuthenticated]  # permite POST sin login
 
 
 class DadesEnergetiquesViewSet(viewsets.ModelViewSet):

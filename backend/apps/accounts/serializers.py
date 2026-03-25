@@ -35,12 +35,6 @@ class RegisterSerializer(serializers.ModelSerializer):
                 {"password_confirm": "Les contrasenyes no coincideixen."}
             )
 
-        requested_role = attrs.get("role")
-        if requested_role == RoleChoices.ADMIN:
-            raise serializers.ValidationError(
-                {"role": "No està permès registrar-se com a administrador."}
-            )
-
         password = attrs["password"]
 
         if not any(char.isalpha() for char in password):

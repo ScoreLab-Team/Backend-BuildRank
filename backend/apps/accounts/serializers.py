@@ -35,12 +35,6 @@ class RegisterSerializer(serializers.ModelSerializer):
                 {"password_confirm": "Les contrasenyes no coincideixen."}
             )
 
-        requested_role = attrs.get("role")
-        if requested_role == RoleChoices.ADMIN:
-            raise serializers.ValidationError(
-                {"role": "No està permès registrar-se com a administrador."}
-            )
-
         password = attrs["password"]
 
         if not any(char.isalpha() for char in password):
@@ -216,3 +210,14 @@ class AssignarAdminSerializer(serializers.Serializer):
         if value is not None and not User.objects.filter(pk=value).exists():
             raise serializers.ValidationError("Usuari no trobat.")
         return value
+
+class AccountUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ("first_name", "last_name")
+
+    def update(self, instance, validated_data):
+        instance.first_name = validated_data.get("first_name", instance.first_name)
+        instance.last_name = validated_data.get("last_name", instance.last_name)
+        instance.save(update_fields=["first_name", "last_name"])
+        return instance

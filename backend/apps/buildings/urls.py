@@ -2,10 +2,19 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from .views import (EdificiVeureAPIView, EdificiEditarAPIView, 
-    EdificisMostrarAPIView, EdificiCrearAPIView, EdificiEsborrarAPIView,
-    HabitatgeViewSet, LocalitzacioViewSet, DadesEnergetiquesViewSet, autocomplete_carrers,
-    EdificiDetailAPIView, EdificiViewSet, EdificiListAPIView
+from .views import (
+    EdificiDetailAPIView,
+    EdificiListAPIView,
+    EdificiViewSet,
+    EdificiVeureAPIView,
+    EdificiEditarAPIView,
+    EdificiCrearAPIView,
+    EdificiEsborrarAPIView,
+    EdificisMostrarAPIView,
+    HabitatgeViewSet,
+    LocalitzacioViewSet,
+    DadesEnergetiquesViewSet,
+    autocomplete_carrers,
 )
 
 router = DefaultRouter()

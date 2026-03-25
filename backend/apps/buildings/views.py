@@ -4,8 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status, viewsets
 from django.shortcuts import get_object_or_404
 
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, action
 from apps.accounts.permissions import ABACMixin
 
@@ -157,7 +156,7 @@ class EdificiEditarAPIView(ABACMixin, APIView):
 
         # serializer = EdificiSerializer(edifici, data=request.data)
         serializer = EdificiDetailSerializer(edifici, data=request.data)
-
+        
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)

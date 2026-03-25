@@ -1,7 +1,19 @@
 # apps/buildings/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import EdificiDetailAPIView, EdificiViewSet, EdificiListAPIView, HabitatgeViewSet, LocalitzacioViewSet, DadesEnergetiquesViewSet, autocomplete_carrers
+
+from .views import (
+    EdificiViewSet,
+    EdificiVeureAPIView,
+    EdificiEditarAPIView,
+    EdificiCrearAPIView,
+    EdificiEsborrarAPIView,
+    EdificisMostrarAPIView,
+    HabitatgeViewSet,
+    LocalitzacioViewSet,
+    DadesEnergetiquesViewSet,
+    autocomplete_carrers,
+)
 
 router = DefaultRouter()
 router.register(r'edificis', EdificiViewSet, basename='edifici')
@@ -12,9 +24,17 @@ router.register(r'dades_energetiques', DadesEnergetiquesViewSet, basename='dades
 # urlpatterns = router.urls
 
 urlpatterns = [
-    # Rutes manuals per als teus APIView d'Edificis
-    path('edificis/', EdificiListAPIView.as_view(), name='edifici-list'),
-    path('edificis/<str:pk>/', EdificiDetailAPIView.as_view(), name='edifici-detail'),
+    # get de tots els edificis
+    path('edificis/mostrar/', EdificisMostrarAPIView.as_view(), name='edifici-mostrar'),
+    # post un edifici
+    path('edificis/crear/', EdificiCrearAPIView.as_view(), name='edifici-crear'),
+    # get un edifici concret
+    path('edificis/<int:pk>/veure/', EdificiVeureAPIView.as_view(), name='edifici-veure'),
+    # patch i put d'un edifici concret
+    path('edificis/<int:pk>/editar/', EdificiEditarAPIView.as_view(), name='edifici-editar'),
+    # delete un edifici
+    path('edificis/<int:pk>/esborrar/', EdificiEsborrarAPIView.as_view(), name='edifici-esborrar'),
+
     path('carrers/autocomplete/', autocomplete_carrers, name='autocomplete-carrers'),
     path('carrers/autocomplete/', autocomplete_carrers, name='autocomplete-carrers'),
     # Afegim tota la resta de rutes automàtiques del router

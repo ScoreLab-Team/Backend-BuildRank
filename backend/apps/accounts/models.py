@@ -38,6 +38,45 @@ class Profile(models.Model):
         return f"{self.user.email} - {self.role}"
 
 
+class TokenLoginLog(models.Model):
+    """
+    Registro de auditoría de logins/logouts para análisis de patrones de acceso.
+    Se mantiene separado de los tokens activos (OutstandingToken/BlacklistedToken) 
+    para evitar impacto en performance y tener histórico limpio.
+    """
+    LOGIN = 'login'
+    LOGOUT = 'logout'
+    EXPIRED = 'expired'
+    REVOKED = 'revoked'
+    
+    STATUS_CHOICES = [
+        (LOGIN, 'Login'),
+        (LOGOUT, 'Logout'),
+        (EXPIRED, 'Expirado'),
+        (REVOKED, 'Revocado'),
+    ]
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='token_login_logs')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    login_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    logout_at = models.DateTimeField(null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True)
+    jti = models.CharField(max_length=255, unique=True, db_index=True)
+    
+    class Meta:
+        ordering = ['-login_at']
+        verbose_name_plural = 'Token Login Logs'
+        indexes = [
+            models.Index(fields=['user', '-login_at']),
+            models.Index(fields=['status', '-login_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.email} – {self.status} @ {self.login_at}"
+
+
 class AccessDenialLog(models.Model):
     user = models.ForeignKey(
         User,

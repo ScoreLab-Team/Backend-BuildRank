@@ -352,3 +352,68 @@ class SecurityTests(BaseTestData):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(User.objects.filter(email="evil-admin@example.com").exists())
+
+class AccountUpdateTests(BaseTestData):
+    """Tests for authenticated account update endpoint."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = cls._create_user("user@example.com", RoleChoices.OWNER)
+
+    def test_authenticated_user_can_patch_own_account(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse("me"),
+            {"first_name": "NouNom"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "NouNom")
+        self.assertEqual(self.user.last_name, "")
+
+    def test_authenticated_user_can_put_own_account(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.put(
+            reverse("me"),
+            {
+                "first_name": "Marti",
+                "last_name": "Borras",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "Marti")
+        self.assertEqual(self.user.last_name, "Borras")
+
+    def test_unauthenticated_user_cannot_patch_account(self):
+        response = self.client.patch(
+            reverse("me"),
+            {"first_name": "Hack"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_update_account_ignores_role_field(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse("me"),
+            {
+                "first_name": "NouNom",
+                "role": RoleChoices.ADMIN,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.first_name, "NouNom")
+        self.assertEqual(self.user.profile.role, RoleChoices.OWNER)

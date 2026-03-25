@@ -1,4 +1,5 @@
 # apps/buildings/serializers.py
+from requests import Response
 from rest_framework import serializers
 from apps.buildings.models import Edifici, Habitatge, DadesEnergetiques, Localitzacio, carrersBarcelona
 import re
@@ -60,15 +61,17 @@ class DadesEnergetiquesSerializer(serializers.ModelSerializer):
     class Meta:
         model = DadesEnergetiques
         fields = "__all__"
+    
 
-
-class HabitatgeSerializer(serializers.ModelSerializer):
-    dades_energetiques = DadesEnergetiquesSerializer(read_only=True)
-
+# Resum habitatge (sense dades energètiques)
+class HabitatgeResumSerializer(serializers.ModelSerializer):
     class Meta:
         model = Habitatge
-        unique_together = ('edifici', 'planta', 'porta')
-        fields = "__all__"
+        fields = ['referenciaCadastral', 'planta', 'porta', 'superficie', 'anyReforma']
+
+# Detall habitatge complet (protegit)
+class HabitatgeDetailSerializer(serializers.ModelSerializer):
+    dadesEnergetiques = DadesEnergetiquesSerializer(read_only=True)
 
     # validacio superficie
     def validate_superficie(self, value):
@@ -99,11 +102,22 @@ class HabitatgeSerializer(serializers.ModelSerializer):
 
         return data
 
+    class Meta:
+        model = Habitatge
+        unique_together = ('edifici', 'planta', 'porta')
+        fields = '__all__'
 
-class EdificiSerializer(serializers.ModelSerializer):
-    habitatges = HabitatgeSerializer(many=True, read_only=True)
+
+# Edifici 1. Llistat lleuger
+class EdificiListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Edifici
+        fields = ['idEdifici', 'tipologia', 'anyConstruccio', 'superficieTotal', 'puntuacioBase']
+
+# Edifici 2. Detall públic (localitzacio anidada + camps extra)
+class EdificiDetailSerializer(serializers.ModelSerializer):
     localitzacio = LocalitzacioSerializer(read_only=True)
-
+    
     class Meta:
         model = Edifici
         fields = "__all__"

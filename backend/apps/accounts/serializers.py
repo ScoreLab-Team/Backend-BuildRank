@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from rest_framework import serializers
 
-from apps.accounts.models import Profile, RoleChoices
+from apps.accounts.models import Profile, RoleChoices, TokenLoginLog
 from apps.buildings.models import Edifici, Habitatge
 
 from django.contrib.auth import authenticate
@@ -10,6 +10,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
 
 User = get_user_model()
 
@@ -95,12 +96,41 @@ class LoginSerializer(serializers.Serializer):
             raise serializers.ValidationError("Aquest usuari està inactiu.")
 
         refresh = RefreshToken.for_user(user)
+        jti = str(refresh.get('jti'))
+        
+        # Limpieza: máx 5 sesiones activas por usuario
+        # Si hay 5 o más, revoca la más antigua
+        self._enforce_session_limit(user)
+        
+        # Registrar login en TokenLoginLog
+        TokenLoginLog.objects.create(
+            user=user,
+            status=TokenLoginLog.LOGIN,
+            expires_at=None,  # Se calcula desde JWT
+            jti=jti,
+        )
 
         return {
             "user": user,
             "access": str(refresh.access_token),
             "refresh": str(refresh),
         }
+    
+    def _enforce_session_limit(self, user, max_sessions=5):
+        """
+        Revoca la sesión más antigua si el usuario ya tiene max_sessions activas.
+        """
+        active_sessions = TokenLoginLog.objects.filter(
+            user=user,
+            status=TokenLoginLog.LOGIN,
+            logout_at__isnull=True
+        ).order_by('login_at')
+        
+        if active_sessions.count() >= max_sessions:
+            oldest = active_sessions.first()
+            if oldest:
+                oldest.status = TokenLoginLog.REVOKED
+                oldest.save(update_fields=['status'])
 
 
 class LogoutSerializer(serializers.Serializer):
@@ -115,6 +145,15 @@ class LogoutSerializer(serializers.Serializer):
         try:
             refresh_token = self.validated_data["refresh"]
             token = RefreshToken(refresh_token)
+            jti = str(token.get('jti'))
+            
+            # Marcar en TokenLoginLog como logout
+            TokenLoginLog.objects.filter(jti=jti).update(
+                   status=TokenLoginLog.LOGOUT,
+                   logout_at=timezone.now()
+            )
+            
+            # Blacklist el token
             token.blacklist()
         except Exception:
             raise serializers.ValidationError({"refresh": "Token invàlid o ja invalidat."})

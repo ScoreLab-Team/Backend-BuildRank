@@ -366,23 +366,92 @@ class SecurityTests(BaseTestData):
         self.habitatge_1.edifici.refresh_from_db()
         self.assertEqual(self.habitatge_1.edifici.administradorFinca_id, self.admin_finca.id)
 
-    def test_register_cannot_escalate_to_admin_role(self):
-        """Privilege escalation: register endpoint rejects role=admin requests."""
+    def test_register_allows_building_admin_role(self):
+        """Register endpoint allows admin role for building administrators."""
         response = self.client.post(
             reverse("register"),
             {
-                "email": "evil-admin@example.com",
-                "first_name": "Evil",
-                "last_name": "User",
-                "password": "Password123",
-                "password_confirm": "Password123",
+                "email": "admin-finca@example.com",
+                "first_name": "Admin",
+                "last_name": "Finca",
+                "password": "BuildRankAdmin847",
+                "password_confirm": "BuildRankAdmin847",
                 "role": RoleChoices.ADMIN,
             },
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertFalse(User.objects.filter(email="evil-admin@example.com").exists())
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(User.objects.filter(email="admin-finca@example.com").exists())
+
+        user = User.objects.get(email="admin-finca@example.com")
+        self.assertEqual(user.profile.role, RoleChoices.ADMIN)
+
+
+class AccountUpdateTests(BaseTestData):
+    """Tests for authenticated account update endpoint."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = cls._create_user("user@example.com", RoleChoices.OWNER)
+
+    def test_authenticated_user_can_patch_own_account(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse("me"),
+            {"first_name": "NouNom"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "NouNom")
+        self.assertEqual(self.user.last_name, "")
+
+    def test_authenticated_user_can_put_own_account(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.put(
+            reverse("me"),
+            {
+                "first_name": "Marti",
+                "last_name": "Borras",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "Marti")
+        self.assertEqual(self.user.last_name, "Borras")
+
+    def test_unauthenticated_user_cannot_patch_account(self):
+        response = self.client.patch(
+            reverse("me"),
+            {"first_name": "Hack"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_update_account_ignores_role_field(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse("me"),
+            {
+                "first_name": "NouNom",
+                "role": RoleChoices.ADMIN,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.first_name, "NouNom")
+        self.assertEqual(self.user.profile.role, RoleChoices.OWNER)
 
 
 class AuthEndpointTests(APITestCase):

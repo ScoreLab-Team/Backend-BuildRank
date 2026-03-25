@@ -491,6 +491,42 @@ class AuthEndpointTests(APITestCase):
 
         self.assertEqual(TokenLoginLog.objects.filter(user=user, status=TokenLoginLog.LOGIN).count(), 1)
 
+    def test_login_session_limit_blacklists_oldest_refresh_token(self):
+        user = User.objects.create_user(
+            email="session-limit@example.com",
+            password="Password123",
+        )
+
+        refresh_tokens = []
+        for _ in range(6):
+            response = self.client.post(
+                reverse("login"),
+                {"email": "session-limit@example.com", "password": "Password123"},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            refresh_tokens.append(response.data["refresh"])
+
+        oldest_refresh = refresh_tokens[0]
+        refresh_response = self.client.post(
+            reverse("token_refresh"),
+            {"refresh": oldest_refresh},
+            format="json",
+        )
+
+        self.assertIn(
+            refresh_response.status_code,
+            [status.HTTP_401_UNAUTHORIZED, status.HTTP_400_BAD_REQUEST],
+        )
+        self.assertEqual(
+            TokenLoginLog.objects.filter(user=user, status=TokenLoginLog.LOGIN, logout_at__isnull=True).count(),
+            5,
+        )
+        self.assertGreaterEqual(
+            TokenLoginLog.objects.filter(user=user, status=TokenLoginLog.REVOKED).count(),
+            1,
+        )
+
     def test_login_rejects_invalid_credentials(self):
         User.objects.create_user(email="invalid-login@example.com", password="Password123")
 

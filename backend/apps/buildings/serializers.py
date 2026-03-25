@@ -1,5 +1,4 @@
 # apps/buildings/serializers.py
-from requests import Response
 from rest_framework import serializers
 from apps.buildings.models import Edifici, Habitatge, DadesEnergetiques, Localitzacio, carrersBarcelona
 import re

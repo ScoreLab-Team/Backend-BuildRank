@@ -335,20 +335,23 @@ class SecurityTests(BaseTestData):
         self.habitatge_1.edifici.refresh_from_db()
         self.assertEqual(self.habitatge_1.edifici.administradorFinca_id, self.admin_finca.id)
 
-    def test_register_cannot_escalate_to_admin_role(self):
-        """Privilege escalation: register endpoint rejects role=admin requests."""
+    def test_register_allows_building_admin_role(self):
+        """Register endpoint allows admin role for building administrators."""
         response = self.client.post(
             reverse("register"),
             {
-                "email": "evil-admin@example.com",
-                "first_name": "Evil",
-                "last_name": "User",
-                "password": "Password123",
-                "password_confirm": "Password123",
+                "email": "admin-finca@example.com",
+                "first_name": "Admin",
+                "last_name": "Finca",
+                "password": "BuildRankAdmin847",
+                "password_confirm": "BuildRankAdmin847",
                 "role": RoleChoices.ADMIN,
             },
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertFalse(User.objects.filter(email="evil-admin@example.com").exists())
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(User.objects.filter(email="admin-finca@example.com").exists())
+
+        user = User.objects.get(email="admin-finca@example.com")
+        self.assertEqual(user.profile.role, RoleChoices.ADMIN)

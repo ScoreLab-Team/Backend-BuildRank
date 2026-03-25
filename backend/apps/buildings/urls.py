@@ -1,14 +1,12 @@
 # apps/buildings/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-<<<<<<< HEAD
+
 from .views import (EdificiVeureAPIView, EdificiEditarAPIView, 
     EdificisMostrarAPIView, EdificiCrearAPIView, EdificiEsborrarAPIView,
-    HabitatgeViewSet, LocalitzacioViewSet, DadesEnergetiquesViewSet, autocomplete_carrers
+    HabitatgeViewSet, LocalitzacioViewSet, DadesEnergetiquesViewSet, autocomplete_carrers,
+    EdificiDetailAPIView, EdificiViewSet, EdificiListAPIView
 )
-=======
-from .views import EdificiDetailAPIView, EdificiViewSet, EdificiListAPIView, HabitatgeViewSet, LocalitzacioViewSet, DadesEnergetiquesViewSet, autocomplete_carrers
->>>>>>> Desenvolupament
 
 router = DefaultRouter()
 router.register(r'edificis', EdificiViewSet, basename='edifici')

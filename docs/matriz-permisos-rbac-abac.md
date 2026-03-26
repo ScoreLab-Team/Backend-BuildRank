@@ -2,104 +2,134 @@
 
 ## 1. Objetivo y alcance
 
-Este documento describe la implementación de control de acceso del backend del proyecto BuildRank, basada en:
+Este documento define el modelo de control de acceso de BuildRank diferenciando dos ámbitos:
 
-- **RBAC (Role-Based Access Control)**, con permisos diferenciados por rol.
-- **ABAC (Attribute-Based Access Control)**, con validación de acceso por vinculación a edificio.
+- **Ámbito APP (API funcional):** controlado por RBAC + ABAC.
+- **Ámbito Plataforma (Django Administration):** controlado por `is_staff` / `is_superuser`.
 
-La descripción se presenta por endpoint y refleja el comportamiento implementado actualmente en los módulos `accounts` y `buildings`.
-
----
-
-## 2. Roles definidos en el sistema
-
-- **Inquilino** (`tenant`)
-- **Administrador de Finca / Propietario** (`owner`)
-- **Administrador del Sistema** (`admin`)
-
-El modelo de perfil (`Profile`) asocia cada usuario a uno de estos roles.
+Política global: **por defecto, denegar**.
 
 ---
 
-## 3. Matriz de permisos RBAC por endpoint
+## 2. Roles oficiales del sistema
 
-### 3.1. Módulo `api/accounts/`
+### 2.1. Roles funcionales de la aplicación (RBAC APP)
 
-| Endpoint | Método | Inquilino (`tenant`) | Admin. Finca (`owner`) | Admin. Sistema (`admin`) | Implementación |
-|---|---|---:|---:|---:|---|
-| `/api/accounts/register/` | `POST` | ✅ | ✅ | ✅ | Público (`AllowAny`). El registro con rol `admin` se rechaza. |
-| `/api/accounts/login/` | `POST` | ✅ | ✅ | ✅ | Público (`AllowAny`). Emisión de `access` y `refresh`. |
-| `/api/accounts/refresh/` | `POST` | ✅ | ✅ | ✅ | Renovación de token vía SimpleJWT. |
-| `/api/accounts/logout/` | `POST` | ✅ | ✅ | ✅ | Requiere autenticación (`IsAuthenticated`). |
-| `/api/accounts/me/` | `GET` | ✅ | ✅ | ✅ | Requiere autenticación (`IsAuthenticated`). |
-| `/api/accounts/me/edificis/` | `GET` | ✅ | ✅ | ✅ | Devuelve edificios según rol: residente vinculado, cartera de admin finca o vista global de admin sistema. |
-| `/api/accounts/habitatges/{ref_cadastral}/assignar-resident/` | `PATCH` | ❌ | ✅ | ✅ | Permiso `IsAdminFinca` (owner/admin) + validación ABAC por edificio. |
-| `/api/accounts/edificis/{id_edifici}/assignar-admin/` | `PATCH` | ❌ | ❌ | ✅ | Permiso exclusivo `IsAdminSistema`. |
+- **tenant**: residente/inquilino con acceso mínimo a su contexto.
+- **owner**: propietario con acceso a sus inmuebles.
+- **admin_finca**: administrador operativo de finca dentro de su cartera.
 
-### 3.2. Módulo `api/buildings/`
+> Estos tres roles son los únicos que participan en la matriz RBAC/ABAC de endpoints de negocio.
 
-La configuración global de DRF establece autenticación obligatoria (`IsAuthenticated`) por defecto, excepto en endpoints que declaran explícitamente `AllowAny`.
+### 2.2. Rol de sistema (fuera del RBAC APP)
 
-| Endpoint | Método | Inquilino (`tenant`) | Admin. Finca (`owner`) | Admin. Sistema (`admin`) | Implementación |
-|---|---|---:|---:|---:|---|
-| `/api/buildings/edificis/` | `GET` | ✅ | ✅ | ✅ | Autenticado por política global. |
-| `/api/buildings/edificis/` | `POST` | ✅ | ✅ | ✅ | Autenticado por política global. |
-| `/api/buildings/edificis/{pk}/` | `GET` | ✅ | ✅ | ✅ | Autenticado por política global. |
-| `/api/buildings/edificis/{pk}/` | `PUT/PATCH` | ✅ | ✅ | ✅ | Autenticado por política global. |
-| `/api/buildings/carrers/autocomplete/` | `GET` | ✅ | ✅ | ✅ | Autenticado por política global. |
-| `/api/buildings/habitatges/` y `/api/buildings/habitatges/{id}/` | CRUD | ✅ | ✅ | ✅ | Autenticado por política global. |
-| `/api/buildings/dades_energetiques/` y `.../{id}/` | CRUD | ✅ | ✅ | ✅ | Autenticado por política global. |
-| `/api/buildings/localitzacions/` y `.../{id}/` | CRUD | ✅ | ✅ | ✅ | Endpoint configurado con `AllowAny` en el `ViewSet`. |
+- **admin_sistema**: rol de plataforma delegado a Django Administration.
+
+Este rol **no forma parte** de la matriz RBAC funcional de la APP. Su gestión se realiza mediante:
+
+- `is_staff` para acceso al panel de administración.
+- `is_superuser` para privilegios globales de sistema.
 
 ---
 
-## 4. Criterio ABAC por edificio
+## 3. Principios de autorización
 
-### A. Atributo de vinculación directa
-
-**Regla lógica:** `permitir_acceso IF (usuario.edificio_id == recurso.edificio_id)`
-
-**Aplicación implementada:**
-- En `ABACMixin.check_edifici_access`, para rol residente (`tenant`) se valida que el usuario esté vinculado al edificio mediante `habitatges_on_resideix`.
-
-### B. Atributo de cartera de gestión
-
-**Regla lógica:** `permitir_acceso IF (recurso.edificio_id IN usuario.cartera_gestion)`
-
-**Aplicación implementada:**
-- En `ABACMixin.check_edifici_access`, para rol `owner` se comprueba que el edificio pertenezca a `edificis_administrats`.
-
-### C. Atributo de similitud (Twin Building)
-
-**Regla lógica:**
-`permitir_contacto IF (edificio_A.tipologia == edificio_B.tipologia AND edificio_A.zona == edificio_B.zona)`
-
-**Aplicación implementada:**
-- En `ABACMixin.check_twin_building_access`, se valida igualdad de tipología y zona climática entre dos edificios.
+1. **RBAC (quién puede):** permisos por rol funcional (`tenant`, `owner`, `admin_finca`).
+2. **ABAC (sobre qué puede):** validación de pertenencia/vinculación al recurso (edificio, vivienda, dato energético).
+3. **Deny by default:** si una operación no está explícitamente permitida, se responde `403`.
+4. **Separación de ámbitos:** lo funcional se autoriza en API; lo técnico/global se autoriza en Django Admin.
 
 ---
 
-## 5. Implementación técnica
+## 4. Matriz RBAC/ABAC del ámbito APP
 
-### 5.1. Autenticación
+### 4.1. Criterio ABAC por rol (APP)
 
-- El backend utiliza **JWT** con `JWTAuthentication`.
-- La configuración de SimpleJWT establece ciclos de `access` y `refresh`, rotación de refresh tokens y blacklist.
-- Los endpoints de autenticación (`register`, `login`, `refresh`) son públicos según el flujo establecido.
+- **tenant**: solo recursos donde exista relación directa con su vivienda/residencia.
+- **owner**: solo recursos de inmuebles/viviendas que sean de su propiedad.
+- **admin_finca**: solo recursos de edificios bajo su gestión administrativa.
 
-### 5.2. Capa de servicio y validación de acceso
+### 4.2. Matriz por recurso y operación (APP)
 
-- Los permisos por rol se definen con clases DRF (`IsAdminSistema`, `IsAdminFinca`, `IsAuthenticated`).
-- La validación ABAC por edificio se aplica a través de `ABACMixin` antes de ejecutar operaciones sensibles vinculadas a edificios.
+| Recurso APP           | Operación           | tenant | owner | admin_finca | ABAC requerido | Notas                                             |
+| --------------------- | ------------------- | :----: | :---: | :---------: | :------------: | ------------------------------------------------- |
+| Perfil propio         | `GET /me`           |   ✅   |  ✅   |     ✅      |       No       | Solo datos del usuario autenticado                |
+| Perfil propio         | `PATCH /me`         |   ✅   |  ✅   |     ✅      |       No       | Solo campos permitidos                            |
+| Edificios             | `GET LIST`          |  ✅\*  | ✅\*  |    ✅\*     |       Sí       | Filtrado por relación al edificio                 |
+| Edificios             | `GET DETAIL`        |  ✅\*  | ✅\*  |    ✅\*     |       Sí       | Solo si el edificio está en su ámbito             |
+| Edificios             | `POST`              |   ❌   |  ❌   |    ✅\*     |       Sí       | Solo para edificios dentro de su gestión definida |
+| Edificios             | `PATCH/PUT`         |   ❌   | ✅\*  |    ✅\*     |       Sí       | Solo en su ámbito                                 |
+| Edificios             | `DELETE`            |   ❌   |  ❌   |    ✅\*     |       Sí       | Restringido a su ámbito y política operativa      |
+| Viviendas             | `GET LIST`          |  ✅\*  | ✅\*  |    ✅\*     |       Sí       | Filtrado por edificio/vivienda vinculada          |
+| Viviendas             | `GET DETAIL`        |  ✅\*  | ✅\*  |    ✅\*     |       Sí       | Solo en su ámbito                                 |
+| Viviendas             | `POST`              |   ❌   | ✅\*  |    ✅\*     |       Sí       | Solo en edificios autorizados                     |
+| Viviendas             | `PATCH/PUT`         |   ❌   | ✅\*  |    ✅\*     |       Sí       | Solo en edificios autorizados                     |
+| Viviendas             | `DELETE`            |   ❌   | ✅\*  |    ✅\*     |       Sí       | Solo en edificios autorizados                     |
+| Datos energéticos     | `GET LIST`          |  ✅\*  | ✅\*  |    ✅\*     |       Sí       | Filtrado por edificio autorizado                  |
+| Datos energéticos     | `GET DETAIL`        |  ✅\*  | ✅\*  |    ✅\*     |       Sí       | Solo en su ámbito                                 |
+| Datos energéticos     | `POST`              |   ❌   | ✅\*  |    ✅\*     |       Sí       | Solo en edificios autorizados                     |
+| Datos energéticos     | `PATCH/PUT`         |   ❌   | ✅\*  |    ✅\*     |       Sí       | Solo en edificios autorizados                     |
+| Datos energéticos     | `DELETE`            |   ❌   | ✅\*  |    ✅\*     |       Sí       | Solo en edificios autorizados                     |
+| Catálogos (lectura)   | `GET`               |   ✅   |  ✅   |     ✅      |       No       | Catálogo no sensible                              |
+| Catálogos (escritura) | `POST/PATCH/DELETE` |   ❌   |  ❌   |     ✅      |    Opcional    | Según política de mantenimiento                   |
 
-### 5.3. Auditoría de seguridad
+**Leyenda:**
 
-- Las denegaciones de acceso ABAC se registran en `AccessDenialLog`.
-- El registro incluye usuario, rol, acción, motivo, IP y marca temporal.
-- También se dispone de auditoría de sesión/token mediante `TokenLoginLog` para login/logout/revocación/expiración.
+- ✅ = Permitido
+- ❌ = Denegado
+- ✅\* = Permitido con validación ABAC previa
 
 ---
 
-## 6. Síntesis
+## 5. Ámbito Django Administration (Plataforma)
 
-El proyecto incorpora un modelo de control de acceso combinado **RBAC + ABAC** con definición de roles, restricciones por atributo de edificio y trazabilidad de incidentes de seguridad. La matriz de permisos queda formalizada por endpoint y el criterio ABAC se concreta en reglas de vinculación directa, cartera de gestión y similitud de Twin Building.
+### 5.1. Regla de gobierno
+
+El rol **admin_sistema** se trata como capacidad de plataforma y se administra únicamente con Django Admin.
+
+| Ámbito                | Rol                          | Mecanismo                   | Alcance                                  |
+| --------------------- | ---------------------------- | --------------------------- | ---------------------------------------- |
+| Django Administration | admin_sistema                | `is_staff` / `is_superuser` | Operaciones técnicas/globales de sistema |
+| API funcional APP     | tenant / owner / admin_finca | RBAC + ABAC                 | Operaciones de negocio                   |
+
+### 5.2. Política de separación
+
+- Usuarios funcionales (`tenant`, `owner`, `admin_finca`) **no requieren** acceso a Django Admin.
+- El acceso a Django Admin se concede solo a perfiles de operación técnica.
+- Las operaciones de backoffice no sustituyen las reglas ABAC de la API de negocio.
+
+---
+
+## 6. Reglas ABAC de referencia (APP)
+
+### A) tenant
+
+`permitir IF usuario está vinculado a la vivienda/recurso solicitado`
+
+### B) owner
+
+`permitir IF recurso.edificio pertenece al propietario autenticado`
+
+### C) admin_finca
+
+`permitir IF recurso.edificio pertenece a la cartera de edificios administrados`
+
+### D) Denegación por defecto
+
+`denegar IF no existe permiso RBAC explícito o falla ABAC`
+
+---
+
+## 7. Implementación recomendada en DRF
+
+- `DEFAULT_PERMISSION_CLASSES = IsAuthenticated`.
+- Permisos por acción (`get_permissions`) para RBAC funcional.
+- `get_queryset` filtrado por ABAC para `LIST`.
+- Validación explícita en `retrieve/update/destroy/create` para evitar bypass por ID directo.
+- Registro de denegaciones y acciones críticas en auditoría.
+
+---
+
+## 8. Síntesis ejecutiva
+
+BuildRank opera con **3 roles funcionales de aplicación** (`tenant`, `owner`, `admin_finca`) bajo esquema **RBAC + ABAC** en la API de negocio, y un **rol adicional de plataforma** (`admin_sistema`) delegado a **Django Administration**. Esta separación evita mezclar privilegios técnicos con permisos funcionales y refuerza el principio de mínimo privilegio.

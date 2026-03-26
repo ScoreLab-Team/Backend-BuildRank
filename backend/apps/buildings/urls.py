@@ -1,7 +1,19 @@
 # apps/buildings/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import EdificiDetailAPIView, EdificiViewSet, EdificiListAPIView, HabitatgeViewSet, LocalitzacioViewSet, DadesEnergetiquesViewSet, autocomplete_carrers
+
+from .views import (
+    EdificiViewSet,
+    EdificiVeureAPIView,
+    EdificiEditarAPIView,
+    EdificiCrearAPIView,
+    EdificiEsborrarAPIView,
+    EdificisMostrarAPIView,
+    HabitatgeViewSet,
+    LocalitzacioViewSet,
+    DadesEnergetiquesViewSet,
+    autocomplete_carrers,
+)
 
 router = DefaultRouter()
 router.register(r'edificis', EdificiViewSet, basename='edifici')

@@ -6,7 +6,7 @@ from django.shortcuts import get_object_or_404
 
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, action
-
+from apps.accounts.permissions import ABACMixin
 
 from .models import Edifici, Habitatge, Localitzacio, DadesEnergetiques, carrersBarcelona
 from .serializers import EdificiDetailSerializer, EdificiListSerializer, HabitatgeDetailSerializer, HabitatgeResumSerializer, LocalitzacioSerializer, DadesEnergetiquesSerializer
@@ -20,15 +20,6 @@ from .permissions import (
 from apps.accounts.models import RoleChoices
 
 class EdificiViewSet(viewsets.ModelViewSet):
-    """
-    Aquest ViewSet gestiona automàticament:
-    - GET /edificis/          -> list()
-    - POST /edificis/         -> create()
-    - GET /edificis/{id}/     -> retrieve()
-    - PUT/PATCH /edificis/{id}/ -> update()
-    - DELETE /edificis/{id}/  -> destroy()
-    """
-
     queryset = Edifici.objects.all()
 
     def get_queryset(self):
@@ -180,14 +171,19 @@ class DadesEnergetiquesViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated()]
 
 
-class EdificiListAPIView(APIView):
-    # GET /edificis/: Llista tots els edificis
+class EdificisMostrarAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    # GET /edificis/mostrar/: Llista tots els edificis
     def get(self, request):
         edificis = Edifici.objects.all()
         serializer = EdificiListSerializer(edificis, many=True)
         return Response(serializer.data)
 
-    # POST /edificis/: Crea un nou edifici
+class EdificiCrearAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    # POST /edificis/crear/: Crea un nou edifici
     def post(self, request):
         serializer = EdificiDetailSerializer(data=request.data)
         if serializer.is_valid():
@@ -195,18 +191,33 @@ class EdificiListAPIView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+class EdificiVeureAPIView(ABACMixin, APIView):
+    permission_classes = [IsAuthenticated]
 
-class EdificiDetailAPIView(APIView):
-    # GET /edificis/{id}/: Retorna un edifici concret
+    # GET /edificis/{id}/veure/: Retorna un edifici concret
     def get(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
+
+        # verificiacio ABAC
+        self.check_edifici_access(request, edifici.idEdifici)
+
+        # serializer = EdificiSerializer(edifici)
         serializer = EdificiDetailSerializer(edifici)
         return Response(serializer.data)
 
-    # PUT /edificis/{id}/: Actualitza tot un edifici
+class EdificiEditarAPIView(ABACMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    # PUT /edificis/{id}/editar/: Actualitza tot un edifici
     def put(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
+
+        # verificiacio ABAC
+        self.check_edifici_access(request, edifici.idEdifici)
+
+        # serializer = EdificiSerializer(edifici, data=request.data)
         serializer = EdificiDetailSerializer(edifici, data=request.data)
+        
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
@@ -215,6 +226,10 @@ class EdificiDetailAPIView(APIView):
     # PATCH /edificis/{id}/: Actualitza només una part de l'edifici
     def patch(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
+
+        # verificiacio ABAC
+        self.check_edifici_access(request, edifici.idEdifici)
+
         # el partial=True permet enviar només algunes dades
         serializer = EdificiDetailSerializer(edifici, data=request.data, partial=True)
         if serializer.is_valid():
@@ -222,13 +237,19 @@ class EdificiDetailAPIView(APIView):
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
-    '''
-    # DELETE /edificis/{id}/: Esborra un edifici
+
+class EdificiEsborrarAPIView(ABACMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    # DELETE /edificis/{id}/esborrar: Esborra un edifici
     def delete(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
+
+        self.check_edifici_access(request, edifici.idEdifici)
+
         edifici.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT) '''
-    
+        return Response({"detail": "Edifici esborrat correctament."}, status=status.HTTP_204_NO_CONTENT)
+
 
 @api_view(['GET'])
 def autocomplete_carrers(request):

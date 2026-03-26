@@ -1,10 +1,13 @@
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
-from .models import Habitatge, Edifici
+
+from .models import Habitatge, DadesEnergetiques
 from .scoring import calcular_building_health_score
 
 @receiver(post_save, sender=Habitatge)
 @receiver(post_delete, sender=Habitatge)
+@receiver(post_save, sender=DadesEnergetiques)
+@receiver(post_delete, sender=DadesEnergetiques)
 def actualizar_bhs_edificio(sender, instance, **kwargs):
     edificio = instance.edifici
     if not edificio:

@@ -366,18 +366,245 @@ class SecurityTests(BaseTestData):
         self.habitatge_1.edifici.refresh_from_db()
         self.assertEqual(self.habitatge_1.edifici.administradorFinca_id, self.admin_finca.id)
 
-    def test_register_cannot_escalate_to_admin_role(self):
-        """Privilege escalation: register endpoint rejects role=admin requests."""
+    def test_register_allows_building_admin_role(self):
+        """Register endpoint allows admin role for building administrators."""
         response = self.client.post(
             reverse("register"),
             {
-                "email": "evil-admin@example.com",
-                "first_name": "Evil",
-                "last_name": "User",
-                "password": "Password123",
-                "password_confirm": "Password123",
+                "email": "admin-finca@example.com",
+                "first_name": "Admin",
+                "last_name": "Finca",
+                "password": "BuildRankAdmin847",
+                "password_confirm": "BuildRankAdmin847",
                 "role": RoleChoices.ADMIN,
             },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(User.objects.filter(email="admin-finca@example.com").exists())
+
+        user = User.objects.get(email="admin-finca@example.com")
+        self.assertEqual(user.profile.role, RoleChoices.ADMIN)
+
+
+class AccountUpdateTests(BaseTestData):
+    """Tests for authenticated account update endpoint."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = cls._create_user("user@example.com", RoleChoices.OWNER)
+
+    def test_authenticated_user_can_patch_own_account(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse("me"),
+            {"first_name": "NouNom"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "NouNom")
+        self.assertEqual(self.user.last_name, "")
+
+    def test_authenticated_user_can_put_own_account(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.put(
+            reverse("me"),
+            {
+                "first_name": "Marti",
+                "last_name": "Borras",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "Marti")
+        self.assertEqual(self.user.last_name, "Borras")
+
+    def test_unauthenticated_user_cannot_patch_account(self):
+        response = self.client.patch(
+            reverse("me"),
+            {"first_name": "Hack"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_update_account_ignores_role_field(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse("me"),
+            {
+                "first_name": "NouNom",
+                "role": RoleChoices.ADMIN,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.first_name, "NouNom")
+        self.assertEqual(self.user.profile.role, RoleChoices.OWNER)
+
+
+class AuthEndpointTests(APITestCase):
+    """Exhaustive tests for register/login/logout/me endpoints."""
+
+    def _register_payload(self, **overrides):
+        payload = {
+            "email": "new-user@example.com",
+            "first_name": "New",
+            "last_name": "User",
+            "password": "Gihistzzz_2026",
+            "password_confirm": "Gihistzzz_2026",
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_register_success_creates_user_profile_and_default_role(self):
+        response = self.client.post(
+            reverse("register"),
+            self._register_payload(),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(User.objects.filter(email="new-user@example.com").exists())
+
+        user = User.objects.get(email="new-user@example.com")
+        self.assertTrue(Profile.objects.filter(user=user).exists())
+        self.assertEqual(user.profile.role, RoleChoices.OWNER)
+        self.assertEqual(response.data["role"], RoleChoices.OWNER)
+
+    def test_register_success_with_explicit_owner_role(self):
+        response = self.client.post(
+            reverse("register"),
+            self._register_payload(email="owner-explicit@example.com", role=RoleChoices.OWNER),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        user = User.objects.get(email="owner-explicit@example.com")
+        self.assertEqual(user.profile.role, RoleChoices.OWNER)
+
+    def test_register_rejects_duplicate_email(self):
+        User.objects.create_user(email="duplicate@example.com", password="Password123")
+
+        response = self.client.post(
+            reverse("register"),
+            self._register_payload(email="duplicate@example.com"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+
+    def test_register_rejects_password_mismatch(self):
+        response = self.client.post(
+            reverse("register"),
+            self._register_payload(password_confirm="Different123"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password_confirm", response.data)
+
+    def test_register_rejects_password_without_letters(self):
+        response = self.client.post(
+            reverse("register"),
+            self._register_payload(password="12345678", password_confirm="12345678"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+
+    def test_register_rejects_password_without_digits(self):
+        response = self.client.post(
+            reverse("register"),
+            self._register_payload(password="OnlyLetters", password_confirm="OnlyLetters"),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+
+    def test_login_success_returns_tokens_user_and_creates_audit_log(self):
+        user = User.objects.create_user(
+            email="login-ok@example.com",
+            password="Password123",
+            first_name="Login",
+            last_name="Ok",
+        )
+        user.profile.role = RoleChoices.OWNER
+        user.profile.save(update_fields=["role"])
+
+        response = self.client.post(
+            reverse("login"),
+            {"email": "login-ok@example.com", "password": "Password123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.assertIn("user", response.data)
+        self.assertEqual(response.data["user"]["email"], "login-ok@example.com")
+
+        self.assertEqual(TokenLoginLog.objects.filter(user=user, status=TokenLoginLog.LOGIN).count(), 1)
+
+    def test_login_rejects_invalid_credentials(self):
+        User.objects.create_user(email="invalid-login@example.com", password="Password123")
+
+        response = self.client.post(
+            reverse("login"),
+            {"email": "invalid-login@example.com", "password": "wrong-password"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_logout_success_revokes_refresh_and_updates_audit_log(self):
+        user = User.objects.create_user(email="logout-ok@example.com", password="Password123")
+
+        login_response = self.client.post(
+            reverse("login"),
+            {"email": "logout-ok@example.com", "password": "Password123"},
+            format="json",
+        )
+        self.assertEqual(login_response.status_code, status.HTTP_200_OK)
+
+        access_token = login_response.data["access"]
+        refresh_token = login_response.data["refresh"]
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+        logout_response = self.client.post(
+            reverse("logout"),
+            {"refresh": refresh_token},
+            format="json",
+        )
+
+        self.assertEqual(logout_response.status_code, status.HTTP_200_OK)
+
+        log = TokenLoginLog.objects.filter(user=user).latest("login_at")
+        self.assertEqual(log.status, TokenLoginLog.LOGOUT)
+        self.assertIsNotNone(log.logout_at)
+        self.assertTrue(BlacklistedToken.objects.filter(token__jti=log.jti).exists())
+
+    def test_logout_rejects_invalid_refresh_token(self):
+        user = User.objects.create_user(email="logout-invalid@example.com", password="Password123")
+        self.client.force_authenticate(user=user)
+
+        response = self.client.post(
+            reverse("logout"),
+            {"refresh": "not-a-valid-token"},
             format="json",
         )
 

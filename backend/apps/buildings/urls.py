@@ -12,10 +12,9 @@ router.register(r'dades_energetiques', DadesEnergetiquesViewSet, basename='dades
 # urlpatterns = router.urls
 
 urlpatterns = [
-    # Rutes manuals per als teus APIView d'Edificis
-    path('edificis/', EdificiListAPIView.as_view(), name='edifici-list'),
-    path('edificis/<str:pk>/', EdificiDetailAPIView.as_view(), name='edifici-detail'),
-    path('carrers/autocomplete/', autocomplete_carrers, name='autocomplete-carrers'),
+    # Rutes manuals APIView (compatibilitat), amb noms no col·lisionants amb el router
+    path('edificis/manual/', EdificiListAPIView.as_view(), name='edifici-list-manual'),
+    path('edificis/manual/<str:pk>/', EdificiDetailAPIView.as_view(), name='edifici-detail-manual'),
     path('carrers/autocomplete/', autocomplete_carrers, name='autocomplete-carrers'),
     # Afegim tota la resta de rutes automàtiques del router
     path('', include(router.urls)),

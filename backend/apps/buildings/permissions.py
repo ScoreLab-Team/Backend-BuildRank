@@ -70,9 +70,14 @@ class EsAdminOPropietariEdifici(BasePermission):
         # ABAC + RBAC combinats
         if role == RoleChoices.ADMIN and obj.administradorFinca == user:
             return True
-        if role in (RoleChoices.OWNER, RoleChoices.TENANT):
+        if role == RoleChoices.OWNER:
             if obj.habitatges.filter(usuari=user).exists():
                 return True
+        if role == RoleChoices.TENANT:
+            # Tenant: només lectura per matriu de permisos
+            if request.method in ('GET', 'HEAD', 'OPTIONS'):
+                if obj.habitatges.filter(usuari=user).exists():
+                    return True
 
         log_denial(request, view.action, 'Sense relació amb l\'edifici', obj.idEdifici)
         return False

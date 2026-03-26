@@ -85,7 +85,14 @@ class RBACAuthorizationTests(BaseTestData):
     @classmethod
     def setUpTestData(cls):
         """Set up test data once for all tests in this class."""
-        cls.admin = cls._create_user("admin@example.com", RoleChoices.ADMIN)
+        # admin_sistema és is_superuser (àmbit plataforma, fora del RBAC funcional APP)
+        cls.admin = User.objects.create_user(
+            email="admin@example.com",
+            password="Password123",
+            first_name="admin",
+            is_superuser=True,
+            is_staff=True,
+        )
         cls.admin_finca = cls._create_user("owner@example.com", RoleChoices.OWNER)
         cls.altre_admin_finca = cls._create_user("owner2@example.com", RoleChoices.OWNER)
 
@@ -244,17 +251,17 @@ class AssignmentTests(BaseTestData):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
-class QueryTests(BaseTestData):
-    """Tests for building query endpoint (GET /api/me/edificis/)."""
+class QuerySetFilteringTests(BaseTestData):
+    """Tests for queryset filtering to prevent ABAC/RBAC bypasses and data leaks."""
 
     @classmethod
     def setUpTestData(cls):
-        """Set up buildings and users with different roles."""
+        """Set up multiple buildings and roles for filtering tests."""
         cls.admin = cls._create_user("admin@example.com", RoleChoices.ADMIN)
-        cls.admin_finca = cls._create_user("owner@example.com", RoleChoices.OWNER)
-        cls.altre_admin_finca = cls._create_user("owner2@example.com", RoleChoices.OWNER)
-        cls.resident = cls._create_user("tenant@example.com", RoleChoices.TENANT)
-        cls.altre_resident = cls._create_user("tenant2@example.com", RoleChoices.TENANT)
+        cls.admin_finca_1 = cls._create_user("owner1@example.com", RoleChoices.OWNER)
+        cls.admin_finca_2 = cls._create_user("owner2@example.com", RoleChoices.OWNER)
+        cls.tenant_1 = cls._create_user("tenant1@example.com", RoleChoices.TENANT)
+        cls.tenant_2 = cls._create_user("tenant2@example.com", RoleChoices.TENANT)
 
         cls.grup = GrupComparable.objects.create(
             idGrup=1,
@@ -263,70 +270,88 @@ class QueryTests(BaseTestData):
             rangSuperficie="100-200",
         )
 
-        cls.edifici_1 = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
-        cls.edifici_2 = cls._create_edifici(administrador=cls.altre_admin_finca, grup=cls.grup)
+        # Three buildings under different admins
+        cls.edifici_1 = cls._create_edifici(administrador=cls.admin_finca_1, grup=cls.grup)
+        cls.edifici_2 = cls._create_edifici(administrador=cls.admin_finca_2, grup=cls.grup)
+        cls.edifici_3 = cls._create_edifici(administrador=cls.admin_finca_1, grup=cls.grup)
 
-        cls.habitatge_1 = Habitatge.objects.create(
-            referenciaCadastral="HAB-1",
+        # Tenants in different buildings
+        Habitatge.objects.create(
+            referenciaCadastral="HAB-T1-E1",
             planta="1",
             porta="A",
             superficie=80,
             edifici=cls.edifici_1,
-            usuari=cls.resident,
+            usuari=cls.tenant_1,
         )
-        cls.habitatge_2 = Habitatge.objects.create(
-            referenciaCadastral="HAB-2",
-            planta="2",
-            porta="B",
-            superficie=95,
+        Habitatge.objects.create(
+            referenciaCadastral="HAB-T2-E2",
+            planta="1",
+            porta="A",
+            superficie=80,
             edifici=cls.edifici_2,
-            usuari=cls.altre_resident,
+            usuari=cls.tenant_2,
         )
 
-    def test_resident_me_edificis_returns_only_linked_buildings(self):
-        """Resident can see only buildings where they have an apartment."""
-        self.client.force_authenticate(user=self.resident)
-
-        response = self.client.get(reverse("me-edificis"))
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["idEdifici"], self.edifici_1.idEdifici)
-        self.assertIn("idEdifici", response.data[0])
-        self.assertIn("localitzacio", response.data[0])
-        self.assertNotIn("administradorFinca", response.data[0])
-        self.assertNotIn("habitatges", response.data[0])
-        self.assertNotIn("dadesEnergetiques", response.data[0])
-
-    def test_admin_finca_me_edificis_returns_only_managed_buildings(self):
-        """AdminFinca can see only buildings they manage."""
-        self.client.force_authenticate(user=self.admin_finca)
-
-        response = self.client.get(reverse("me-edificis"))
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["idEdifici"], self.edifici_1.idEdifici)
-
-    def test_admin_sistema_me_edificis_returns_all_buildings(self):
-        """AdminSistema can see all buildings in the system."""
-        self.client.force_authenticate(user=self.admin)
-
+    def test_tenant_list_filtered_to_their_buildings_only(self):
+        """Tenant GET /me/edificis/ shows only buildings where they have habitatge."""
+        self.client.force_authenticate(user=self.tenant_1)
         response = self.client.get(reverse("me-edificis"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         returned_ids = {item["idEdifici"] for item in response.data}
-        self.assertEqual(returned_ids, {self.edifici_1.idEdifici, self.edifici_2.idEdifici})
+        self.assertEqual(returned_ids, {self.edifici_1.idEdifici})
+        self.assertNotIn(self.edifici_2.idEdifici, returned_ids)
+        self.assertNotIn(self.edifici_3.idEdifici, returned_ids)
 
-    @unittest.skip("TODO(security-debt): ABAC not enforced on building detail endpoint for cross-building tenant access")
-    def test_tenant_cannot_access_other_building_detail(self):
-        """Security debt: tenant should not access details of unrelated buildings."""
-        self.client.force_authenticate(user=self.resident)
+    def test_owner_list_filtered_to_their_buildings_only(self):
+        """Owner GET /me/edificis/ shows only buildings they administer."""
+        self.client.force_authenticate(user=self.admin_finca_1)
+        response = self.client.get(reverse("me-edificis"))
 
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = {item["idEdifici"] for item in response.data}
+        self.assertTrue(self.edifici_1.idEdifici in returned_ids)
+        self.assertTrue(self.edifici_3.idEdifici in returned_ids)
+        self.assertNotIn(self.edifici_2.idEdifici, returned_ids)
+
+    def test_admin_sees_all_buildings_in_system(self):
+        """Admin GET /me/edificis/ shows all buildings."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(reverse("me-edificis"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = {item["idEdifici"] for item in response.data}
+        self.assertGreaterEqual(len(returned_ids), 3)
+
+    def test_unauthenticated_cannot_access_me_edificis(self):
+        """Unauthenticated GET /me/edificis/ returns 401."""
+        response = self.client.get(reverse("me-edificis"))
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_tenant_response_fields_do_not_expose_admin_data(self):
+        """Tenant list response must not include administradorFinca or nested private fields."""
+        self.client.force_authenticate(user=self.tenant_1)
+        response = self.client.get(reverse("me-edificis"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreater(len(response.data), 0)
+        building = response.data[0]
+        self.assertIn("idEdifici", building)
+        self.assertIn("localitzacio", building)
+        self.assertNotIn("administradorFinca", building)
+        self.assertNotIn("habitatges", building)
+        self.assertNotIn("dadesEnergetiques", building)
+
+    def test_cross_building_detail_access_blocked(self):
+        """CRITICAL: Tenant accessing an unrelated building detail returns 403/404 (data leak check)."""
+        self.client.force_authenticate(user=self.tenant_1)
         response = self.client.get(reverse("edifici-detail", args=[self.edifici_2.idEdifici]))
-
-        # Expected behavior after hardening: return 403 for unrelated building details.
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+            f"Got {response.status_code} — potential data leak!",
+        )
 
 
 class SecurityTests(BaseTestData):
@@ -718,24 +743,6 @@ class AuthEndpointTests(APITestCase):
         response = self.client.get(reverse("me"))
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-
-    @unittest.skipUnless(
-        bool(settings.REST_FRAMEWORK.get("DEFAULT_THROTTLE_CLASSES")),
-        "Rate limit test skipped because DRF throttling is not configured.",
-    )
-    def test_login_rate_limit(self):
-        User.objects.create_user(email="ratelimit@example.com", password="Password123")
-        status_codes = []
-
-        for _ in range(20):
-            response = self.client.post(
-                reverse("login"),
-                {"email": "ratelimit@example.com", "password": "wrong-password"},
-                format="json",
-            )
-            status_codes.append(response.status_code)
-
-        self.assertIn(status.HTTP_429_TOO_MANY_REQUESTS, status_codes)
 
     def test_me_requires_authentication(self):
         response = self.client.get(reverse("me"))

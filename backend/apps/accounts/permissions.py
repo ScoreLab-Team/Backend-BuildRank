@@ -30,13 +30,12 @@ def _deny(request, accio, motiu):
 
 class IsAdminSistema(BasePermission):
     """
-    Permiso: Rol 'admin' de la aplicación.
-    Este es el admin de TODOS los edificios (sin filtrado ABAC), NO Django superuser.
+    Permiso: AdminSistema de plataforma.
+    Segons la matriu de permisos, aquest rol queda fora del RBAC funcional de la APP
+    i s'identifica estrictament per is_superuser (Django platform scope).
     """
     def has_permission(self, request, view):
-        if not request.user.is_authenticated:
-            return False
-        return getattr(request.user.profile, 'role', None) == RoleChoices.ADMIN
+        return request.user.is_authenticated and request.user.is_superuser
 
 
 class IsAdminFinca(BasePermission):

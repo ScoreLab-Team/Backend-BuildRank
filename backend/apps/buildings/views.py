@@ -38,8 +38,10 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         role = user.profile.role
         if role == RoleChoices.ADMIN:
+            return Edifici.objects.all()
+        if role == RoleChoices.OWNER:
             return Edifici.objects.filter(administradorFinca=user)
-        if role in (RoleChoices.OWNER, RoleChoices.TENANT):
+        if role == RoleChoices.TENANT:
             return Edifici.objects.filter(habitatges__usuari=user).distinct()
         return Edifici.objects.none()
 
@@ -54,7 +56,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         elif self.action in ['create']:
             return [IsAuthenticated(), EsAdminEdifici()]
         elif self.action in ['update', 'partial_update']:
-            return [IsAuthenticated(), EsAdminOPropietariEdifici()]
+            return [IsAuthenticated(), EsAdminEdifici()]
         elif self.action in ['retrieve', 'dades_energetiques', 'habitatge_detail']:
             return [IsAuthenticated(), EsAdminOPropietariEdifici()]
         elif self.action in ['list', 'habitatges']:

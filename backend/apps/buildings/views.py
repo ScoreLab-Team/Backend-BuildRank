@@ -10,10 +10,31 @@ from apps.accounts.permissions import ABACMixin
 
 from .models import Edifici, Habitatge, Localitzacio, DadesEnergetiques, carrersBarcelona
 from .serializers import EdificiDetailSerializer, EdificiListSerializer, HabitatgeDetailSerializer, HabitatgeResumSerializer, LocalitzacioSerializer, DadesEnergetiquesSerializer
-from .permissions import EsAdminEdifici, EsAdminOPropietariEdifici, EsAdminOPropietariHabitatge
+from .permissions import (
+    EsAdminEdifici,
+    EsAdminOPropietariEdifici,
+    EsAdminOPropietariHabitatge,
+    EsOwnerOAdminHabitatge,
+    EsOwnerOAdminDadesEnergetiques,
+)
+from apps.accounts.models import RoleChoices
 
 class EdificiViewSet(viewsets.ModelViewSet):
     queryset = Edifici.objects.all()
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user.is_authenticated or not hasattr(user, 'profile'):
+            return Edifici.objects.none()
+
+        role = user.profile.role
+        if role == RoleChoices.ADMIN:
+            return Edifici.objects.all()
+        if role == RoleChoices.OWNER:
+            return Edifici.objects.filter(administradorFinca=user)
+        if role == RoleChoices.TENANT:
+            return Edifici.objects.filter(habitatges__usuari=user).distinct()
+        return Edifici.objects.none()
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -21,18 +42,28 @@ class EdificiViewSet(viewsets.ModelViewSet):
         return EdificiDetailSerializer  # retrieve, update, create...permission_classes = [IsAuthenticated]
     
     def get_permissions(self):
-        if self.action in ['update', 'partial_update', 'destroy']:
+        if self.action in ['destroy']:
+            return [IsAuthenticated(), EsAdminEdifici()]
+        elif self.action in ['create']:
+            return [IsAuthenticated(), EsAdminEdifici()]
+        elif self.action in ['update', 'partial_update']:
             return [IsAuthenticated(), EsAdminEdifici()]
         elif self.action in ['retrieve', 'dades_energetiques', 'habitatge_detail']:
             return [IsAuthenticated(), EsAdminOPropietariEdifici()]
-        # list, create, habitatges (resum públic)
-        return [AllowAny()]
+        elif self.action in ['list', 'habitatges']:
+            return [IsAuthenticated(), EsAdminOPropietariEdifici()]
+        return [IsAuthenticated()]
     
     # GET /edificis/{id}/habitatges/
-    @action(detail=True, methods=['get'], permission_classes=[AllowAny])
+    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici])
     def habitatges(self, request, pk=None):
         edifici = self.get_object()
-        habitatges = edifici.habitatges.all()
+
+        if request.user.profile.role == RoleChoices.ADMIN:
+            habitatges = edifici.habitatges.all()
+        else:
+            habitatges = edifici.habitatges.filter(usuari=request.user)
+
         serializer = HabitatgeResumSerializer(habitatges, many=True)
         return Response(serializer.data)
     
@@ -84,19 +115,31 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
 class HabitatgeViewSet(viewsets.ModelViewSet):
     queryset = Habitatge.objects.all()
-    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user.is_authenticated or not hasattr(user, 'profile'):
+            return Habitatge.objects.none()
+
+        role = user.profile.role
+        if role == RoleChoices.ADMIN:
+            return Habitatge.objects.filter(edifici__administradorFinca=user)
+        if role in (RoleChoices.OWNER, RoleChoices.TENANT):
+            return Habitatge.objects.filter(usuari=user)
+        return Habitatge.objects.none()
 
     def get_serializer_class(self):
         if self.action == 'list':
             return HabitatgeResumSerializer
         return HabitatgeDetailSerializer
     def get_permissions(self):
-        if self.action in ['update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), EsAdminOPropietariHabitatge()]
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAuthenticated(), EsOwnerOAdminHabitatge()]
         elif self.action == 'retrieve':
             return [IsAuthenticated(), EsAdminOPropietariHabitatge()]
-        # list
-        return [AllowAny()]
+        elif self.action == 'list':
+            return [IsAuthenticated(), EsAdminOPropietariHabitatge()]
+        return [IsAuthenticated()]
 
 class LocalitzacioViewSet(viewsets.ModelViewSet):
     queryset = Localitzacio.objects.all()
@@ -107,7 +150,25 @@ class LocalitzacioViewSet(viewsets.ModelViewSet):
 class DadesEnergetiquesViewSet(viewsets.ModelViewSet):
     queryset = DadesEnergetiques.objects.all()
     serializer_class = DadesEnergetiquesSerializer
-    # permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user.is_authenticated or not hasattr(user, 'profile'):
+            return DadesEnergetiques.objects.none()
+
+        role = user.profile.role
+        if role == RoleChoices.ADMIN:
+            return DadesEnergetiques.objects.filter(dades_energetiques__edifici__administradorFinca=user).distinct()
+        if role in (RoleChoices.OWNER, RoleChoices.TENANT):
+            return DadesEnergetiques.objects.filter(dades_energetiques__usuari=user).distinct()
+        return DadesEnergetiques.objects.none()
+
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAuthenticated(), EsOwnerOAdminDadesEnergetiques()]
+        elif self.action in ['list', 'retrieve']:
+            return [IsAuthenticated(), EsAdminOPropietariHabitatge()]
+        return [IsAuthenticated()]
 
 
 class EdificisMostrarAPIView(APIView):

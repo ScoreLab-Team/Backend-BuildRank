@@ -84,9 +84,7 @@ class Edifici(models.Model):
     )
 
     # relacio 1..* a 0..1
-    administradorFinca = mode
-
-    ls.ForeignKey(
+    administradorFinca = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,

@@ -8,6 +8,7 @@ from apps.buildings.models import Edifici, Habitatge
 from apps.accounts.permissions import IsAdminSistema, IsAdminFinca, ABACMixin
 from apps.accounts.serializers import (
     RegisterSerializer, LoginSerializer, LogoutSerializer, MeSerializer,
+    AccountUpdateSerializer,
     EdificiResumSerializer, HabitatgeResumSerializer,
     AssignarResidentSerializer, AssignarAdminSerializer,
 )
@@ -77,6 +78,18 @@ class MeView(APIView):
     def get(self, request):
         serializer = MeSerializer(request.user)
         return Response(serializer.data)
+
+    def put(self, request):
+        serializer = AccountUpdateSerializer(request.user, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(MeSerializer(user).data, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        serializer = AccountUpdateSerializer(request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(MeSerializer(user).data, status=status.HTTP_200_OK)
 
 
 # ---------------------------------------------------------------------------

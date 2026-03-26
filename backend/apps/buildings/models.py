@@ -262,3 +262,16 @@ class MilloraImplementada(models.Model):
 
     def __str__(self):
         return f"Implementació {self.millora.nom} a {self.edifici.idEdifici}"
+    
+
+class carrersBarcelona(models.Model):
+    codi_via = models.AutoField(primary_key=True)                # serial4
+    codi_carrer_ine = models.CharField(max_length=50, null=True, blank=True)  # varchar50
+    tipus_via = models.CharField(max_length=50)                  # varchar50
+    nom_curt = models.CharField(max_length=100)                  # varchar100
+    nom_oficial = models.CharField(max_length=150)               # varchar150
+    nre_min = models.IntegerField(null=True, blank=True)  # Pemetre que sigui null perquè no tots els carrers tenen número mínim
+    nre_max = models.IntegerField(null=True, blank=True)  # Pemetre que sigui null perquè no tots els carrers tenen número máxim
+
+    def __str__(self):
+        return f"{self.tipus_via} {self.nom_oficial}"

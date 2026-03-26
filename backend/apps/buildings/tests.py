@@ -33,7 +33,7 @@ class EdificiAPITests(APITestCase):
             longitud=2.0,
             zonaClimatica="C2"
         )
-        self.url = reverse('edifici-list') 
+        self.url = reverse('edifici-crear') 
 
     def test_error_camps_obligatoris_buits(self):
         """

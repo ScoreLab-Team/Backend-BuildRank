@@ -21,5 +21,5 @@ urlpatterns = [
     path("habitatges/<str:ref_cadastral>/assignar-resident/", AssignarResidentView.as_view(), name="assignar-resident"),
 
     # Assignació: admin → edifici (AdminSistema only)
-    path("edificis/<str:id_edifici>/assignar-admin/", AssignarAdminEdificiView.as_view(), name="assignar-admin-edifici"),
+    path("edificis/<int:id_edifici>/assignar-admin/", AssignarAdminEdificiView.as_view(), name="assignar-admin-edifici"),
 ]

@@ -162,9 +162,13 @@ AUTH_USER_MODEL = 'accounts.User'
 from datetime import timedelta
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    # Access token corto (30 min) → equilibrio entre UX y seguridad
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
+    # Refresh token más largo (7 días) → permite sesión prolongada
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    # Rotación: cada refresh genera nuevo token (más seguro ante reuse robado)
     'ROTATE_REFRESH_TOKENS': True,
+    # Blacklist: marca como revocado el refresh anterior al rotar
     'BLACKLIST_AFTER_ROTATION': True,
 }
 

@@ -726,7 +726,15 @@ class AuthEndpointTests(APITestCase):
         user = User.objects.create_user(email="tampered-token@example.com", password="Password123")
         refresh = RefreshToken.for_user(user)
         token = str(refresh.access_token)
-        tampered = token[:-1] + ("a" if token[-1] != "a" else "b")
+        # Tamper a character in the middle of the signature segment.
+        # Avoid the last character: its bottom 2 bits are base64 padding and are
+        # silently ignored by the decoder, so flipping only those bits leaves the
+        # decoded signature bytes unchanged and the token still passes validation.
+        header, payload, sig = token.split(".")
+        mid = len(sig) // 2
+        tampered_char = "A" if sig[mid] != "A" else "z"
+        tampered_sig = sig[:mid] + tampered_char + sig[mid + 1:]
+        tampered = f"{header}.{payload}.{tampered_sig}"
 
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tampered}")
         response = self.client.get(reverse("me"))

@@ -110,3 +110,8 @@ class EdificiSerializer(serializers.ModelSerializer):
                 "La superfície total ha de ser més gran que 0."
             )
         return value
+
+class RankingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Edifici
+        fields = ['idEdifici','puntuacioBase'] #Afegir posició

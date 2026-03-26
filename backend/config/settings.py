@@ -155,6 +155,19 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    # Rate limiting: protegir contra brute force, token abuse, DoS
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '5/min',           # Muy restrictivo: previne brute force desde IPs desconocidas
+        'user': '100/min',         # Usuario típico: ~5-10 requests/min
+        'auth': '3/min',           # Auth endpoints general: 3 req/min (brute force)
+        'login': '3/min',          # Login: 3 intentos/min por IP → previene credential stuffing
+        'register': '5/hour',      # Register: 5 registros/hora por IP → evita account enumeration
+        'refresh': '20/min',       # Refresh: 20 req/min → uso normal sin abuse
+    }
 }
 
 AUTH_USER_MODEL = 'accounts.User'

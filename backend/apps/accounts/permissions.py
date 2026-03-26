@@ -29,15 +29,22 @@ def _deny(request, accio, motiu):
 # ---------------------------------------------------------------------------
 
 class IsAdminSistema(BasePermission):
-    """Només l'Admin del Sistema."""
+    """
+    Permiso: AdminSistema de plataforma.
+    Segons la matriu de permisos, aquest rol queda fora del RBAC funcional de la APP
+    i s'identifica estrictament per is_superuser (Django platform scope).
+    """
     def has_permission(self, request, view):
-        if not request.user.is_authenticated:
-            return False
-        return getattr(request.user.profile, 'role', None) == RoleChoices.ADMIN
+        return request.user.is_authenticated and request.user.is_superuser
 
 
 class IsAdminFinca(BasePermission):
-    """Administrador de Finca o Admin del Sistema."""
+    """
+    Permiso: Propietario/Admin de finca (owner) o Admin de aplicación (admin).
+    Diferencia:
+    - owner: solo SU cartera (filtrado ABAC)
+    - admin: TODOS los edificios (sin ABAC)
+    """
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
             return False

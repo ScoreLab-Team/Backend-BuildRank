@@ -7,6 +7,7 @@ from apps.buildings.models import Edifici, Habitatge
 
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
 
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -129,6 +130,9 @@ class LoginSerializer(serializers.Serializer):
         if active_sessions.count() >= max_sessions:
             oldest = active_sessions.first()
             if oldest:
+                outstanding = OutstandingToken.objects.filter(jti=oldest.jti).first()
+                if outstanding:
+                    BlacklistedToken.objects.get_or_create(token=outstanding)
                 oldest.status = TokenLoginLog.REVOKED
                 oldest.save(update_fields=['status'])
 

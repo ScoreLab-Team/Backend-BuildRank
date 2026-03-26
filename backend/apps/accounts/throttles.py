@@ -12,25 +12,19 @@ class AuthThrottle(SimpleRateThrottle):
     """
     Throttle muy restrictivo para endpoints de autenticación.
     Aplica a /login, /register, /refresh.
-    
+
     - Anónimos: 3 requests/min (brute force protection)
     - Autenticados: 10 requests/min (abuse protection)
     """
-    
+
     scope = 'auth'
-    
-    def get_cache_key(self):
-        # Usar IP del cliente + scope para rate limit por IP
-        if self.request.user and self.request.user.is_authenticated:
-            return self.cache_format % {
-                'scope': self.scope,
-                'ident': self.request.user.id
-            }
+
+    def get_cache_key(self, request, view):
+        if request.user and request.user.is_authenticated:
+            ident = request.user.id
         else:
-            return self.cache_format % {
-                'scope': self.scope,
-                'ident': self.get_ident(self.request)
-            }
+            ident = self.get_ident(request)
+        return self.cache_format % {'scope': self.scope, 'ident': ident}
 
 
 class LoginThrottle(SimpleRateThrottle):
@@ -38,29 +32,23 @@ class LoginThrottle(SimpleRateThrottle):
     Throttle específico para /login endpoint.
     Muy restrictivo: 3 intentos por minuto por IP para evitar credential stuffing.
     """
-    
+
     scope = 'login'
-    
-    def get_cache_key(self):
-        return self.cache_format % {
-            'scope': self.scope,
-            'ident': self.get_ident(self.request)
-        }
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {'scope': self.scope, 'ident': self.get_ident(request)}
 
 
 class RegisterThrottle(SimpleRateThrottle):
     """
     Throttle específico para /register endpoint.
-    Moderad: 5 registros por hora por IP para evitar account enumeration + spam.
+    Moderado: 5 registros por hora por IP para evitar account enumeration + spam.
     """
-    
+
     scope = 'register'
-    
-    def get_cache_key(self):
-        return self.cache_format % {
-            'scope': self.scope,
-            'ident': self.get_ident(self.request)
-        }
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {'scope': self.scope, 'ident': self.get_ident(request)}
 
 
 class RefreshThrottle(SimpleRateThrottle):
@@ -68,18 +56,12 @@ class RefreshThrottle(SimpleRateThrottle):
     Throttle específico para /refresh endpoint.
     Moderado: 20 refreshes por minuto para evitar token abuse en acceso normal.
     """
-    
+
     scope = 'refresh'
-    
-    def get_cache_key(self):
-        # Usar user ID si está autenticado (generalmente sí)
-        if self.request.user and self.request.user.is_authenticated:
-            return self.cache_format % {
-                'scope': self.scope,
-                'ident': self.request.user.id
-            }
+
+    def get_cache_key(self, request, view):
+        if request.user and request.user.is_authenticated:
+            ident = request.user.id
         else:
-            return self.cache_format % {
-                'scope': self.scope,
-                'ident': self.get_ident(self.request)
-            }
+            ident = self.get_ident(request)
+        return self.cache_format % {'scope': self.scope, 'ident': ident}

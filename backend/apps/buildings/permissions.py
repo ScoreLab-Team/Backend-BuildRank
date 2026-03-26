@@ -58,6 +58,9 @@ class EsAdminOPropietariEdifici(BasePermission):
             return False
         if not hasattr(request.user, 'profile'):
             return False
+        if request.user.profile.role not in (RoleChoices.ADMIN, RoleChoices.OWNER, RoleChoices.TENANT):
+            log_denial(request, view.action, 'Rol funcional no permès')
+            return False
         return True
 
     def has_object_permission(self, request, view, obj):
@@ -86,6 +89,9 @@ class EsAdminOPropietariHabitatge(BasePermission):
             return False
         if not hasattr(request.user, 'profile'):
             return False
+        if request.user.profile.role not in (RoleChoices.ADMIN, RoleChoices.OWNER, RoleChoices.TENANT):
+            log_denial(request, view.action, 'Rol funcional no permès')
+            return False
         return True
 
     def has_object_permission(self, request, view, obj):
@@ -100,4 +106,70 @@ class EsAdminOPropietariHabitatge(BasePermission):
 
         log_denial(request, view.action, 'Sense relació amb l\'habitatge',
                    obj.edifici.idEdifici)
+        return False
+
+
+class EsOwnerOAdminHabitatge(BasePermission):
+    """
+    RBAC: rol 'owner' o 'admin'
+    ABAC: ha de tenir relació amb l'habitatge concret
+    """
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            log_denial(request, view.action, 'Usuari no autenticat')
+            return False
+        if not hasattr(request.user, 'profile'):
+            return False
+        if request.user.profile.role not in (RoleChoices.ADMIN, RoleChoices.OWNER):
+            log_denial(request, view.action, 'Rol insuficient (requerit: owner o admin)')
+            return False
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        role = user.profile.role
+
+        if role == RoleChoices.ADMIN and obj.edifici.administradorFinca == user:
+            return True
+        if role == RoleChoices.OWNER and obj.usuari == user:
+            return True
+
+        log_denial(request, view.action, 'Sense relació owner/admin amb l\'habitatge', obj.edifici.idEdifici)
+        return False
+
+
+class EsOwnerOAdminDadesEnergetiques(BasePermission):
+    """
+    RBAC: rol 'owner' o 'admin'
+    ABAC: dades energètiques del seu habitatge o edifici administrat
+    """
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            log_denial(request, view.action, 'Usuari no autenticat')
+            return False
+        if not hasattr(request.user, 'profile'):
+            return False
+        if request.user.profile.role not in (RoleChoices.ADMIN, RoleChoices.OWNER):
+            log_denial(request, view.action, 'Rol insuficient (requerit: owner o admin)')
+            return False
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        role = user.profile.role
+
+        habitatge = Habitatge = None
+        try:
+            from .models import Habitatge as _Habitatge
+            habitatge = _Habitatge.objects.select_related('edifici').get(dadesEnergetiques=obj)
+        except Exception:
+            log_denial(request, view.action, 'No es pot resoldre habitatge de dades energètiques')
+            return False
+
+        if role == RoleChoices.ADMIN and habitatge.edifici.administradorFinca == user:
+            return True
+        if role == RoleChoices.OWNER and habitatge.usuari == user:
+            return True
+
+        log_denial(request, view.action, 'Sense relació owner/admin amb dades energètiques', habitatge.edifici.idEdifici)
         return False

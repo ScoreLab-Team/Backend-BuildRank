@@ -2,8 +2,11 @@ import os
 import threading
 import unittest
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.test import TransactionTestCase
+from django.test import override_settings
+from django.core.cache import cache
 from django.db import connections
 from django.urls import reverse
 from django.conf import settings
@@ -19,6 +22,7 @@ from apps.accounts.models import (
     TokenLoginLog,
     User,
 )
+from apps.accounts.views import RegisterView
 from apps.buildings.models import (
     Edifici,
     GrupComparable,
@@ -30,6 +34,12 @@ from apps.buildings.models import (
 CONCURRENCY_TEST_MODE = os.getenv("RUN_CONCURRENCY_TESTS", "").strip().lower()
 ENABLE_CONCURRENCY_DIAGNOSTIC = CONCURRENCY_TEST_MODE in {"1", "true", "diagnostic", "all", "strict"}
 ENABLE_CONCURRENCY_STRICT = CONCURRENCY_TEST_MODE in {"strict", "all"}
+
+NO_THROTTLE_REST_FRAMEWORK = {
+    **settings.REST_FRAMEWORK,
+    "DEFAULT_THROTTLE_CLASSES": [],
+    "DEFAULT_THROTTLE_RATES": {},
+}
 
 class BaseTestData(APITestCase):
     """Base class with shared test data creation utilities."""
@@ -454,166 +464,14 @@ class AccountUpdateTests(BaseTestData):
         self.assertEqual(self.user.profile.role, RoleChoices.OWNER)
 
 
-class AuthEndpointTests(APITestCase):
-    """Exhaustive tests for register/login/logout/me endpoints."""
-
-    def _register_payload(self, **overrides):
-        payload = {
-            "email": "new-user@example.com",
-            "first_name": "New",
-            "last_name": "User",
-            "password": "Gihistzzz_2026",
-            "password_confirm": "Gihistzzz_2026",
-        }
-        payload.update(overrides)
-        return payload
-
-    def test_register_success_creates_user_profile_and_default_role(self):
-        response = self.client.post(
-            reverse("register"),
-            self._register_payload(),
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertTrue(User.objects.filter(email="new-user@example.com").exists())
-
-        user = User.objects.get(email="new-user@example.com")
-        self.assertTrue(Profile.objects.filter(user=user).exists())
-        self.assertEqual(user.profile.role, RoleChoices.OWNER)
-        self.assertEqual(response.data["role"], RoleChoices.OWNER)
-
-    def test_register_success_with_explicit_owner_role(self):
-        response = self.client.post(
-            reverse("register"),
-            self._register_payload(email="owner-explicit@example.com", role=RoleChoices.OWNER),
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        user = User.objects.get(email="owner-explicit@example.com")
-        self.assertEqual(user.profile.role, RoleChoices.OWNER)
-
-    def test_register_rejects_duplicate_email(self):
-        User.objects.create_user(email="duplicate@example.com", password="Password123")
-
-        response = self.client.post(
-            reverse("register"),
-            self._register_payload(email="duplicate@example.com"),
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("email", response.data)
-
-    def test_register_rejects_password_mismatch(self):
-        response = self.client.post(
-            reverse("register"),
-            self._register_payload(password_confirm="Different123"),
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("password_confirm", response.data)
-
-    def test_register_rejects_password_without_letters(self):
-        response = self.client.post(
-            reverse("register"),
-            self._register_payload(password="12345678", password_confirm="12345678"),
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("password", response.data)
-
-    def test_register_rejects_password_without_digits(self):
-        response = self.client.post(
-            reverse("register"),
-            self._register_payload(password="OnlyLetters", password_confirm="OnlyLetters"),
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("password", response.data)
-
-    def test_login_success_returns_tokens_user_and_creates_audit_log(self):
-        user = User.objects.create_user(
-            email="login-ok@example.com",
-            password="Password123",
-            first_name="Login",
-            last_name="Ok",
-        )
-        user.profile.role = RoleChoices.OWNER
-        user.profile.save(update_fields=["role"])
-
-        response = self.client.post(
-            reverse("login"),
-            {"email": "login-ok@example.com", "password": "Password123"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn("access", response.data)
-        self.assertIn("refresh", response.data)
-        self.assertIn("user", response.data)
-        self.assertEqual(response.data["user"]["email"], "login-ok@example.com")
-
-        self.assertEqual(TokenLoginLog.objects.filter(user=user, status=TokenLoginLog.LOGIN).count(), 1)
-
-    def test_login_rejects_invalid_credentials(self):
-        User.objects.create_user(email="invalid-login@example.com", password="Password123")
-
-        response = self.client.post(
-            reverse("login"),
-            {"email": "invalid-login@example.com", "password": "wrong-password"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_logout_success_revokes_refresh_and_updates_audit_log(self):
-        user = User.objects.create_user(email="logout-ok@example.com", password="Password123")
-
-        login_response = self.client.post(
-            reverse("login"),
-            {"email": "logout-ok@example.com", "password": "Password123"},
-            format="json",
-        )
-        self.assertEqual(login_response.status_code, status.HTTP_200_OK)
-
-        access_token = login_response.data["access"]
-        refresh_token = login_response.data["refresh"]
-
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
-        logout_response = self.client.post(
-            reverse("logout"),
-            {"refresh": refresh_token},
-            format="json",
-        )
-
-        self.assertEqual(logout_response.status_code, status.HTTP_200_OK)
-
-        log = TokenLoginLog.objects.filter(user=user).latest("login_at")
-        self.assertEqual(log.status, TokenLoginLog.LOGOUT)
-        self.assertIsNotNone(log.logout_at)
-        self.assertTrue(BlacklistedToken.objects.filter(token__jti=log.jti).exists())
-
-    def test_logout_rejects_invalid_refresh_token(self):
-        user = User.objects.create_user(email="logout-invalid@example.com", password="Password123")
-        self.client.force_authenticate(user=user)
-
-        response = self.client.post(
-            reverse("logout"),
-            {"refresh": "not-a-valid-token"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertFalse(User.objects.filter(email="evil-admin@example.com").exists())
-
 
 class AuthEndpointTests(APITestCase):
     """Exhaustive tests for register/login/logout/me endpoints."""
+
+    def setUp(self):
+        # Limpia el caché de throttle antes de cada test para evitar contaminación
+        # entre tests (el state de rate limiting persiste en caché entre tests).
+        cache.clear()
 
     def _register_payload(self, **overrides):
         payload = {
@@ -726,6 +584,9 @@ class AuthEndpointTests(APITestCase):
 
         refresh_tokens = []
         for _ in range(6):
+            # Limpia caché de throttle en cada iteración: este test valida lógica
+            # de sesiones, no rate limiting; evitamos que el throttle interfiera.
+            cache.clear()
             response = self.client.post(
                 reverse("login"),
                 {"email": "session-limit@example.com", "password": "Password123"},
@@ -907,6 +768,11 @@ class AuthEndpointTests(APITestCase):
 class TemporaryConcurrencyRegistrationTests(TransactionTestCase):
     """Temporary opt-in concurrency tests for registration endpoint."""
 
+    def setUp(self):
+        # Limpia caché de throttle para que los workers no hereden rate limit
+        # de tests anteriores. Este test prueba concurrencia, no throttling.
+        cache.clear()
+
     def test_parallel_register_same_email_diagnostic(self):
         email = "temp-concurrency-register@example.com"
         password = "Gihistzzz_2026"
@@ -943,11 +809,12 @@ class TemporaryConcurrencyRegistrationTests(TransactionTestCase):
             finally:
                 connections.close_all()
 
-        threads = [threading.Thread(target=worker) for _ in range(workers)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=15)
+        with patch.object(RegisterView, 'throttle_classes', []):
+            threads = [threading.Thread(target=worker) for _ in range(workers)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=15)
 
         self.assertFalse(any(thread.is_alive() for thread in threads), "Some worker threads did not finish")
         self.assertEqual(unexpected_errors, [])
@@ -973,6 +840,9 @@ class TemporaryConcurrencyRegistrationTests(TransactionTestCase):
 )
 class StrictConcurrencyRegistrationTests(TransactionTestCase):
     """Strict opt-in concurrency checks for registration endpoint behavior."""
+
+    def setUp(self):
+        cache.clear()
 
     def test_parallel_register_same_email_never_returns_500(self):
         email = "strict-concurrency-register@example.com"
@@ -1005,11 +875,12 @@ class StrictConcurrencyRegistrationTests(TransactionTestCase):
             finally:
                 connections.close_all()
 
-        threads = [threading.Thread(target=worker) for _ in range(workers)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=15)
+        with patch.object(RegisterView, 'throttle_classes', []):
+            threads = [threading.Thread(target=worker) for _ in range(workers)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=15)
 
         self.assertFalse(any(thread.is_alive() for thread in threads), "Some worker threads did not finish")
         self.assertEqual(unexpected_errors, [])
@@ -1037,6 +908,8 @@ class RateLimitingTestCase(APITestCase):
     """Tests para validar rate limiting en endpoints de autenticación."""
     
     def setUp(self):
+        # Cada test de throttle empieza con cuota limpia.
+        cache.clear()
         self.client = APIClient()
         
         # Crear usuario de prueba para refresh
@@ -1173,7 +1046,12 @@ class RateLimitingTestCase(APITestCase):
 
 class ThrottleByIPTestCase(APITestCase):
     """Verifica que el rate limiting es por IP (anónimos)."""
-    
+
+    def setUp(self):
+        # Limpia caché de throttle para que este test empiece con cuota fresca,
+        # sin contaminación de tests anteriores que usan la misma IP (127.0.0.1).
+        cache.clear()
+
     def test_throttle_applies_to_ip(self):
         """
         Verificar que diferentes usuarios (same IP) comparten limit.

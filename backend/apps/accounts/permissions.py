@@ -29,7 +29,10 @@ def _deny(request, accio, motiu):
 # ---------------------------------------------------------------------------
 
 class IsAdminSistema(BasePermission):
-    """Només l'Admin del Sistema."""
+    """
+    Permiso: Rol 'admin' de la aplicación.
+    Este es el admin de TODOS los edificios (sin filtrado ABAC), NO Django superuser.
+    """
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
             return False
@@ -37,7 +40,12 @@ class IsAdminSistema(BasePermission):
 
 
 class IsAdminFinca(BasePermission):
-    """Administrador de Finca o Admin del Sistema."""
+    """
+    Permiso: Propietario/Admin de finca (owner) o Admin de aplicación (admin).
+    Diferencia:
+    - owner: solo SU cartera (filtrado ABAC)
+    - admin: TODOS los edificios (sin ABAC)
+    """
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
             return False

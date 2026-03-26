@@ -2,10 +2,12 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework_simplejwt.views import TokenRefreshView as SimpleJWTTokenRefreshView
 
 from apps.accounts.models import RoleChoices
 from apps.buildings.models import Edifici, Habitatge
 from apps.accounts.permissions import IsAdminSistema, IsAdminFinca, ABACMixin
+from apps.accounts.throttles import LoginThrottle, RegisterThrottle, RefreshThrottle
 from apps.accounts.serializers import (
     RegisterSerializer, LoginSerializer, LogoutSerializer, MeSerializer,
     AccountUpdateSerializer,
@@ -17,6 +19,7 @@ from apps.accounts.serializers import (
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
+    throttle_classes = [RegisterThrottle]
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -36,6 +39,7 @@ class RegisterView(generics.CreateAPIView):
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [LoginThrottle]
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -59,6 +63,10 @@ class LoginView(APIView):
             status=status.HTTP_200_OK,
         )
 
+class TokenRefreshView(SimpleJWTTokenRefreshView):
+    throttle_classes = [RefreshThrottle]
+
+
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -71,6 +79,7 @@ class LogoutView(APIView):
             {"detail": "Sessió tancada correctament."},
             status=status.HTTP_200_OK,
         )
+
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]

@@ -9,25 +9,15 @@
 
 ---
 
-## 1) Instalar paquetes
-
-Desde la carpeta `backend`:
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-## 2) Levantar la base de datos en Docker
+## 1) Levantar la base de datos en Docker
 
 Desde la raíz del proyecto:
 
 ```bash
-docker compose up -d db
+docker compose up --build -d
 ```
 
-Comprueba que está arriba:
+Comprobar estado:
 
 ```bash
 docker compose ps
@@ -35,14 +25,14 @@ docker compose ps
 
 ---
 
-## 3) Variables de entorno de Django (BD)
+## 2) Variables de entorno de Django (BD)
 
 En el archivo `.env`, verifica algo como:
 
 ```env
 DEBUG=True
 ENABLE_DEBUG_TOOLBAR=True
-DB_HOST=127.0.0.1
+DB_HOST=db
 DB_PORT=5432
 DB_NAME=buildrank
 DB_USER=buildrank_user
@@ -51,12 +41,11 @@ DB_PASSWORD=buildrank_pass
 
 ---
 
-## 4) Configurar estáticos para conservar Django Admin
+## 3) Configurar estáticos para conservar Django Admin
 
 ```bash
-python manage.py migrate
-python manage.py collectstatic --noinput
-docker compose up --build
+docker compose exec web python manage.py migrate
+docker compose exec web python manage.py collectstatic --noinput
 ```
 
 En otra terminal (desde la carpeta `backend` y con `.venv`):
@@ -67,7 +56,7 @@ docker compose exec web python manage.py createsuperuser
 
 ---
 
-## 5) Entrar en Django Administration
+## 4) Entrar en Django Administration
 
 En el navegador:
 
@@ -78,12 +67,41 @@ Debería redirigir a:
 
 http://localhost/admin/
 
+## 5) Logs y diagnostico
+
+```bash
+docker compose logs -f web
+docker compose logs -f nginx
+docker compose logs -f db
+```
+
+## 6) Operacion diaria
+
+Levantar:
+
+```bash
+docker compose up -d
+```
+
+Parar conservando datos:
+
+```bash
+docker compose down
+```
+
+Parar y borrar volumenes (elimina la DB de desarrollo):
+
+```bash
+docker compose down -v
+```
+
 ### Problema común
 
 Si el admin aparece sin CSS:
 
 ```bash
-python manage.py collectstatic --noinput
+docker compose exec web python manage.py collectstatic --noinput
+docker compose restart nginx
 ```
 
 ---

@@ -1,15 +1,15 @@
-# Guía de configuración (Nginx + Gunicorn + Django)
+# Guía de configuración (Nginx + Gunicorn)
 
 ## Requisitos previos
 
 - Haber activado el entorno virtual (`.venv`)
-- Estar en la rama **Desenvolupament** con el PRx integrado
+- Estar en la rama **Desenvolupament** con el PR#41 integrado
 - Tener Docker Desktop y asegurar que en settings está activado:
   - `Use the WSL 2 based engine`
 
 ---
 
-## 1) Levantar la base de datos en Docker
+## 1) Levantar Docker
 
 Desde la raíz del proyecto:
 
@@ -46,11 +46,6 @@ DB_PASSWORD=buildrank_pass
 ```bash
 docker compose exec web python manage.py migrate
 docker compose exec web python manage.py collectstatic --noinput
-```
-
-En otra terminal (desde la carpeta `backend` y con `.venv`):
-
-```bash
 docker compose exec web python manage.py createsuperuser
 ```
 
@@ -67,7 +62,25 @@ Debería redirigir a:
 
 http://localhost/admin/
 
-## 5) Logs y diagnostico
+---
+
+## Logs y componentes en Docker
+
+Puedes ver los logs en Docker Desktop:
+
+- `db`: base de datos Postgres
+- `web`: código Python (DRF) + Gunicorn
+- `nginx`: proxy inverso Nginx
+
+Más detalles en:
+
+`docker-compose.yml`
+
+---
+
+## Comandos útiles
+
+### Logs y diagnóstico
 
 ```bash
 docker compose logs -f web
@@ -75,7 +88,7 @@ docker compose logs -f nginx
 docker compose logs -f db
 ```
 
-## 6) Operacion diaria
+### Operación diaria
 
 Levantar:
 
@@ -89,7 +102,7 @@ Parar conservando datos:
 docker compose down
 ```
 
-Parar y borrar volumenes (elimina la DB de desarrollo):
+Parar y borrar volúmenes (elimina la DB de desarrollo):
 
 ```bash
 docker compose down -v
@@ -105,15 +118,3 @@ docker compose restart nginx
 ```
 
 ---
-
-## Logs y componentes en Docker
-
-Puedes ver los logs en Docker Desktop:
-
-- `db`: base de datos Postgres
-- `web`: código Python + Django (DRF) + Gunicorn
-- `nginx`: servidor Nginx
-
-Más detalles en:
-
-`docker-compose.yml`

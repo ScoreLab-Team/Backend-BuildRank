@@ -2,7 +2,6 @@
 
 ## Requisitos previos
 
-- Haber activado el entorno virtual (`.venv`)
 - Estar en la rama **Desenvolupament** con el PR#41 integrado
 - Tener Docker Desktop y asegurar que en settings está activado:
   - `Use the WSL 2 based engine`

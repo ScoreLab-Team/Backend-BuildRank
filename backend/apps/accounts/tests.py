@@ -250,6 +250,120 @@ class AssignmentTests(BaseTestData):
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
+class MeRoleViewTests(BaseTestData):
+    """Tests for authenticated user's role change endpoint."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = cls._create_user("perfil@example.com", RoleChoices.OWNER)
+
+    def test_authenticated_user_can_change_role_to_tenant(self):
+        """Authenticated user can change own role from owner to tenant."""
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse("me-role"),
+            {"role": RoleChoices.TENANT},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.role, RoleChoices.TENANT)
+        self.assertEqual(response.data["role"], RoleChoices.TENANT)
+
+    def test_authenticated_user_can_change_role_to_owner(self):
+        """Authenticated user can change own role from tenant to owner."""
+        self.user.profile.role = RoleChoices.TENANT
+        self.user.profile.save(update_fields=["role"])
+
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse("me-role"),
+            {"role": RoleChoices.OWNER},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.role, RoleChoices.OWNER)
+        self.assertEqual(response.data["role"], RoleChoices.OWNER)
+
+    def test_authenticated_user_cannot_change_role_to_admin(self):
+        """Authenticated user cannot escalate own role to admin."""
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse("me-role"),
+            {"role": RoleChoices.ADMIN},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.role, RoleChoices.OWNER)
+        self.assertIn("role", response.data)
+
+    def test_unauthenticated_user_cannot_change_role(self):
+        """Unauthenticated requests must return 401."""
+        response = self.client.patch(
+            reverse("me-role"),
+            {"role": RoleChoices.TENANT},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+class MeViewTests(BaseTestData):
+    """Tests for authenticated user's profile retrieval and update endpoint."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = cls._create_user("meview@example.com", RoleChoices.OWNER)
+
+    def test_authenticated_user_can_get_own_profile(self):
+        """Authenticated user can retrieve own profile data."""
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(reverse("me"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], self.user.id)
+        self.assertEqual(response.data["email"], self.user.email)
+        self.assertEqual(response.data["first_name"], self.user.first_name)
+        self.assertEqual(response.data["role"], RoleChoices.OWNER)
+
+    def test_authenticated_user_can_patch_own_profile(self):
+        """Authenticated user can update own basic profile fields."""
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse("me"),
+            {"first_name": "Marti", "last_name": "Borras"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "Marti")
+        self.assertEqual(self.user.last_name, "Borras")
+        self.assertEqual(response.data["first_name"], "Marti")
+        self.assertEqual(response.data["last_name"], "Borras")
+
+    def test_unauthenticated_user_cannot_get_profile(self):
+        """Unauthenticated requests to profile detail must return 401."""
+        response = self.client.get(reverse("me"))
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_unauthenticated_user_cannot_patch_profile(self):
+        """Unauthenticated requests to profile update must return 401."""
+        response = self.client.patch(
+            reverse("me"),
+            {"first_name": "NoAuth"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 class QuerySetFilteringTests(BaseTestData):
     """Tests for queryset filtering to prevent ABAC/RBAC bypasses and data leaks."""

@@ -10,11 +10,10 @@ from apps.accounts.permissions import IsAdminSistema, IsAdminFinca, ABACMixin
 from apps.accounts.throttles import LoginThrottle, RegisterThrottle, RefreshThrottle
 from apps.accounts.serializers import (
     RegisterSerializer, LoginSerializer, LogoutSerializer, MeSerializer,
-    AccountUpdateSerializer,
+    AccountUpdateSerializer, RoleUpdateSerializer,
     EdificiResumSerializer, HabitatgeResumSerializer,
     AssignarResidentSerializer, AssignarAdminSerializer,
 )
-
 
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
@@ -176,3 +175,25 @@ class AssignarAdminEdificiView(APIView):
         edifici.save(update_fields=['administradorFinca_id'])
 
         return Response(EdificiResumSerializer(edifici).data)
+
+# ---------------------------------------------------------------------------
+# Canvi de rol (US5)
+# ---------------------------------------------------------------------------
+
+class MeRoleView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        serializer = RoleUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        profile = request.user.profile
+        new_role = serializer.validated_data["role"]
+
+        profile.role = new_role
+        profile.save(update_fields=["role", "updated_at"])
+
+        return Response(
+            MeSerializer(request.user).data,
+            status=status.HTTP_200_OK
+        )

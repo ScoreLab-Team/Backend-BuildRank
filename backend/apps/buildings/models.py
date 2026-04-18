@@ -62,7 +62,11 @@ class GrupComparable(models.Model):
     def __str__(self):
         return f"Grup Comparable {self.idGrup}"
     
-
+class EdificiActiuManager(models.Manager):
+    """Retorna només edificis actius (no desactivats lògicament)."""
+    def get_queryset(self):
+        return super().get_queryset().filter(actiu=True)
+    
 class Edifici(models.Model):
     # Django crea automaticament l'id de Edifici.
     idEdifici = models.AutoField(primary_key=True)
@@ -73,6 +77,10 @@ class Edifici(models.Model):
     reglament = models.CharField(max_length=100)
     orientacioPrincipal = models.CharField(max_length=50, choices=TipusOrientacio.choices)
     puntuacioBase = models.FloatField(editable=False, null=True)
+
+    actiu = models.BooleanField(default=True)
+    dataDesactivacio = models.DateTimeField(null=True, blank=True)
+    motivDesactivacio = models.TextField(blank=True)
 
     # relacio 1 a 1: un edifici te una unica localitzacio
     localitzacio = models.OneToOneField(
@@ -100,6 +108,9 @@ class Edifici(models.Model):
         blank=True
     )
 
+    objects = models.Manager()  # opcional: Per defecte 
+    actius = EdificiActiuManager() # Manager personalitzat per només retornar edificis actius
+    
     def __str__(self):
         return f"Edifici{self.idEdifici} - {self.localitzacio}"
     
@@ -110,6 +121,7 @@ class Edifici(models.Model):
 
         super().save(*args, **kwargs)
     
+
 
 
 class DadesEnergetiques(models.Model):

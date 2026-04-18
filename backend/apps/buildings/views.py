@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status, viewsets
 from django.shortcuts import get_object_or_404
 
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.decorators import api_view, action
 from apps.accounts.permissions import ABACMixin
 
@@ -29,12 +29,19 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return Edifici.objects.none()
 
         role = user.profile.role
+        inclou_desactivats = (
+            self.request.query_params.get('inclou_desactivats', 'false').lower() == 'true'
+            and user.is_staff  # només admin sistema pot veure desactivats
+        )
+
+        qs = Edifici.objects.all() if inclou_desactivats else Edifici.actius.all()
+
         if role == RoleChoices.ADMIN:
-            return Edifici.objects.all()
+            return qs
         if role == RoleChoices.OWNER:
-            return Edifici.objects.filter(administradorFinca=user)
+            return qs.filter(administradorFinca=user)
         if role == RoleChoices.TENANT:
-            return Edifici.objects.filter(habitatges__usuari=user).distinct()
+            return qs.filter(habitatges__usuari=user).distinct()
         return Edifici.objects.none()
 
     def get_serializer_class(self):
@@ -55,6 +62,55 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), EsAdminOPropietariEdifici()]
         return [IsAuthenticated()]
     
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
+    def desactivar(self, request, pk=None):
+        """
+        POST /edificis/{id}/desactivar/
+        Cos: { "motiu": "..." }   (opcional)
+        Requereix: admin de sistema (is_staff=True)
+        """
+        edifici = self.get_object()
+
+        if not edifici.actiu:
+            return Response(
+                {"detail": "L'edifici ja està desactivat."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        motiu = request.data.get('motiu', '')
+        edifici.actiu = False
+        edifici.dataDesactivacio = timezone.now()
+        edifici.motivDesactivacio = motiu
+        edifici.save(update_fields=['actiu', 'dataDesactivacio', 'motivDesactivacio'])
+
+        return Response(
+            {
+                "detail": f"Edifici {edifici.idEdifici} desactivat correctament.",
+                "dataDesactivacio": edifici.dataDesactivacio,
+                "motiu": edifici.motivDesactivacio,
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # També, acció per reactivar (per si cal):
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsAdminUser])
+    def reactivar(self, request, pk=None):
+        """POST /edificis/{id}/reactivar/"""
+        edifici = self.get_object()
+
+        if edifici.actiu:
+            return Response(
+                {"detail": "L'edifici ja està actiu."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        edifici.actiu = True
+        edifici.dataDesactivacio = None
+        edifici.motivDesactivacio = ''
+        edifici.save(update_fields=['actiu', 'dataDesactivacio', 'motivDesactivacio'])
+
+        return Response({"detail": f"Edifici {edifici.idEdifici} reactivat."}, status=status.HTTP_200_OK)
+
     # GET /edificis/{id}/habitatges/
     @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici])
     def habitatges(self, request, pk=None):

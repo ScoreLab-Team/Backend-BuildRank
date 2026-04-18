@@ -109,18 +109,20 @@ class MeEdificisView(APIView):
 
     def get(self, request):
         user = request.user
-        role = getattr(getattr(user, 'profile', None), 'role', None)
+        role = getattr(getattr(user, "profile", None), "role", None)
 
-        if role == RoleChoices.ADMIN:
-            edificis = Edifici.objects.select_related('localitzacio').all()
-        elif role == RoleChoices.OWNER:
-            # AdminFinca: edificis de la seva cartera
-            edificis = user.edificis_administrats.select_related('localitzacio').all()
+        if user.is_superuser:
+            edificis = Edifici.objects.select_related("localitzacio").all()
+        elif role == RoleChoices.ADMIN:
+            # Admin de finca: edificis de la seva cartera
+            edificis = user.edificis_administrats.select_related("localitzacio").all()
         else:
-            # Resident/Llogater: edificis on té habitatge
-            edificis = Edifici.objects.select_related('localitzacio').filter(
-                habitatges__usuari=user
-            ).distinct()
+            # Owner / Tenant: edificis on té vinculació per habitatge
+            edificis = (
+                Edifici.objects.select_related("localitzacio")
+                .filter(habitatges__usuari=user)
+                .distinct()
+            )
 
         serializer = EdificiResumSerializer(edificis, many=True)
         return Response(serializer.data)

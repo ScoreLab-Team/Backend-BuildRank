@@ -40,16 +40,19 @@ class IsAdminSistema(BasePermission):
 
 class IsAdminFinca(BasePermission):
     """
-    Permiso: Propietario/Admin de finca (owner) o Admin de aplicación (admin).
-    Diferencia:
-    - owner: solo SU cartera (filtrado ABAC)
-    - admin: TODOS los edificios (sin ABAC)
+    Permís per a administradors de finca.
+    - Admin de sistema: is_superuser
+    - Admin de finca: role == admin
     """
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
             return False
-        role = getattr(request.user.profile, 'role', None)
-        return role in (RoleChoices.ADMIN, RoleChoices.OWNER)
+
+        if request.user.is_superuser:
+            return True
+
+        role = getattr(request.user.profile, "role", None)
+        return role == RoleChoices.ADMIN
 
 
 class IsResident(BasePermission):
@@ -75,28 +78,34 @@ class ABACMixin:
 
     def check_edifici_access(self, request, edifici_id):
         """
-        Regla A: Resident – l'usuari ha de residir en un habitatge d'aquest edifici.
-        Regla B: AdminFinca – l'edifici ha d'estar a la seva cartera gestionada.
-        Admin del Sistema: accés total.
+        Regles d'accés:
+        - AdminSistema: accés total (is_superuser)
+        - AdminFinca: l'edifici ha d'estar a la seva cartera gestionada
+        - Owner / Tenant: han de tenir vinculació directa amb un habitatge d'aquest edifici
         """
         user = request.user
-        role = getattr(getattr(user, 'profile', None), 'role', None)
+        role = getattr(getattr(user, "profile", None), "role", None)
         accio = f"{request.method} edifici={edifici_id}"
 
-        if role == RoleChoices.ADMIN:
+        if user.is_superuser:
             return  # Accés total
 
-        if role == RoleChoices.OWNER:
-            # ABAC-B: l'edifici ha d'estar a la cartera de l'admin
+        if role == RoleChoices.ADMIN:
             te_acces = user.edificis_administrats.filter(idEdifici=edifici_id).exists()
             if not te_acces:
-                _deny(request, accio, "L'edifici no pertany a la cartera de gestió de l'administrador.")
-
+                _deny(
+                    request,
+                    accio,
+                    "L'edifici no pertany a la cartera de gestió de l'administrador."
+                )
         else:
-            # ABAC-A: el resident ha de tenir un habitatge en aquest edifici
             te_acces = user.habitatges_on_resideix.filter(edifici__idEdifici=edifici_id).exists()
             if not te_acces:
-                _deny(request, accio, "L'usuari no té vinculació directa amb aquest edifici.")
+                _deny(
+                    request,
+                    accio,
+                    "L'usuari no té vinculació directa amb aquest edifici."
+                )
 
     def check_twin_building_access(self, request, edifici_a_id, edifici_b_id):
         """

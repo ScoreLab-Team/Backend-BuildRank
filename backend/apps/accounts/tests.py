@@ -315,6 +315,56 @@ class MeRoleViewTests(BaseTestData):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+class MeViewTests(BaseTestData):
+    """Tests for authenticated user's profile retrieval and update endpoint."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = cls._create_user("meview@example.com", RoleChoices.OWNER)
+
+    def test_authenticated_user_can_get_own_profile(self):
+        """Authenticated user can retrieve own profile data."""
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(reverse("me"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], self.user.id)
+        self.assertEqual(response.data["email"], self.user.email)
+        self.assertEqual(response.data["first_name"], self.user.first_name)
+        self.assertEqual(response.data["role"], RoleChoices.OWNER)
+
+    def test_authenticated_user_can_patch_own_profile(self):
+        """Authenticated user can update own basic profile fields."""
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse("me"),
+            {"first_name": "Marti", "last_name": "Borras"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "Marti")
+        self.assertEqual(self.user.last_name, "Borras")
+        self.assertEqual(response.data["first_name"], "Marti")
+        self.assertEqual(response.data["last_name"], "Borras")
+
+    def test_unauthenticated_user_cannot_get_profile(self):
+        """Unauthenticated requests to profile detail must return 401."""
+        response = self.client.get(reverse("me"))
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_unauthenticated_user_cannot_patch_profile(self):
+        """Unauthenticated requests to profile update must return 401."""
+        response = self.client.patch(
+            reverse("me"),
+            {"first_name": "NoAuth"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
 class QuerySetFilteringTests(BaseTestData):
     """Tests for queryset filtering to prevent ABAC/RBAC bypasses and data leaks."""
 

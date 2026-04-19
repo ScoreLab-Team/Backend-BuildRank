@@ -2,21 +2,12 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, viewsets
-from django.shortcuts import get_object_or_404
-
-from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
-from rest_framework.decorators import api_view, action
-from apps.accounts.permissions import ABACMixin
-# apps/buildings/views.py
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status, viewsets
-from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, action
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
- 
-from apps.accounts.permissions import ABACMixin
+
+from apps.accounts.permissions import ABACMixin, IsAdminSistema
 from apps.accounts.models import RoleChoices
  
 from .models import (
@@ -118,21 +109,23 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return Edifici.objects.none()
 
         role = user.profile.role
+
+        # Només AdminSistema (superuser) pot veure edificis desactivats
         inclou_desactivats = (
             self.request.query_params.get('inclou_desactivats', 'false').lower() == 'true'
-            and user.is_staff  # només admin sistema pot veure desactivats
+            and user.is_superuser
         )
 
         qs = Edifici.objects.all() if inclou_desactivats else Edifici.actius.all()
 
         if role == RoleChoices.ADMIN:
-            #return Edifici.objects.all()
-            return qs
-        if role == RoleChoices.OWNER:
-            #return Edifici.objects.filter(administradorFinca=user)
+            # AdminFinca: veu els edificis que gestiona
             return qs.filter(administradorFinca=user)
+        if role == RoleChoices.OWNER:
+            # Propietari: veu els edificis on té un habitatge
+            return qs.filter(habitatges__usuari=user).distinct()
         if role == RoleChoices.TENANT:
-            #return Edifici.objects.filter(habitatges__usuari=user).distinct()
+            # Llogater: veu els edificis on té un habitatge
             return qs.filter(habitatges__usuari=user).distinct()
         return Edifici.objects.none()
 
@@ -163,7 +156,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
     # Body opcional: { "motiu": "..." }
     # ------------------------------------------------------------------
     @action(detail=True, methods=['post'],
-            permission_classes=[IsAuthenticated, IsAdminUser])
+            permission_classes=[IsAuthenticated, IsAdminSistema])
     def desactivar(self, request, pk=None):
         edifici = self.get_object()
  
@@ -232,7 +225,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
     # POST /edificis/{id}/reactivar/
     # ------------------------------------------------------------------
     @action(detail=True, methods=['post'],
-            permission_classes=[IsAuthenticated, IsAdminUser])
+            permission_classes=[IsAuthenticated, IsAdminSistema])
     def reactivar(self, request, pk=None):
         # Hem de buscar entre TOTS els edificis (inclosos desactivats)
         edifici = get_object_or_404(Edifici.objects.all(), pk=pk)

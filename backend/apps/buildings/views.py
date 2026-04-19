@@ -108,24 +108,20 @@ class EdificiViewSet(viewsets.ModelViewSet):
         if not user.is_authenticated or not hasattr(user, 'profile'):
             return Edifici.objects.none()
 
+        # Superuser veu tots (inclosos desactivats si ho demana)
+        if user.is_superuser:
+            inclou_desactivats = (
+                self.request.query_params.get('inclou_desactivats', 'false').lower() == 'true'
+            )
+            return Edifici.objects.all() if inclou_desactivats else Edifici.actius.all()
+
         role = user.profile.role
-
-        # Només AdminSistema (superuser) pot veure edificis desactivats
-        inclou_desactivats = (
-            self.request.query_params.get('inclou_desactivats', 'false').lower() == 'true'
-            and user.is_superuser
-        )
-
-        qs = Edifici.objects.all() if inclou_desactivats else Edifici.actius.all()
-
+        qs = Edifici.actius.all()
         if role == RoleChoices.ADMIN:
-            # AdminFinca: veu els edificis que gestiona
             return qs.filter(administradorFinca=user)
         if role == RoleChoices.OWNER:
-            # Propietari: veu els edificis on té un habitatge
             return qs.filter(habitatges__usuari=user).distinct()
         if role == RoleChoices.TENANT:
-            # Llogater: veu els edificis on té un habitatge
             return qs.filter(habitatges__usuari=user).distinct()
         return Edifici.objects.none()
 
@@ -145,7 +141,9 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), EsAdminOPropietariEdifici()]
         elif self.action in ['list', 'habitatges']:
             return [IsAuthenticated(), EsAdminOPropietariEdifici()]
-        return [IsAuthenticated()]
+        elif self.action in ['desactivar', 'reactivar']:
+            return [IsAuthenticated(), IsAdminSistema()]  # 
+        return [IsAuthenticated()]  # per defecte, només autenticats poden accedir 
     
      # ------------------------------------------------------------------
     # US20 — Task #169 + #170 + #171
@@ -157,7 +155,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
     # ------------------------------------------------------------------
     @action(detail=True, methods=['post'],
             permission_classes=[IsAuthenticated, IsAdminSistema])
-    def desactivar(self, request, pk=None):
+    def desactivar(self, request, pk=None):        
         edifici = self.get_object()
  
         if not edifici.actiu:

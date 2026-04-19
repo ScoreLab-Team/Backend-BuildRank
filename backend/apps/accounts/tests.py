@@ -148,8 +148,8 @@ class ABACTests(BaseTestData):
     @classmethod
     def setUpTestData(cls):
         """Set up buildings with different admins for ABAC testing."""
-        cls.admin_finca = cls._create_user("owner@example.com", RoleChoices.OWNER)
-        cls.altre_admin_finca = cls._create_user("owner2@example.com", RoleChoices.OWNER)
+        cls.admin_finca = cls._create_user("adminfinca1@example.com", RoleChoices.ADMIN)
+        cls.altre_admin_finca = cls._create_user("adminfinca2@example.com", RoleChoices.ADMIN)
         cls.resident = cls._create_user("tenant@example.com", RoleChoices.TENANT)
 
         cls.grup = GrupComparable.objects.create(
@@ -202,7 +202,7 @@ class AssignmentTests(BaseTestData):
     @classmethod
     def setUpTestData(cls):
         """Set up buildings and residents for assignment testing."""
-        cls.admin_finca = cls._create_user("owner@example.com", RoleChoices.OWNER)
+        cls.admin_finca = cls._create_user("adminfinca@example.com", RoleChoices.ADMIN)
         cls.resident = cls._create_user("tenant@example.com", RoleChoices.TENANT)
         cls.altre_resident = cls._create_user("tenant2@example.com", RoleChoices.TENANT)
 
@@ -371,9 +371,16 @@ class QuerySetFilteringTests(BaseTestData):
     @classmethod
     def setUpTestData(cls):
         """Set up multiple buildings and roles for filtering tests."""
-        cls.admin = cls._create_user("admin@example.com", RoleChoices.ADMIN)
-        cls.admin_finca_1 = cls._create_user("owner1@example.com", RoleChoices.OWNER)
-        cls.admin_finca_2 = cls._create_user("owner2@example.com", RoleChoices.OWNER)
+        cls.admin = User.objects.create_user(
+            email="admin@example.com",
+            password="Password123",
+            first_name="admin",
+            is_superuser=True,
+            is_staff=True,
+        )
+
+        cls.admin_finca_1 = cls._create_user("adminfinca1@example.com", RoleChoices.ADMIN)
+        cls.admin_finca_2 = cls._create_user("adminfinca2@example.com", RoleChoices.ADMIN)
         cls.tenant_1 = cls._create_user("tenant1@example.com", RoleChoices.TENANT)
         cls.tenant_2 = cls._create_user("tenant2@example.com", RoleChoices.TENANT)
 
@@ -384,7 +391,7 @@ class QuerySetFilteringTests(BaseTestData):
             rangSuperficie="100-200",
         )
 
-        # Three buildings under different admins
+        # Three buildings under different admins de finca
         cls.edifici_1 = cls._create_edifici(administrador=cls.admin_finca_1, grup=cls.grup)
         cls.edifici_2 = cls._create_edifici(administrador=cls.admin_finca_2, grup=cls.grup)
         cls.edifici_3 = cls._create_edifici(administrador=cls.admin_finca_1, grup=cls.grup)
@@ -418,15 +425,15 @@ class QuerySetFilteringTests(BaseTestData):
         self.assertNotIn(self.edifici_2.idEdifici, returned_ids)
         self.assertNotIn(self.edifici_3.idEdifici, returned_ids)
 
-    def test_owner_list_filtered_to_their_buildings_only(self):
-        """Owner GET /me/edificis/ shows only buildings they administer."""
+    def test_admin_finca_list_filtered_to_their_buildings_only(self):
+        """AdminFinca GET /me/edificis/ shows only buildings they administer."""
         self.client.force_authenticate(user=self.admin_finca_1)
         response = self.client.get(reverse("me-edificis"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         returned_ids = {item["idEdifici"] for item in response.data}
-        self.assertTrue(self.edifici_1.idEdifici in returned_ids)
-        self.assertTrue(self.edifici_3.idEdifici in returned_ids)
+        self.assertIn(self.edifici_1.idEdifici, returned_ids)
+        self.assertIn(self.edifici_3.idEdifici, returned_ids)
         self.assertNotIn(self.edifici_2.idEdifici, returned_ids)
 
     def test_admin_sees_all_buildings_in_system(self):
@@ -475,7 +482,7 @@ class SecurityTests(BaseTestData):
     def setUpTestData(cls):
         """Set up users for security testing."""
         cls.admin = cls._create_user("admin@example.com", RoleChoices.ADMIN)
-        cls.admin_finca = cls._create_user("owner@example.com", RoleChoices.OWNER)
+        cls.admin_finca = cls._create_user("adminfinca@example.com", RoleChoices.ADMIN)
         cls.altre_resident = cls._create_user("tenant2@example.com", RoleChoices.TENANT)
 
         cls.grup = GrupComparable.objects.create(
@@ -1202,3 +1209,41 @@ class ThrottleByIPTestCase(APITestCase):
                 # Cuarto intento: throttled
                 self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS,
                                msg="Intento 4 debería estar throttled por IP")
+
+class AdminRoleSemanticsTests(BaseTestData):
+    """Tests to ensure role semantics are aligned with the domain model."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.owner = cls._create_user("owner_semantics@example.com", RoleChoices.OWNER)
+        cls.admin_finca = cls._create_user("admin_finca@example.com", RoleChoices.ADMIN)
+
+        cls.grup = GrupComparable.objects.create(
+            idGrup=99,
+            zonaClimatica="C2",
+            tipologia="Residencial",
+            rangSuperficie="100-200",
+        )
+
+        cls.edifici = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
+
+        cls.habitatge = Habitatge.objects.create(
+            referenciaCadastral="HAB-SEM-1",
+            planta="1",
+            porta="A",
+            superficie=80,
+            edifici=cls.edifici,
+            usuari=cls.owner,
+        )
+
+    def test_owner_cannot_use_admin_finca_permissions(self):
+        """Owner must not be treated as admin de finca."""
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.patch(
+            reverse("assignar-resident", args=[self.habitatge.referenciaCadastral]),
+            {"user_id": self.owner.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

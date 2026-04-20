@@ -19,7 +19,7 @@ def actualizar_bhs_edificio(sender, instance, **kwargs):
         if hasattr(h, "dadesEnergetiques"):
             score_data = calcular_building_health_score(h.dadesEnergetiques)
             scores.append(score_data["score"])
-            print(f"[DEBUG] BHS calculado para {h.referenciaCadastral}: {score_data['score']}")
+            #print(f"[DEBUG] BHS calculado para {h.referenciaCadastral}: {score_data['score']}")
 
     if scores:
         promedio = sum(scores) / len(scores)
@@ -34,4 +34,4 @@ def actualizar_bhs_edificio(sender, instance, **kwargs):
         # Actualizar el campo actual del edificio
         edificio.puntuacioBase = promedio
         edificio.save(update_fields=["puntuacioBase"])
-        print(f"[DEBUG] BHS actualizado en Edifici {edificio.idEdifici}: {edificio.puntuacioBase}")
+        #print(f"[DEBUG] BHS actualizado en Edifici {edificio.idEdifici}: {edificio.puntuacioBase}")

@@ -1,6 +1,7 @@
 # apps/buildings/models.py
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 
 class TipusEdifici(models.TextChoices):
     RESIDENCIAL = 'Residencial', 'Residencial'
@@ -28,6 +29,15 @@ class EstatValidacio(models.TextChoices):
     EN_PROCES = 'EnProces', 'En procés'
     VALIDADA = 'Validada', 'Validada'
     REBUTJADA = 'Rebutjada', 'Rebutjada'
+
+# --- US20: Accions d'auditoria possibles ---
+class AccioAudit(models.TextChoices):
+    DESACTIVAR  = 'DESACTIVAR',  'Desactivar'
+    REACTIVAR   = 'REACTIVAR',   'Reactivar'
+    CREAR       = 'CREAR',       'Crear'
+    ACTUALITZAR = 'ACTUALITZAR', 'Actualitzar'
+    ELIMINAR    = 'ELIMINAR',    'Eliminar'
+ 
 
 class Localitzacio(models.Model):
     carrer = models.CharField(max_length=255)
@@ -62,7 +72,11 @@ class GrupComparable(models.Model):
     def __str__(self):
         return f"Grup Comparable {self.idGrup}"
     
-
+class EdificiActiuManager(models.Manager):
+    """Retorna només edificis actius (no desactivats lògicament)."""
+    def get_queryset(self):
+        return super().get_queryset().filter(actiu=True)
+    
 class Edifici(models.Model):
     # Django crea automaticament l'id de Edifici.
     idEdifici = models.AutoField(primary_key=True)
@@ -73,6 +87,10 @@ class Edifici(models.Model):
     reglament = models.CharField(max_length=100)
     orientacioPrincipal = models.CharField(max_length=50, choices=TipusOrientacio.choices)
     puntuacioBase = models.FloatField(editable=False, null=True)
+
+    actiu = models.BooleanField(default=True)
+    dataDesactivacio = models.DateTimeField(null=True, blank=True)
+    motivDesactivacio = models.TextField(blank=True)
 
     # relacio 1 a 1: un edifici te una unica localitzacio
     localitzacio = models.OneToOneField(
@@ -100,6 +118,9 @@ class Edifici(models.Model):
         blank=True
     )
 
+    objects = models.Manager()  # opcional: Per defecte 
+    actius = EdificiActiuManager() # Manager personalitzat per només retornar edificis actius
+
     def __str__(self):
         return f"Edifici{self.idEdifici} - {self.localitzacio}"
     
@@ -110,6 +131,52 @@ class Edifici(models.Model):
 
         super().save(*args, **kwargs)
     
+class EdificiAuditLog(models.Model):
+    """
+    Registra cada operació rellevant sobre un Edifici:
+    desactivació, reactivació, creació, actualització, eliminació.
+ 
+    - camps_modificats: JSON amb {nom_camp: [valor_anterior, valor_nou]}
+      Permet reconstruir l'historial complet de canvis.
+    - edifici_id_snapshot: guarda l'id fins i tot si l'edifici s'elimina físicament.
+    """
+    edifici = models.ForeignKey(
+        Edifici,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='audit_logs'
+    )
+    # Snapshot de l'id per si l'edifici s'esborra físicament en el futur
+    edifici_id_snapshot = models.IntegerField()
+ 
+    accio = models.CharField(max_length=20, choices=AccioAudit.choices)
+    usuari = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='audit_logs_edificis'
+    )
+    timestamp = models.DateTimeField(default=timezone.now, db_index=True)
+ 
+    # {nom_camp: [valor_anterior, valor_nou]}  — null per a CREAR/ELIMINAR
+    camps_modificats = models.JSONField(null=True, blank=True)
+ 
+    motiu = models.TextField(blank=True)
+    ip = models.GenericIPAddressField(null=True, blank=True)
+ 
+    class Meta:
+        ordering = ['-timestamp']
+        verbose_name = 'Registre d\'auditoria d\'edifici'
+        verbose_name_plural = 'Registres d\'auditoria d\'edificis'
+ 
+    def __str__(self):
+        return (
+            f"[{self.timestamp:%Y-%m-%d %H:%M}] "
+            f"{self.accio} · Edifici {self.edifici_id_snapshot} "
+            f"· {self.usuari}"
+        )
+ 
 
 
 class DadesEnergetiques(models.Model):

@@ -26,6 +26,7 @@ from .permissions import (
     EsAdminOPropietariHabitatge,
     EsOwnerOAdminHabitatge,
     EsOwnerOAdminDadesEnergetiques,
+    HasAPIKey,
 )
 from .pagination import RankingPaginacio
  

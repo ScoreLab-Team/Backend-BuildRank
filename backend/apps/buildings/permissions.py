@@ -1,6 +1,7 @@
 # apps/buildings/permissions.py
 from rest_framework.permissions import BasePermission
 from apps.accounts.models import RoleChoices, AccessDenialLog
+from config import settings
 
 def get_client_ip(request):
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
@@ -178,3 +179,11 @@ class EsOwnerOAdminDadesEnergetiques(BasePermission):
 
         log_denial(request, view.action, 'Sense relació owner/admin amb dades energètiques', habitatge.edifici.idEdifici)
         return False
+    
+
+
+class HasAPIKey(BasePermission):
+    def has_permission(self, request, view):
+        api_key = request.headers.get("Authorization")
+
+        return api_key == f"Api-Key {settings.THIRD_PARTY_API_KEY}"

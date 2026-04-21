@@ -193,3 +193,7 @@ if DEBUG:
         INTERNAL_IPS = [ip[:-1] + '1' for ip in ips] + ['127.0.0.1', '10.0.2.2']
     except Exception:
         INTERNAL_IPS = ['127.0.0.1']
+
+
+# Third-party API key 
+THIRD_PARTY_API_KEY = os.getenv("THIRD_PARTY_API_KEY")

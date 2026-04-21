@@ -20,11 +20,15 @@ from django.urls import path, include
 from django.conf import settings
 from django.views.generic import RedirectView
 
+
+from apps.buildings.views import ThirdPartyServiceView
+
 urlpatterns = [
     path('', RedirectView.as_view(pattern_name='admin:index', permanent=False)),
     path('admin/', admin.site.urls),
     path('api/accounts/', include('apps.accounts.urls')),
     path('api/buildings/', include('apps.buildings.urls')),
+    path('api/third-party-service/', ThirdPartyServiceView.as_view())
 ]
 
 if settings.DEBUG and "debug_toolbar" in settings.INSTALLED_APPS:

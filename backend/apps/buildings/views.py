@@ -396,7 +396,7 @@ class EdificiCrearAPIView(APIView):
 
     # POST /edificis/crear/: Crea un nou edifici
     def post(self, request):
-        serializer = EdificiDetailSerializer(data=request.data)
+        serializer = EdificiDetailSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             serializer.save() # Guarda a la base de dades
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -531,3 +531,15 @@ class RankingViewSet(viewsets.ReadOnlyModelViewSet):
 
 
     '''
+
+
+
+class ThirdPartyServiceView(APIView):
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        lat = request.query_params.get("lat")
+        lng = request.query_params.get("lng")
+
+        # aquí iría tu 
+        return Response(10)

@@ -26,6 +26,7 @@ from .permissions import (
     EsAdminOPropietariHabitatge,
     EsOwnerOAdminHabitatge,
     EsOwnerOAdminDadesEnergetiques,
+    HasAPIKey,
 )
 from .pagination import RankingPaginacio
  
@@ -535,11 +536,10 @@ class RankingViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ThirdPartyServiceView(APIView):
-    permission_classes = [AllowAny]
-    
+    permission_classes = [HasAPIKey]
+
     def get(self, request):
         lat = request.query_params.get("lat")
         lng = request.query_params.get("lng")
 
-        # aquí iría tu 
         return Response(10)

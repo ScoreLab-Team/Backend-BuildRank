@@ -314,12 +314,12 @@ class CatalegMillora(models.Model):
     costMinim = models.FloatField(default=0)
     costMaxim = models.FloatField(default=0)
     roiEstimatAnys = models.FloatField(null=True, blank=True)
-    estalviEnergeticEstimat = models.FloatField(help_text="% d'estalvi")
-    impactePunts = models.FloatField(help_text="Punts que aporta al rànquing")
+    estalviEnergeticEstimat = models.FloatField(help_text="% d'estalvi", default=0.0)
+    impactePunts = models.FloatField(help_text="Punts que aporta al rànquing", default=0.0)
     nivellConfianca = models.CharField(max_length=10, choices=NivellConfianca.choices, default=NivellConfianca.MIG)
 
     # Bloc legal
-    ambit = models.CharField(max_length=20, choices=AmbitActuacio.choices)
+    ambit = models.CharField(max_length=20, choices=AmbitActuacio.choices, default=AmbitActuacio.EDIFICI)
     requereixAcordComunitat = models.BooleanField(default=False)
     tipusAcordEstimat = models.CharField(max_length=20, choices=TipusAcord.choices, default=TipusAcord.NO_CAL)
     requereixLlicenciaMunicipal = models.BooleanField(default=False)

@@ -119,7 +119,12 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Edifici
-        fields = "__all__"
+        fields = '__all__'
+        read_only_fields = ['administradorFinca']
+    
+    def create(self, validated_data):
+        user = self.context['request'].user
+        return Edifici.objects.create(administradorFinca=user, **validated_data)
 
     def get_bhs(self, obj):
         last_bhs = obj.bhs_history.first()  # devuelve el último registrado

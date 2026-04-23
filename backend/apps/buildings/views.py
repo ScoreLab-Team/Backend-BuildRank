@@ -542,4 +542,10 @@ class ThirdPartyServiceView(APIView):
         lat = request.query_params.get("lat")
         lng = request.query_params.get("lng")
 
-        return Response(10)
+        data = {
+            "lat": lat,
+            "lng": lng,
+            "result": 10
+        }
+
+        return Response(data)

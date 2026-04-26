@@ -13,12 +13,16 @@ from apps.accounts.models import RoleChoices
 from .models import (
     Edifici, Habitatge, Localitzacio, DadesEnergetiques,
     carrersBarcelona, EstatValidacio, AccioAudit, EdificiAuditLog,
+    CatalegMillora, SimulacioMillora, SimulacioMilloraItem,
 )
 from .serializers import (
     EdificiDetailSerializer, EdificiListSerializer,
     HabitatgeDetailSerializer, HabitatgeResumSerializer,
     LocalitzacioSerializer, DadesEnergetiquesSerializer,
     RankingSerializer,
+    CatalegMilloraSerializer,
+    SimulacioMilloraPreviewSerializer,
+    SimulacioMilloraSerializer,
 )
 from .permissions import (
     EsAdminEdifici,
@@ -29,7 +33,8 @@ from .permissions import (
     HasAPIKey,
 )
 from .pagination import RankingPaginacio
- 
+from django.db import transaction
+from .simulation.engine import simular_millores
  
 # ---------------------------------------------------------------------------
 # Helpers
@@ -100,7 +105,24 @@ def _validar_consistencia_desactivacio(edifici):
 # ---------------------------------------------------------------------------
 # ViewSets
 # ---------------------------------------------------------------------------
- 
+
+class CatalegMilloraViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Endpoint de catàleg de millores per al frontend.
+    Permet listar i consultar les millores actives disponibles per simular.
+    """
+    serializer_class = CatalegMilloraSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = CatalegMillora.objects.filter(activa=True)
+
+        categoria = self.request.query_params.get("categoria")
+        if categoria:
+            queryset = queryset.filter(categoria=categoria)
+
+        return queryset.order_by("categoria", "nom")
+
 class EdificiViewSet(viewsets.ModelViewSet):
     queryset = Edifici.objects.all()
 
@@ -324,6 +346,110 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return Response({"detail": "No hi ha dades energètiques disponibles."}, status=404)
 
         return Response(dades)
+    
+    def _preparar_items_simulacio(self, millores_validated):
+        """
+        Converteix l'entrada validada del serializer en objectes reals del catàleg.
+        """
+        ids = [item["milloraId"] for item in millores_validated]
+        millores_map = {
+            millora.idMillora: millora
+            for millora in CatalegMillora.objects.filter(idMillora__in=ids, activa=True)
+        }
+
+        items = []
+        for item in millores_validated:
+            millora = millores_map[item["milloraId"]]
+            items.append({
+                "millora": millora,
+                "quantitat": item.get("quantitat"),
+                "coberturaPercent": item.get("coberturaPercent", 100),
+            })
+
+        return items
+
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='simulacions/preview',
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici]
+    )
+    def simulacions_preview(self, request, pk=None):
+        """
+        Preview de simulació.
+        No guarda res a la base de dades.
+        Pensat perquè Flutter pugui mostrar una comparativa abans/després.
+        """
+        edifici = self.get_object()
+
+        serializer = SimulacioMilloraPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        items = self._preparar_items_simulacio(serializer.validated_data["millores"])
+        resultat = simular_millores(edifici, items)
+
+        return Response(resultat, status=status.HTTP_200_OK)
+
+    @action(
+        detail=True,
+        methods=['get', 'post'],
+        url_path='simulacions',
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici]
+    )
+    def simulacions(self, request, pk=None):
+        """
+        GET: llista simulacions guardades de l'edifici.
+        POST: calcula i guarda una simulació.
+        """
+        edifici = self.get_object()
+
+        if request.method == 'GET':
+            simulacions = (
+                edifici.simulacions
+                .prefetch_related("items__millora")
+                .order_by("-dataSimulacio", "-id")
+            )
+            serializer = SimulacioMilloraSerializer(simulacions, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        serializer = SimulacioMilloraPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        items = self._preparar_items_simulacio(serializer.validated_data["millores"])
+        resultat = simular_millores(edifici, items)
+
+        with transaction.atomic():
+            simulacio = SimulacioMillora.objects.create(
+                descripcio=serializer.validated_data.get("descripcio", ""),
+                edifici=edifici,
+                creadaPer=request.user,
+                versioMotor=resultat["versioMotor"],
+                reduccioConsumPrevista=resultat["delta"]["reduccioConsumKwhAny"],
+                reduccioEmissionsPrevista=resultat["delta"]["reduccioEmissionsKgCO2Any"],
+                costEstimat=resultat["delta"]["costTotalEstimat"],
+                estalviAnual=resultat["delta"]["estalviAnualEstimatiu"],
+                hipotesiBase=resultat["abans"],
+                resultat=resultat,
+                millora=items[0]["millora"] if len(items) == 1 else None,
+            )
+
+            resultat_items = resultat.get("items", [])
+            for item_input, item_resultat in zip(items, resultat_items):
+                SimulacioMilloraItem.objects.create(
+                    simulacio=simulacio,
+                    millora=item_input["millora"],
+                    quantitat=item_resultat.get("quantitatAplicada"),
+                    coberturaPercent=item_resultat.get("coberturaPercent", item_input.get("coberturaPercent", 100)),
+                    costEstimatParcial=item_resultat.get("costEstimat", 0),
+                    reduccioConsumParcial=item_resultat.get("reduccioConsumKwhAny", 0),
+                    reduccioEmissionsParcial=item_resultat.get("reduccioEmissionsKgCO2Any", 0),
+                    impactePuntsParcial=item_resultat.get("impactePunts", 0),
+                    resultatParcial=item_resultat,
+                )
+
+        output = SimulacioMilloraSerializer(simulacio)
+        return Response(output.data, status=status.HTTP_201_CREATED)
+    
 
 class HabitatgeViewSet(viewsets.ModelViewSet):
     queryset = Habitatge.objects.all()

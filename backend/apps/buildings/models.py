@@ -58,6 +58,21 @@ class NivellConfianca(models.TextChoices):
     MIG = 'Mig', 'Mig'
     ALT = 'Alt', 'Alt'
 
+class CategoriaMillora(models.TextChoices):
+    ENVOLUPANT = 'envolupant', 'Envolupant tèrmica'
+    INSTAL_LACIO_TERMICA = 'instal_lacio_termica', 'Instal·lació tèrmica'
+    RENOVABLES = 'renovables', 'Energies renovables'
+    ELECTRICITAT = 'electricitat', 'Electricitat'
+    MOBILITAT = 'mobilitat', 'Mobilitat'
+    CONTROL_MONITORATGE = 'control_i_monitoratge', 'Control i monitoratge'
+
+class UnitatBaseMillora(models.TextChoices):
+    M2 = 'm2', 'm²'
+    UNITAT = 'unitat', 'Unitat'
+    KWP = 'kwp', 'kWp'
+    KWH = 'kwh', 'kWh'
+    HABITATGE = 'habitatge', 'Habitatge'
+    EDIFICI = 'edifici', 'Edifici'
 
 class Localitzacio(models.Model):
     carrer = models.CharField(max_length=255)
@@ -306,63 +321,197 @@ class AjudaVigent(models.Model):
 
 class CatalegMillora(models.Model):
     idMillora = models.AutoField(primary_key=True)
+
+    # Identificació funcional
+    slug = models.SlugField(
+        max_length=120,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Identificador estable per seeds, frontend i motor de simulació."
+    )
     nom = models.CharField(max_length=255)
     descripcio = models.TextField(blank=True)
-    categoria = models.CharField(max_length=100)
+    categoria = models.CharField(
+        max_length=100,
+        choices=CategoriaMillora.choices,
+        default=CategoriaMillora.ENVOLUPANT
+    )
+    activa = models.BooleanField(default=True)
 
-    # Bloc econòmic
+    # Bloc econòmic antic conservat per compatibilitat
     costMinim = models.FloatField(default=0)
     costMaxim = models.FloatField(default=0)
     roiEstimatAnys = models.FloatField(null=True, blank=True)
     estalviEnergeticEstimat = models.FloatField(help_text="% d'estalvi", default=0.0)
     impactePunts = models.FloatField(help_text="Punts que aporta al rànquing", default=0.0)
-    nivellConfianca = models.CharField(max_length=10, choices=NivellConfianca.choices, default=NivellConfianca.MIG)
+    nivellConfianca = models.CharField(
+        max_length=10,
+        choices=NivellConfianca.choices,
+        default=NivellConfianca.MIG
+    )
+
+    # Bloc nou per US29: catàleg parametritzable
+    unitatBase = models.CharField(
+        max_length=30,
+        choices=UnitatBaseMillora.choices,
+        default=UnitatBaseMillora.EDIFICI
+    )
+    costEstimatBase = models.FloatField(
+        default=0,
+        help_text="Cost orientatiu per unitat base. No és pressupost oficial."
+    )
+    mantenimentAnual = models.FloatField(
+        default=0,
+        help_text="Cost orientatiu anual de manteniment per unitat base."
+    )
+    vidaUtil = models.IntegerField(
+        default=0,
+        help_text="Vida útil orientativa en anys."
+    )
+    parametresBase = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Paràmetres tècnics simplificats que utilitza el motor de simulació."
+    )
 
     # Bloc legal
-    ambit = models.CharField(max_length=20, choices=AmbitActuacio.choices, default=AmbitActuacio.EDIFICI)
+    ambit = models.CharField(
+        max_length=20,
+        choices=AmbitActuacio.choices,
+        default=AmbitActuacio.EDIFICI
+    )
     requereixAcordComunitat = models.BooleanField(default=False)
-    tipusAcordEstimat = models.CharField(max_length=20, choices=TipusAcord.choices, default=TipusAcord.NO_CAL)
+    tipusAcordEstimat = models.CharField(
+        max_length=20,
+        choices=TipusAcord.choices,
+        default=TipusAcord.NO_CAL
+    )
     requereixLlicenciaMunicipal = models.BooleanField(default=False)
     requereixTecnicCompetent = models.BooleanField(default=False)
-    requereixCeePrePost = models.BooleanField(default=False, help_text="Certificat Energètic abans i després")
+    requereixCeePrePost = models.BooleanField(
+        default=False,
+        help_text="Certificat Energètic abans i després"
+    )
 
     # Relacions
     normativaAplicable = models.ManyToManyField(Normativa, blank=True)
     ajudesDisponibles = models.ManyToManyField(AjudaVigent, blank=True)
 
-    bloquejadorsFrequents = models.JSONField(default=list, help_text="Ex: Edifici protegit, Façana catalogada")
+    bloquejadorsFrequents = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Ex: Edifici protegit, façana catalogada."
+    )
+
+    class Meta:
+        ordering = ['categoria', 'nom']
+        verbose_name = 'Millora del catàleg'
+        verbose_name_plural = 'Catàleg de millores'
 
     def __str__(self):
         return self.nom
 
+    @property
+    def cost_orientatiu_unitari(self):
+        """
+        Retorna el cost base preferent.
+        Si encara no s'ha migrat el catàleg nou, usa la mitjana costMinim/costMaxim.
+        """
+        if self.costEstimatBase:
+            return self.costEstimatBase
+
+        if self.costMinim and self.costMaxim:
+            return (self.costMinim + self.costMaxim) / 2
+
+        if self.costMaxim:
+            return self.costMaxim
+
+        return self.costMinim or 0
+
    
 class SimulacioMillora(models.Model):
-    descripcio = models.CharField(max_length=255)
-    reduccioConsumPrevista = models.FloatField()
-    reduccioEmissionsPrevista = models.FloatField()
-    costEstimat = models.FloatField()
-    estalviAnual = models.FloatField()
+    descripcio = models.CharField(max_length=255, blank=True)
+    reduccioConsumPrevista = models.FloatField(default=0)
+    reduccioEmissionsPrevista = models.FloatField(default=0)
+    costEstimat = models.FloatField(default=0)
+    estalviAnual = models.FloatField(default=0)
     dataSimulacio = models.DateField(auto_now_add=True)
 
-    # Guardar l'estat energètic de l'edifici en el moment de simular per si en el futur canvia
-    hipotesiBase = models.JSONField(null=True, blank=True, help_text="Còpia de les dades energètiques en el moment de la simulació")
-
-    # relacio 1 a *: una millora pot tenir moltes simulacions
-    millora = models.ForeignKey(
-        CatalegMillora,
-        on_delete=models.CASCADE,
-        related_name='simulacions'
+    versioMotor = models.CharField(max_length=20, default="SIM-1.0")
+    resultat = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Resultat complet de la simulació: abans, després, deltes i hipòtesis."
     )
 
-    # relacio 1 a *: una simulació es fa sobre un edifici
+    hipotesiBase = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Còpia de les dades energètiques en el moment de la simulació."
+    )
+
+    # Es manté nullable per compatibilitat amb la versió antiga d'una sola millora
+    millora = models.ForeignKey(
+        CatalegMillora,
+        on_delete=models.SET_NULL,
+        related_name='simulacions_directes',
+        null=True,
+        blank=True
+    )
+
     edifici = models.ForeignKey(
         Edifici,
         on_delete=models.CASCADE,
         related_name='simulacions'
     )
 
+    creadaPer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='simulacions_millores'
+    )
+
     def __str__(self):
-        return f"Simulació {self.millora.nom} a {self.edifici.idEdifici}"
+        return f"Simulació millores edifici {self.edifici.idEdifici} - {self.dataSimulacio}"
+
+
+class SimulacioMilloraItem(models.Model):
+    simulacio = models.ForeignKey(
+        SimulacioMillora,
+        on_delete=models.CASCADE,
+        related_name='items'
+    )
+    millora = models.ForeignKey(
+        CatalegMillora,
+        on_delete=models.PROTECT,
+        related_name='items_simulacio'
+    )
+
+    quantitat = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Quantitat aplicada. Si és null, el motor en fa una estimació segons unitatBase."
+    )
+    coberturaPercent = models.FloatField(
+        default=100,
+        help_text="Percentatge d'aplicació de la millora sobre l'edifici o sistema afectat."
+    )
+
+    costEstimatParcial = models.FloatField(default=0)
+    reduccioConsumParcial = models.FloatField(default=0)
+    reduccioEmissionsParcial = models.FloatField(default=0)
+    impactePuntsParcial = models.FloatField(default=0)
+    resultatParcial = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['id']
+
+    def __str__(self):
+        return f"{self.millora.nom} ({self.coberturaPercent}%)"
 
 
 class MilloraImplementada(models.Model):

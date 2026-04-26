@@ -1,6 +1,15 @@
 # apps/buildings/serializers.py
 from rest_framework import serializers
-from apps.buildings.models import Edifici, Habitatge, DadesEnergetiques, Localitzacio, carrersBarcelona
+from apps.buildings.models import (
+    Edifici,
+    Habitatge,
+    DadesEnergetiques,
+    Localitzacio,
+    carrersBarcelona,
+    CatalegMillora,
+    SimulacioMillora,
+    SimulacioMilloraItem,
+)
 import re
 from datetime import date
 
@@ -155,3 +164,100 @@ class RankingSerializer(serializers.ModelSerializer):
     class Meta:
         model = Edifici
         fields = ['idEdifici','puntuacioBase'] #Afegir posició
+
+class CatalegMilloraSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CatalegMillora
+        fields = [
+            'idMillora',
+            'slug',
+            'nom',
+            'descripcio',
+            'categoria',
+            'activa',
+            'unitatBase',
+            'costEstimatBase',
+            'mantenimentAnual',
+            'vidaUtil',
+            'estalviEnergeticEstimat',
+            'impactePunts',
+            'nivellConfianca',
+            'ambit',
+            'requereixAcordComunitat',
+            'tipusAcordEstimat',
+            'requereixLlicenciaMunicipal',
+            'requereixTecnicCompetent',
+            'requereixCeePrePost',
+            'bloquejadorsFrequents',
+            'parametresBase',
+        ]
+
+
+class SimulacioMilloraItemInputSerializer(serializers.Serializer):
+    milloraId = serializers.IntegerField()
+    quantitat = serializers.FloatField(required=False, allow_null=True, min_value=0)
+    coberturaPercent = serializers.FloatField(required=False, default=100, min_value=0, max_value=100)
+
+
+class SimulacioMilloraPreviewSerializer(serializers.Serializer):
+    descripcio = serializers.CharField(required=False, allow_blank=True, default="")
+    millores = SimulacioMilloraItemInputSerializer(many=True)
+
+    def validate_millores(self, value):
+        if not value:
+            raise serializers.ValidationError("Cal seleccionar com a mínim una millora.")
+
+        ids = [item["milloraId"] for item in value]
+        existing_ids = set(
+            CatalegMillora.objects
+            .filter(idMillora__in=ids, activa=True)
+            .values_list("idMillora", flat=True)
+        )
+
+        missing = sorted(set(ids) - existing_ids)
+        if missing:
+            raise serializers.ValidationError(
+                f"Les millores següents no existeixen o no estan actives: {missing}"
+            )
+
+        return value
+
+
+class SimulacioMilloraItemSerializer(serializers.ModelSerializer):
+    millora = CatalegMilloraSerializer(read_only=True)
+
+    class Meta:
+        model = SimulacioMilloraItem
+        fields = [
+            'id',
+            'millora',
+            'quantitat',
+            'coberturaPercent',
+            'costEstimatParcial',
+            'reduccioConsumParcial',
+            'reduccioEmissionsParcial',
+            'impactePuntsParcial',
+            'resultatParcial',
+        ]
+
+
+class SimulacioMilloraSerializer(serializers.ModelSerializer):
+    items = SimulacioMilloraItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = SimulacioMillora
+        fields = [
+            'id',
+            'descripcio',
+            'edifici',
+            'reduccioConsumPrevista',
+            'reduccioEmissionsPrevista',
+            'costEstimat',
+            'estalviAnual',
+            'dataSimulacio',
+            'versioMotor',
+            'hipotesiBase',
+            'resultat',
+            'items',
+        ]
+        read_only_fields = fields

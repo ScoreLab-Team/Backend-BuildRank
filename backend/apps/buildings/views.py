@@ -70,7 +70,7 @@ def _validar_consistencia_desactivacio(edifici):
  
     # 1. Millores implementades en procés
     millores_pendents = edifici.implementacions.filter(
-        estatValidacio=EstatValidacio.EN_PROCES
+        estatValidacio=EstatValidacio.EN_REVISIO
     ).count()
     if millores_pendents:
         advertencies.append(

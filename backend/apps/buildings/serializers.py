@@ -4,6 +4,8 @@ from apps.buildings.models import Edifici, Habitatge, DadesEnergetiques, Localit
 import re
 from datetime import date
 
+from apps.accounts.models import RoleChoices
+from .scoring import calcular_classificacio_estimada
 
 class LocalitzacioSerializer(serializers.ModelSerializer):
     class Meta:
@@ -113,10 +115,59 @@ class EdificiListSerializer(serializers.ModelSerializer):
         model = Edifici
         fields = ['idEdifici', 'tipologia', 'anyConstruccio', 'superficieTotal', 'puntuacioBase']
 
+def _etiqueta_font(font: str | None) -> str:
+    """Retorna una etiqueta llegible per a la UI segons l'origen de la classificació."""
+    etiquetes = {
+        'oficial':     'Classificació oficial',
+        'estimada':    'Classificació estimada',
+        'insuficient': 'Dades insuficients',
+    }
+    return etiquetes.get(font, '— Sense classificació')
+
 # Edifici 2. Detall públic (localitzacio anidada + camps extra)
 class EdificiDetailSerializer(serializers.ModelSerializer):
     localitzacio = LocalitzacioSerializer(read_only=True)
     
+    # --- US15: Classificació energètica estimada ---
+    classificacio_energetica = serializers.SerializerMethodField(
+        help_text="Classificació energètica de l'edifici. Pot ser oficial o estimada."
+    )
+    def get_classificacio_energetica(self, obj):
+        """
+        Retorna la classificació energètica amb tota la informació necessària
+        per mostrar-la correctament a la fitxa de l'edifici.
+        """
+        resultat = calcular_classificacio_estimada(obj)
+        return {
+            # La lletra (A–G) o null si les dades són insuficients
+            "lletra": obj.classificacioEstimada,
+            # Indica clarament si és oficial, estimada o insuficient
+            "font": obj.classificacioFont,
+            # Etiqueta llegible per mostrar directament a la UI
+            "etiqueta": _etiqueta_font(obj.classificacioFont),
+            # Missatge explicatiu del càlcul
+            "detall": resultat["detall"],
+            # Llista de camps que falten (només present si font='insuficient')
+            "dades_insuficients": resultat.get("dades_insuficients"),
+        }
+    habitatges = serializers.SerializerMethodField()  # ← NOU
+
+    def get_habitatges(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return []
+        
+        user = request.user
+        role = getattr(getattr(user, 'profile', None), 'role', None)
+
+        if role == RoleChoices.ADMIN and obj.administradorFinca == user:
+            # Admin de la finca veu tots els habitatges
+            qs = obj.habitatges.all()
+        else:
+            # Owner/Tenant: només els seus
+            qs = obj.habitatges.filter(usuari=user)
+
+        return HabitatgeResumSerializer(qs, many=True).data
     class Meta:
         model = Edifici
         fields = '__all__'

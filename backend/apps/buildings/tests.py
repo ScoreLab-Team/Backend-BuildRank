@@ -762,7 +762,7 @@ class ClassificacioEstimadaServeiTests(BaseTestData):
     def _dades_completes(self, consum=20.0, emissions=10.0, aillament=80.0, rehab=False, qualificacio=None):
         """Helper: retorna un dict vàlid per crear DadesEnergetiques."""
         return {
-            "qualificacioGlobal": qualificacio or LletraEnergetica.B,
+             "qualificacioGlobal": qualificacio,  # ← None per defecte, sense fallback a B
             "consumEnergiaPrimaria": consum,
             "consumEnergiaFinal": 15.0,
             "emissionsCO2": emissions,

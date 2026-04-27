@@ -83,18 +83,18 @@ def calcular_classificacio_estimada(edifici):
         if dades and dades.qualificacioGlobal:
             lletres_oficials.append(dades.qualificacioGlobal)
 
-    if len(lletres_oficials) == habitatges.count():
-        ordre = list(LletraEnergetica.values)
-        pitjor = max(lletres_oficials, key=lambda l: ordre.index(l))
-        return {
-            "classificacio": pitjor,
-            "font": FontClassificacio.OFICIAL,
-            "detall": (
-                f"Classificació obtinguda a partir dels certificats oficials "
-                f"de {len(lletres_oficials)} habitatge(s). "
-                f"Es mostra la lletra més desfavorable ({pitjor})."
-            ),
-        }
+    if lletres_oficials and len(lletres_oficials) == habitatges.count():
+      ordre = list(LletraEnergetica.values)
+      pitjor = max(lletres_oficials, key=lambda l: ordre.index(l))
+      return {
+         "classificacio": pitjor,
+         "font": FontClassificacio.OFICIAL,
+         "detall": (
+               f"Classificació obtinguda a partir dels certificats oficials "
+               f"de {len(lletres_oficials)} habitatge(s). "
+               f"Es mostra la lletra més desfavorable ({pitjor})."
+         ),
+      }
 
     # --- Pas 2: Estimar a partir del BHS ---
     camps_que_falten = set()

@@ -140,11 +140,11 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
         resultat = calcular_classificacio_estimada(obj)
         return {
             # La lletra (A–G) o null si les dades són insuficients
-            "lletra": obj.classificacioEstimada,
+            "lletra": resultat["classificacio"],  
             # Indica clarament si és oficial, estimada o insuficient
-            "font": obj.classificacioFont,
+            "font": resultat["font"], 
             # Etiqueta llegible per mostrar directament a la UI
-            "etiqueta": _etiqueta_font(obj.classificacioFont),
+            "etiqueta": _etiqueta_font(resultat["font"]),
             # Missatge explicatiu del càlcul
             "detall": resultat["detall"],
             # Llista de camps que falten (només present si font='insuficient')

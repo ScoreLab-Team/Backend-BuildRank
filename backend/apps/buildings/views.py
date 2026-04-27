@@ -23,7 +23,7 @@ from .serializers import (
     RankingSerializer,
     CatalegMilloraSerializer,
     SimulacioMilloraPreviewSerializer,
-    SimulacioMilloraSerializer,
+    SimulacioMilloraSerializer, MilloraImplementadaSerializer,
 )
 from .permissions import (
     EsAdminEdifici,
@@ -458,6 +458,24 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         output = SimulacioMilloraSerializer(simulacio)
         return Response(output.data, status=status.HTTP_201_CREATED)
+    
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="millores-implementades",
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici],
+    )
+    def millores_implementades(self, request, pk=None):
+        edifici = self.get_object()
+
+        implementacions = (
+            edifici.implementacions
+            .select_related("millora")
+            .order_by("-dataExecucio", "-id")
+        )
+
+        serializer = MilloraImplementadaSerializer(implementacions, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
     
 
 class HabitatgeViewSet(viewsets.ModelViewSet):

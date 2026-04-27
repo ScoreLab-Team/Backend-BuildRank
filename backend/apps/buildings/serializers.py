@@ -9,6 +9,7 @@ from apps.buildings.models import (
     CatalegMillora,
     SimulacioMillora,
     SimulacioMilloraItem,
+    MilloraImplementada,
 )
 import re
 from datetime import date
@@ -311,3 +312,18 @@ class SimulacioMilloraSerializer(serializers.ModelSerializer):
             'items',
         ]
         read_only_fields = fields
+
+class MilloraImplementadaSerializer(serializers.ModelSerializer):
+    millora = CatalegMilloraSerializer(read_only=True)
+
+    class Meta:
+        model = MilloraImplementada
+        fields = [
+            "id",
+            "millora",
+            "dataExecucio",
+            "costReal",
+            "estatValidacio",
+            "observacionsAdmin",
+            "documentacioAdjunta",
+        ]

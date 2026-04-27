@@ -25,6 +25,12 @@ class LletraEnergetica(models.TextChoices):
     F = 'F', 'F'
     G = 'G', 'G'
 
+class FontClassificacio(models.TextChoices):
+    """Indica l'origen de la classificació energètica mostrada a l'edifici."""
+    OFICIAL     = 'oficial',     'Oficial (certificat)'
+    ESTIMADA    = 'estimada',    'Estimada (calculada)'
+    INSUFICIENT = 'insuficient', 'Dades insuficients'
+
 class EstatValidacio(models.TextChoices):
     PENDENT_DOCUMENTACIO = 'PendentDocumentacio', 'Pendent de documentació'
     EN_REVISIO = 'EnRevisió', 'En revisió'
@@ -126,6 +132,26 @@ class Edifici(models.Model):
     orientacioPrincipal = models.CharField(max_length=50, choices=TipusOrientacio.choices)
     puntuacioBase = models.FloatField(editable=False, null=True)
 
+    # --- US15: Classificació energètica estimada ---
+    # Lletra A–G calculada a partir del BHS. Null si no hi ha dades suficients.
+    classificacioEstimada = models.CharField(
+        max_length=1,
+        choices=LletraEnergetica.choices,
+        null=True,
+        blank=True,
+        editable=False,
+        help_text="Classificació energètica estimada (A–G). Null si no hi ha dades suficients."
+    )
+    # Indica si la classificació prové d'un certificat oficial, d'una estimació o si les dades són insuficients.
+    classificacioFont = models.CharField(
+        max_length=20,
+        choices=FontClassificacio.choices,
+        null=True,
+        blank=True,
+        editable=False,
+        help_text="Origen de la classificació: oficial, estimada o insuficient."
+    )
+
     actiu = models.BooleanField(default=True)
     dataDesactivacio = models.DateTimeField(null=True, blank=True)
     motivDesactivacio = models.TextField(blank=True)
@@ -161,14 +187,6 @@ class Edifici(models.Model):
 
     def __str__(self):
         return f"Edifici{self.idEdifici} - {self.localitzacio}"
-    
-    def save(self, *args, **kwargs):
-        # Calcul de exemple.
-        if self.superficieTotal:
-            self.puntuacioBase = self.superficieTotal * 0.1
-
-        super().save(*args, **kwargs)
-
 
 class EdificiAuditLog(models.Model):
     """
@@ -218,7 +236,12 @@ class EdificiAuditLog(models.Model):
 
 
 class DadesEnergetiques(models.Model):
-    qualificacioGlobal = models.CharField(max_length=1, choices=LletraEnergetica.choices)
+    qualificacioGlobal = models.CharField(
+        max_length=1,
+        choices=LletraEnergetica.choices,
+        null=True,   # ← permet NULL a la BD
+        blank=True   # ← permet formularis buits
+    )
     consumEnergiaPrimaria = models.FloatField()
     consumEnergiaFinal = models.FloatField()
     emissionsCO2 = models.FloatField()

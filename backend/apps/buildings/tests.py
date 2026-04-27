@@ -694,3 +694,326 @@ class EdificiAuditLogTests(BaseTestData):
         # Restaurar
         self.edifici.actiu = True
         self.edifici.save(update_fields=["actiu"])
+
+# ============================================================================
+# 8. US15 — CLASSIFICACIÓ ENERGÈTICA ESTIMADA (Tasks #148, #149, #150, #151)
+# ============================================================================
+
+from apps.buildings.models import DadesEnergetiques, FontClassificacio, LletraEnergetica
+from apps.buildings.scoring import calcular_classificacio_estimada, _score_a_lletra
+
+
+class ClassificacioEstimadaUnitatTests(TestCase):
+    """
+    Tests unitaris purs sobre les funcions de scoring.
+    No toquen la base de dades ni HTTP — molt ràpids.
+    """
+
+    # --- _score_a_lletra: tots els rangs ---
+
+    def test_score_a_lletra_cobreix_tots_els_rangs(self):
+        """Cada rang del mapeig retorna la lletra correcta."""
+        casos = [
+            (100,  LletraEnergetica.A),
+            (85,   LletraEnergetica.A),  # llindar exacte A
+            (84,   LletraEnergetica.B),
+            (70,   LletraEnergetica.B),  # llindar exacte B
+            (69,   LletraEnergetica.C),
+            (55,   LletraEnergetica.C),  # llindar exacte C
+            (54,   LletraEnergetica.D),
+            (40,   LletraEnergetica.D),  # llindar exacte D
+            (39,   LletraEnergetica.E),
+            (25,   LletraEnergetica.E),  # llindar exacte E
+            (24,   LletraEnergetica.F),
+            (10,   LletraEnergetica.F),  # llindar exacte F
+            (9,    LletraEnergetica.G),
+            (0,    LletraEnergetica.G),  # llindar exacte G
+        ]
+        for score, lletra_esperada in casos:
+            with self.subTest(score=score):
+                self.assertEqual(_score_a_lletra(score), lletra_esperada)
+
+    def test_score_negatiu_retorna_g(self):
+        """Un score negatiu (dades molt dolentes) retorna G sense petar."""
+        self.assertEqual(_score_a_lletra(-10), LletraEnergetica.G)
+
+
+class ClassificacioEstimadaServeiTests(BaseTestData):
+    """
+    Tests d'integració sobre calcular_classificacio_estimada.
+    Comproven els tres camins: oficial, estimada, insuficient.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = cls._create_user("admin_cls15@example.com", RoleChoices.ADMIN)
+        cls.grup = GrupComparable.objects.create(
+            idGrup=15, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="100-200"
+        )
+        cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=15)
+
+    def _crea_habitatge(self, ref, dades=None):
+        """Helper: crea un habitatge opcionalment amb DadesEnergetiques."""
+        h = Habitatge.objects.create(
+            referenciaCadastral=ref, planta="1", porta=ref[-1],
+            superficie=80, edifici=self.edifici,
+        )
+        if dades:
+            d = DadesEnergetiques.objects.create(**dades)
+            h.dadesEnergetiques = d
+            h.save(update_fields=["dadesEnergetiques"])
+        return h
+
+    def _dades_completes(self, consum=20.0, emissions=10.0, aillament=80.0, rehab=False, qualificacio=None):
+        """Helper: retorna un dict vàlid per crear DadesEnergetiques."""
+        return {
+             "qualificacioGlobal": qualificacio,  # ← None per defecte, sense fallback a B
+            "consumEnergiaPrimaria": consum,
+            "consumEnergiaFinal": 15.0,
+            "emissionsCO2": emissions,
+            "costAnualEnergia": 500.0,
+            "energiaCalefaccio": 5.0, "energiaRefrigeracio": 5.0,
+            "energiaACS": 5.0, "energiaEnllumenament": 5.0,
+            "emissionsCalefaccio": 2.0, "emissionsRefrigeracio": 2.0,
+            "emissionsACS": 2.0, "emissionsEnllumenament": 2.0,
+            "aillamentTermic": aillament,
+            "valorFinestres": 1.5,
+            "normativa": "CTE", "einaCertificacio": "CE3X",
+            "motiuCertificacio": "Venda",
+            "rehabilitacioEnergetica": rehab,
+            "dataEntrada": "2024-01-01",
+        }
+
+    # --- Cas: sense habitatges ---
+
+    def test_edifici_sense_habitatges_retorna_insuficient(self):
+        """Un edifici sense habitatges retorna font=insuficient i classificacio=None."""
+        # Usem un edifici nou buit per aïllar el test
+        loc = Localitzacio.objects.create(
+            carrer="Carrer buit", numero=99, codiPostal="08001",
+            barri="Centre", latitud=41.0, longitud=2.0, zonaClimatica="C2",
+        )
+        edifici_buit = Edifici.objects.create(
+            anyConstruccio=2000, tipologia="Residencial", superficieTotal=100,
+            reglament="CTE", orientacioPrincipal="Sud",
+            localitzacio=loc, administradorFinca=self.admin, grupComparable=self.grup,
+        )
+        resultat = calcular_classificacio_estimada(edifici_buit)
+        self.assertIsNone(resultat["classificacio"])
+        self.assertEqual(resultat["font"], FontClassificacio.INSUFICIENT)
+        self.assertIn("habitatges", resultat["dades_insuficients"])
+
+    # --- Cas: tots els habitatges amb qualificació oficial ---
+
+    def test_tots_oficials_retorna_font_oficial(self):
+        """Si tots els habitatges tenen qualificacioGlobal → font='oficial'."""
+        self._crea_habitatge("REF-OF1", self._dades_completes(qualificacio=LletraEnergetica.B))
+        self._crea_habitatge("REF-OF2", self._dades_completes(qualificacio=LletraEnergetica.D))
+
+        resultat = calcular_classificacio_estimada(self.edifici)
+        self.assertEqual(resultat["font"], FontClassificacio.OFICIAL)
+        # Ha de retornar la pitjor lletra (D > B en l'escala)
+        self.assertEqual(resultat["classificacio"], LletraEnergetica.D)
+
+    def test_oficial_retorna_la_pitjor_lletra(self):
+        """Amb lletres A, C, F → retorna F (la més desfavorable)."""
+        loc = Localitzacio.objects.create(
+            carrer="Carrer pitjor", numero=77, codiPostal="08001",
+            barri="Centre", latitud=41.0, longitud=2.0, zonaClimatica="C2",
+        )
+        edifici = Edifici.objects.create(
+            anyConstruccio=2005, tipologia="Residencial", superficieTotal=200,
+            reglament="CTE", orientacioPrincipal="Nord",
+            localitzacio=loc, administradorFinca=self.admin, grupComparable=self.grup,
+        )
+        for ref, lletra in [("REF-PIT1", LletraEnergetica.A),
+                             ("REF-PIT2", LletraEnergetica.C),
+                             ("REF-PIT3", LletraEnergetica.F)]:
+            h = Habitatge.objects.create(
+                referenciaCadastral=ref, planta="1", porta=ref[-1],
+                superficie=80, edifici=edifici,
+            )
+            d = DadesEnergetiques.objects.create(**self._dades_completes(qualificacio=lletra))
+            h.dadesEnergetiques = d
+            h.save(update_fields=["dadesEnergetiques"])
+
+        resultat = calcular_classificacio_estimada(edifici)
+        self.assertEqual(resultat["classificacio"], LletraEnergetica.F)
+
+    # --- Cas: estimació a partir del BHS ---
+
+    def test_dades_suficients_retorna_font_estimada(self):
+        """Habitatge amb dades crítiques cobertes → font='estimada' i lletra no nula."""
+        self._crea_habitatge("REF-EST1", self._dades_completes(consum=20.0, emissions=10.0, aillament=80.0))
+
+        resultat = calcular_classificacio_estimada(self.edifici)
+        self.assertEqual(resultat["font"], FontClassificacio.ESTIMADA)
+        self.assertIsNotNone(resultat["classificacio"])
+        self.assertIn(resultat["classificacio"], LletraEnergetica.values)
+
+    def test_rehabilitacio_millora_la_classificacio(self):
+        """Edifici amb rehabilitacioEnergetica=True obté millor score que sense."""
+        loc1 = Localitzacio.objects.create(
+            carrer="Carrer rehab", numero=11, codiPostal="08001",
+            barri="Centre", latitud=41.0, longitud=2.0, zonaClimatica="C2",
+        )
+        loc2 = Localitzacio.objects.create(
+            carrer="Carrer sense rehab", numero=12, codiPostal="08001",
+            barri="Centre", latitud=41.0, longitud=2.0, zonaClimatica="C2",
+        )
+        edifici_rehab = Edifici.objects.create(
+            anyConstruccio=2000, tipologia="Residencial", superficieTotal=100,
+            reglament="CTE", orientacioPrincipal="Sud",
+            localitzacio=loc1, administradorFinca=self.admin, grupComparable=self.grup,
+        )
+        edifici_sense = Edifici.objects.create(
+            anyConstruccio=2000, tipologia="Residencial", superficieTotal=100,
+            reglament="CTE", orientacioPrincipal="Sud",
+            localitzacio=loc2, administradorFinca=self.admin, grupComparable=self.grup,
+        )
+        for edifici, rehab, ref in [
+            (edifici_rehab, True,  "REF-REHAB1"),
+            (edifici_sense, False, "REF-SENSE1"),
+        ]:
+            h = Habitatge.objects.create(
+                referenciaCadastral=ref, planta="1", porta="A",
+                superficie=80, edifici=edifici,
+            )
+            d = DadesEnergetiques.objects.create(
+                **self._dades_completes(consum=20.0, emissions=10.0, aillament=50.0, rehab=rehab)
+            )
+            h.dadesEnergetiques = d
+            h.save(update_fields=["dadesEnergetiques"])
+
+        ordre = list(LletraEnergetica.values)  # [A, B, C, D, E, F, G]
+        res_rehab = calcular_classificacio_estimada(edifici_rehab)
+        res_sense = calcular_classificacio_estimada(edifici_sense)
+
+        idx_rehab = ordre.index(res_rehab["classificacio"])
+        idx_sense = ordre.index(res_sense["classificacio"])
+        # índex més baix = lletra millor (A=0, G=6)
+        self.assertLessEqual(idx_rehab, idx_sense)
+
+    # --- Cas: dades insuficients ---
+
+    def test_habitatge_sense_dades_energetiques_retorna_insuficient(self):
+        """Habitatge sense DadesEnergetiques → font='insuficient'."""
+        self._crea_habitatge("REF-NDE1")  # sense dades
+
+        resultat = calcular_classificacio_estimada(self.edifici)
+        self.assertEqual(resultat["font"], FontClassificacio.INSUFICIENT)
+        self.assertIsNone(resultat["classificacio"])
+        self.assertIn("dades_insuficients", resultat)
+
+    def test_camp_critic_a_zero_retorna_insuficient(self):
+        """consumEnergiaPrimaria=0 es considera dada insuficient."""
+        self._crea_habitatge(
+            "REF-ZERO1",
+            self._dades_completes(consum=0.0, emissions=10.0)  # consum a zero = insuficient
+        )
+        resultat = calcular_classificacio_estimada(self.edifici)
+        self.assertEqual(resultat["font"], FontClassificacio.INSUFICIENT)
+        self.assertIn("consumEnergiaPrimaria", resultat["dades_insuficients"])
+
+    def test_informa_quins_camps_falten(self):
+        """El resultat indica explícitament quins camps crítics falten."""
+        self._crea_habitatge(
+            "REF-MISS1",
+            self._dades_completes(consum=0.0, emissions=0.0)
+        )
+        resultat = calcular_classificacio_estimada(self.edifici)
+        self.assertIn("consumEnergiaPrimaria", resultat["dades_insuficients"])
+        self.assertIn("emissionsCO2", resultat["dades_insuficients"])
+
+    # --- Cas: cobertura parcial (alguns habitatges amb dades, altres sense) ---
+
+    def test_cobertura_parcial_estima_amb_els_que_tenen_dades(self):
+        """
+        Si alguns habitatges no tenen dades però d'altres sí,
+        el sistema estima a partir dels que en tenen i ho indica al detall.
+        """
+        self._crea_habitatge("REF-PAR1", self._dades_completes(consum=20.0, emissions=10.0))
+        self._crea_habitatge("REF-PAR2")  # sense dades
+
+        resultat = calcular_classificacio_estimada(self.edifici)
+        self.assertEqual(resultat["font"], FontClassificacio.ESTIMADA)
+        self.assertIsNotNone(resultat["classificacio"])
+        self.assertIn("Atenció", resultat["detall"])
+
+    # --- Comprovació del camp 'detall' ---
+
+    def test_detall_sempre_present_i_no_buit(self):
+        """El camp 'detall' sempre és present i no és una cadena buida."""
+        casos = [
+            {},                                                         # sense habitatges
+            {"REF-DET1": None},                                         # sense dades
+            {"REF-DET2": self._dades_completes(consum=20.0, emissions=10.0)},  # amb dades
+        ]
+        for habitatges in casos:
+            with self.subTest(habitatges=list(habitatges.keys())):
+                # Edifici fresc per cada subtest
+                loc = Localitzacio.objects.create(
+                    carrer=f"Carrer detall {len(habitatges)}", numero=50 + len(habitatges),
+                    codiPostal="08001", barri="Centre",
+                    latitud=41.0, longitud=2.0, zonaClimatica="C2",
+                )
+                e = Edifici.objects.create(
+                    anyConstruccio=2000, tipologia="Residencial", superficieTotal=100,
+                    reglament="CTE", orientacioPrincipal="Sud",
+                    localitzacio=loc, administradorFinca=self.admin, grupComparable=self.grup,
+                )
+                for ref, dades in habitatges.items():
+                    h = Habitatge.objects.create(
+                        referenciaCadastral=ref, planta="1", porta="A",
+                        superficie=80, edifici=e,
+                    )
+                    if dades:
+                        d = DadesEnergetiques.objects.create(**dades)
+                        h.dadesEnergetiques = d
+                        h.save(update_fields=["dadesEnergetiques"])
+
+                resultat = calcular_classificacio_estimada(e)
+                self.assertIn("detall", resultat)
+                self.assertTrue(resultat["detall"])  # no buit
+
+
+class ClassificacioEstimadaSerializerTests(BaseTestData):
+    """
+    US15 — Task #150: comprova que el serializer exposa correctament
+    el camp classificacio_energetica a la fitxa de l'edifici.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = cls._create_user("admin_ser15@example.com", RoleChoices.ADMIN)
+        cls.grup = GrupComparable.objects.create(
+            idGrup=16, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="100-200"
+        )
+        cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=16)
+
+    def test_detail_endpoint_inclou_classificacio_energetica(self):
+        """GET /edificis/{id}/ inclou el camp classificacio_energetica."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(reverse("edifici-detail", args=[self.edifici.idEdifici]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("classificacio_energetica", response.data)
+
+    def test_classificacio_energetica_te_estructura_correcta(self):
+        """El camp classificacio_energetica té les claus: lletra, font, etiqueta, detall."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(reverse("edifici-detail", args=[self.edifici.idEdifici]))
+        camp = response.data["classificacio_energetica"]
+        for clau in ("lletra", "font", "etiqueta", "detall"):
+            with self.subTest(clau=clau):
+                self.assertIn(clau, camp)
+
+    def test_etiqueta_marcada_com_estimada_o_insuficient(self):
+        """
+        Sense certificats oficials, l'etiqueta ha de ser 'estimada' o 'insuficient',
+        mai 'oficial'. Garanteix que la UI no enganya l'usuari.
+        """
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(reverse("edifici-detail", args=[self.edifici.idEdifici]))
+        font = response.data["classificacio_energetica"]["font"]
+        self.assertIn(font, [FontClassificacio.ESTIMADA, FontClassificacio.INSUFICIENT])
+        self.assertNotEqual(font, FontClassificacio.OFICIAL)

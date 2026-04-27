@@ -14,6 +14,8 @@ from apps.buildings.models import (
 import re
 from datetime import date
 
+from apps.accounts.models import RoleChoices
+from .scoring import calcular_classificacio_estimada
 
 class LocalitzacioSerializer(serializers.ModelSerializer):
     class Meta:
@@ -142,6 +144,15 @@ class EdificiListSerializer(serializers.ModelSerializer):
         model = Edifici
         fields = ['idEdifici', 'tipologia', 'anyConstruccio', 'superficieTotal', 'puntuacioBase']
 
+def _etiqueta_font(font: str | None) -> str:
+    """Retorna una etiqueta llegible per a la UI segons l'origen de la classificació."""
+    etiquetes = {
+        'oficial':     'Classificació oficial',
+        'estimada':    'Classificació estimada',
+        'insuficient': 'Dades insuficients',
+    }
+    return etiquetes.get(font, '— Sense classificació')
+
 # Edifici 2. Detall públic (localitzacio anidada + camps extra)
 class EdificiDetailSerializer(serializers.ModelSerializer):
     localitzacio = LocalitzacioSerializer(read_only=True)
@@ -149,42 +160,93 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
     # Camp d'escriptura per crear/actualitzar la relació amb una localització existent.
     # El frontend envia localitzacioId, i el backend retorna localitzacio anidada.
     localitzacioId = serializers.PrimaryKeyRelatedField(
-        source='localitzacio',
+        source="localitzacio",
         queryset=Localitzacio.objects.all(),
         write_only=True,
         required=False,
         allow_null=True,
     )
 
+    # US15: Classificació energètica estimada/oficial/insuficient.
+    classificacio_energetica = serializers.SerializerMethodField(
+        help_text="Classificació energètica de l'edifici. Pot ser oficial, estimada o insuficient."
+    )
+
+    # Habitatges visibles segons el rol de l'usuari autenticat.
+    habitatges = serializers.SerializerMethodField()
+
     class Meta:
         model = Edifici
         fields = [
-            'idEdifici',
-            'anyConstruccio',
-            'tipologia',
-            'superficieTotal',
-            'nombrePlantes',
-            'reglament',
-            'orientacioPrincipal',
-            'puntuacioBase',
-            'actiu',
-            'dataDesactivacio',
-            'motivDesactivacio',
-            'localitzacio',
-            'localitzacioId',
-            'administradorFinca',
-            'grupComparable',
+            "idEdifici",
+            "anyConstruccio",
+            "tipologia",
+            "superficieTotal",
+            "nombrePlantes",
+            "reglament",
+            "orientacioPrincipal",
+            "puntuacioBase",
+            "classificacioEstimada",
+            "classificacioFont",
+            "classificacio_energetica",
+            "actiu",
+            "dataDesactivacio",
+            "motivDesactivacio",
+            "localitzacio",
+            "localitzacioId",
+            "administradorFinca",
+            "grupComparable",
+            "habitatges",
         ]
         read_only_fields = [
-            'idEdifici',
-            'puntuacioBase',
-            'actiu',
-            'dataDesactivacio',
-            'motivDesactivacio',
-            'localitzacio',
-            'administradorFinca',
-            'grupComparable',
+            "idEdifici",
+            "puntuacioBase",
+            "classificacioEstimada",
+            "classificacioFont",
+            "classificacio_energetica",
+            "actiu",
+            "dataDesactivacio",
+            "motivDesactivacio",
+            "localitzacio",
+            "administradorFinca",
+            "grupComparable",
+            "habitatges",
         ]
+
+    def get_classificacio_energetica(self, obj):
+        """
+        Retorna la classificació energètica amb tota la informació necessària
+        perquè la UI pugui diferenciar si és oficial, estimada o insuficient.
+        """
+        resultat = calcular_classificacio_estimada(obj)
+
+        return {
+            "lletra": resultat["classificacio"],
+            "font": resultat["font"],
+            "etiqueta": _etiqueta_font(resultat["font"]),
+            "detall": resultat["detall"],
+            "dades_insuficients": resultat.get("dades_insuficients"),
+        }
+
+    def get_habitatges(self, obj):
+        request = self.context.get("request")
+
+        if not request or not request.user.is_authenticated:
+            return []
+
+        user = request.user
+        role = getattr(getattr(user, "profile", None), "role", None)
+
+        if user.is_superuser:
+            qs = obj.habitatges.all()
+        elif role == RoleChoices.ADMIN and obj.administradorFinca == user:
+            # Administrador de finca: veu tots els habitatges de l'edifici que administra.
+            qs = obj.habitatges.all()
+        else:
+            # Owner/Tenant: només veu els habitatges vinculats al seu usuari.
+            qs = obj.habitatges.filter(usuari=user)
+
+        return HabitatgeResumSerializer(qs, many=True).data
 
     def get_bhs(self, obj):
         last_bhs = obj.bhs_history.first()

@@ -1,0 +1,53 @@
+services:
+
+  # Base de datos PostgreSQL
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       buildrank
+      POSTGRES_USER:     buildrank_user
+      POSTGRES_PASSWORD: buildrank_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"   # expuesto para poder conectar con psql / DBeaver desde el host
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U buildrank_user -d buildrank"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Django con Gunicorn
+  web:
+    build: ./backend
+    volumes:
+      - ./backend:/app   # monta el código para que --reload funcione en desarrollo
+      - static_volume:/app/staticfiles
+    command: sh -c "python manage.py collectstatic --noinput && gunicorn --config gunicorn.conf.py config.wsgi:application"
+    environment:
+      DEBUG:       "True"
+      DB_HOST:     db
+      DB_PORT:     "5432"
+      DB_NAME:     buildrank
+      DB_USER:     buildrank_user
+      DB_PASSWORD: buildrank_pass
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8000"
+
+  # Nginx como reverse proxy
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - static_volume:/app/staticfiles:ro
+    depends_on:
+      - web
+
+volumes:
+  postgres_data:
+  static_volume:

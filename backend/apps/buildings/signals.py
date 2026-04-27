@@ -1,37 +1,50 @@
+# apps/buildings/signals.py
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 
 from .models import Habitatge, DadesEnergetiques
-from .scoring import calcular_building_health_score
+from .scoring import calcular_building_health_score, calcular_classificacio_estimada
 
-@receiver(post_save, sender=Habitatge)
-@receiver(post_delete, sender=Habitatge)
-@receiver(post_save, sender=DadesEnergetiques)
-@receiver(post_delete, sender=DadesEnergetiques)
-def actualizar_bhs_edificio(sender, instance, **kwargs):
-    edificio = instance.edifici
+
+def _recalcular_edifici(edificio):
+    """Lògica compartida per recalcular BHS i classificació d'un edifici."""
     if not edificio:
         return
 
-    # Loop por todos los habitatges del edificio
     scores = []
     for h in edificio.habitatges.all():
-        if hasattr(h, "dadesEnergetiques"):
+        if hasattr(h, "dadesEnergetiques") and h.dadesEnergetiques is not None:
             score_data = calcular_building_health_score(h.dadesEnergetiques)
             scores.append(score_data["score"])
-            print(f"[DEBUG] BHS calculado para {h.referenciaCadastral}: {score_data['score']}")
 
     if scores:
         promedio = sum(scores) / len(scores)
-
-        # Guardar en la historia
-        edificio.bhs_history.create(
-            score=promedio,
-            version="1.0",
-            pesos={}
-        )
-
-        # Actualizar el campo actual del edificio
+        edificio.bhs_history.create(score=promedio, version="1.0", pesos={})
         edificio.puntuacioBase = promedio
-        edificio.save(update_fields=["puntuacioBase"])
-        print(f"[DEBUG] BHS actualizado en Edifici {edificio.idEdifici}: {edificio.puntuacioBase}")
+
+    resultat = calcular_classificacio_estimada(edificio)
+    edificio.classificacioEstimada = resultat["classificacio"]
+    edificio.classificacioFont = resultat["font"]
+
+    edificio.save(update_fields=[
+        "puntuacioBase",
+        "classificacioEstimada",
+        "classificacioFont",
+    ])
+
+
+@receiver(post_save, sender=Habitatge)
+@receiver(post_delete, sender=Habitatge)
+def signal_habitatge(sender, instance, **kwargs):
+    _recalcular_edifici(instance.edifici)
+
+
+@receiver(post_save, sender=DadesEnergetiques)
+@receiver(post_delete, sender=DadesEnergetiques)
+def signal_dades_energetiques(sender, instance, **kwargs):
+    # La relació és inversa: Habitatge → DadesEnergetiques
+    try:
+        habitatge = instance.dades_energetiques  # related_name del OneToOneField
+    except Habitatge.DoesNotExist:
+        return  # Creat des de l'admin sense habitatge → ignorem
+    _recalcular_edifici(habitatge.edifici)

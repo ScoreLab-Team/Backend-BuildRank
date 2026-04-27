@@ -225,3 +225,14 @@ class AccountUpdateSerializer(serializers.ModelSerializer):
         instance.last_name = validated_data.get("last_name", instance.last_name)
         instance.save(update_fields=["first_name", "last_name"])
         return instance
+
+class RoleUpdateSerializer(serializers.Serializer):
+    role = serializers.ChoiceField(choices=RoleChoices.choices)
+
+    def validate_role(self, value):
+        allowed_roles = {RoleChoices.OWNER, RoleChoices.TENANT}
+        if value not in allowed_roles:
+            raise serializers.ValidationError(
+                "Només es permet canviar entre els rols owner i tenant."
+            )
+        return value

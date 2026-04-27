@@ -3,9 +3,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.decorators import api_view, action
+from rest_framework.decorators import api_view, action, permission_classes
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.db.models import Q
 
 from apps.accounts.permissions import ABACMixin, IsAdminSistema
 from apps.accounts.models import RoleChoices
@@ -598,17 +599,63 @@ class EdificiEsborrarAPIView(ABACMixin, APIView):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def autocomplete_carrers(request):
+    """
+    Suggeriments de carrers per al formulari d'alta d'edifici.
+
+    La cerca és tolerant:
+    - cerca a nom_oficial i nom_curt
+    - ignora paraules habituals com "carrer", "de", "avinguda"
+    - retorna codi_via i codi_carrer_ine per facilitar depuració
+    """
     query = request.GET.get('q', '').strip()
-    if not query:
+
+    if len(query) < 2:
         return Response([])
 
-    resultados = (carrersBarcelona.objects
-                  .filter(nom_oficial__icontains=query)
-                  .values('nom_oficial', 'tipus_via', 'nre_min', 'nre_max')
-                  .distinct()[:5])
+    stopwords = {
+        'carrer', 'calle', 'c/', 'c',
+        'avinguda', 'avenida', 'av', 'av.',
+        'passeig', 'paseo', 'pg', 'pg.',
+        'plaça', 'plaza', 'pl', 'pl.',
+        'de', 'del', 'la', 'les', 'el', 'els',
+    }
 
-    return Response(list(resultados))
+    terms = [
+        term.strip()
+        for term in query.replace(',', ' ').split()
+        if term.strip().lower() not in stopwords
+    ]
+
+    if not terms:
+        terms = [query]
+
+    queryset = carrersBarcelona.objects.all()
+
+    for term in terms:
+        queryset = queryset.filter(
+            Q(nom_oficial__icontains=term)
+            | Q(nom_curt__icontains=term)
+            | Q(tipus_via__icontains=term)
+        )
+
+    resultats = (
+        queryset
+        .values(
+            'codi_via',
+            'codi_carrer_ine',
+            'nom_oficial',
+            'nom_curt',
+            'tipus_via',
+            'nre_min',
+            'nre_max',
+        )
+        .order_by('nom_oficial', 'nre_min')
+        .distinct()[:10]
+    )
+
+    return Response(list(resultats))
 
 class RankingViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = RankingSerializer

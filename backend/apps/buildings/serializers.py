@@ -48,19 +48,38 @@ class LocalitzacioSerializer(serializers.ModelSerializer):
         carrer = data.get("carrer")
         numero = data.get("numero")
 
-        if not carrer or not numero:
-            raise serializers.ValidationError("Dirección incompleta")
+        if not carrer or numero is None:
+            raise serializers.ValidationError("La direcció és incompleta.")
 
-        try:
-            carrer_obj = carrersBarcelona.objects.get(nom_oficial__iexact=carrer)
-        except carrersBarcelona.DoesNotExist:
+        carrers = carrersBarcelona.objects.filter(nom_oficial__iexact=carrer)
+
+        if not carrers.exists():
             raise serializers.ValidationError(
-                f"La calle '{carrer}' no existe en nuestra base de datos."
+                f"El carrer '{carrer}' no existeix a la base de dades de carrers."
             )
 
-        if numero < carrer_obj.nre_min or numero > carrer_obj.nre_max:
+        numero_valid = False
+        rangs_disponibles = []
+
+        for carrer_obj in carrers:
+            nre_min = carrer_obj.nre_min
+            nre_max = carrer_obj.nre_max
+
+            if nre_min is not None and nre_max is not None:
+                rangs_disponibles.append(f"{nre_min}-{nre_max}")
+
+            min_ok = nre_min is None or numero >= nre_min
+            max_ok = nre_max is None or numero <= nre_max
+
+            if min_ok and max_ok:
+                numero_valid = True
+                break
+
+        if not numero_valid:
+            rangs_text = ", ".join(rangs_disponibles) if rangs_disponibles else "rang no informat"
             raise serializers.ValidationError(
-                f"El número {numero} no está en el rango permitido para {carrer} ({carrer_obj.nre_min}-{carrer_obj.nre_max})"
+                f"El número {numero} no està dins del rang permès per {carrer}. "
+                f"Rangs disponibles: {rangs_text}."
             )
 
         return data

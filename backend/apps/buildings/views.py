@@ -153,6 +153,14 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return EdificiListSerializer
         return EdificiDetailSerializer  # retrieve, update, create...permission_classes = [IsAuthenticated]
     
+    def perform_create(self, serializer):
+        """
+        Quan un administrador de finca crea un edifici, el backend el vincula
+        automàticament a l'usuari autenticat. El frontend no ha d'enviar
+        administradorFinca manualment.
+        """
+        serializer.save(administradorFinca=self.request.user)
+    
     def get_permissions(self):
         if self.action in ['destroy']:
             return [IsAuthenticated(), EsAdminEdifici()]

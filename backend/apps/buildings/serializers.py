@@ -125,25 +125,57 @@ class EdificiListSerializer(serializers.ModelSerializer):
 # Edifici 2. Detall públic (localitzacio anidada + camps extra)
 class EdificiDetailSerializer(serializers.ModelSerializer):
     localitzacio = LocalitzacioSerializer(read_only=True)
-    
+
+    # Camp d'escriptura per crear/actualitzar la relació amb una localització existent.
+    # El frontend envia localitzacioId, i el backend retorna localitzacio anidada.
+    localitzacioId = serializers.PrimaryKeyRelatedField(
+        source='localitzacio',
+        queryset=Localitzacio.objects.all(),
+        write_only=True,
+        required=False,
+        allow_null=True,
+    )
+
     class Meta:
         model = Edifici
-        fields = '__all__'
-        read_only_fields = ['administradorFinca']
-    
-    def create(self, validated_data):
-        user = self.context['request'].user
-        return Edifici.objects.create(administradorFinca=user, **validated_data)
+        fields = [
+            'idEdifici',
+            'anyConstruccio',
+            'tipologia',
+            'superficieTotal',
+            'nombrePlantes',
+            'reglament',
+            'orientacioPrincipal',
+            'puntuacioBase',
+            'actiu',
+            'dataDesactivacio',
+            'motivDesactivacio',
+            'localitzacio',
+            'localitzacioId',
+            'administradorFinca',
+            'grupComparable',
+        ]
+        read_only_fields = [
+            'idEdifici',
+            'puntuacioBase',
+            'actiu',
+            'dataDesactivacio',
+            'motivDesactivacio',
+            'localitzacio',
+            'administradorFinca',
+            'grupComparable',
+        ]
 
     def get_bhs(self, obj):
-        last_bhs = obj.bhs_history.first()  # devuelve el último registrado
+        last_bhs = obj.bhs_history.first()
         if last_bhs:
             return {
                 "score": last_bhs.score,
                 "version": last_bhs.version,
-                "pesos": last_bhs.pesos
+                "pesos": last_bhs.pesos,
             }
-    # validacio any de construcció
+        return None
+
     def validate_anyConstruccio(self, value):
         any_actual = date.today().year
         if value < 1800 or value > any_actual:
@@ -152,7 +184,6 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
             )
         return value
 
-    # validacio superficie
     def validate_superficieTotal(self, value):
         if value <= 0:
             raise serializers.ValidationError(

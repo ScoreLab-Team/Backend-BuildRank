@@ -2,7 +2,7 @@
 
 import csv
 from itertools import groupby
-
+from datetime import datetime
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
@@ -15,6 +15,7 @@ from apps.buildings.models import (
     TipusEdifici,
     TipusEdificiOpenData,
     TipusOrientacio,
+    DadesEnergetiquesOpenData,
 )
 from apps.buildings.services.open_data_tipologia import map_tipus_edifici
 def _llegir_chunk(fitxer: str, offset_edificis: int, limit_edificis: int | None) -> list[dict]:
@@ -48,6 +49,64 @@ def _llegir_chunk(fitxer: str, offset_edificis: int, limit_edificis: int | None)
             files.append(fila)
 
     return files
+
+def _f(fila: dict, camp: str) -> float: 
+    """Converteix un camp numèric del CSV (amb coma decimal) a float.""" 
+    return float((fila.get(camp) or '0').replace(',', '.'))
+
+def _parse_date(value):
+    if not value:
+        return None
+
+    value = str(value).strip()
+
+    try:
+        # format europeu: DD/MM/YYYY
+        return datetime.strptime(value, "%d/%m/%Y").date()
+    except ValueError:
+        try:
+            # per si algun ja ve bé
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError:
+            raise ValueError(f"Data invàlida: '{value}'")
+def _bool_si(fila: dict, camp: str) -> bool:
+    return (fila.get(camp) or '').strip().upper() == 'SI'
+
+def _construir_dades_energetiques(grup: list[dict]):
+    """
+    Agafa la primera fila del grup com a representativa de l'edifici.
+    Per a blocs de pisos, podria fer-se una mitjana, però la primera
+    fila és suficient per a la seed inicial.
+    """
+    f = grup[0]
+    data_raw = _parse_date(f.get('DATA_ENTRADA'))
+
+    return DadesEnergetiquesOpenData(
+        qualificacioGlobal      = f.get("Qualificació de consum d'energia primaria no renovable") or None,
+        consumEnergiaPrimaria   = _f(f, 'Energia primària no renovable'),
+        consumEnergiaFinal      = _f(f, 'Consum d\'energia final'),
+        emissionsCO2            = _f(f, 'Emissions de CO2'),
+        costAnualEnergia        = _f(f, 'Cost anual aproximat d\'energia per habitatge'),
+        energiaCalefaccio       = _f(f, 'Energia calefacció'),
+        energiaRefrigeracio     = _f(f, 'Energia refrigeració'),
+        energiaACS              = _f(f, 'Energia ACS'),
+        energiaEnllumenament    = _f(f, 'Energia enllumenament'),
+        emissionsCalefaccio     = _f(f, 'Emissions calefacció'),
+        emissionsRefrigeracio   = _f(f, 'Emissions refrigeració'),
+        emissionsACS            = _f(f, 'Emissions ACS'),
+        emissionsEnllumenament  = _f(f, 'Emissions enllumenament'),
+        aillamentTermic         = _f(f, 'VALOR AILLAMENTS'),
+        valorFinestres          = _f(f, 'VALOR FINESTRES'),
+        normativa               = f.get('Normativa construcció') or '',
+        einaCertificacio        = f.get('Eina de certificacio') or '',
+        motiuCertificacio       = f.get('Motiu de la certificacio') or '',
+        rehabilitacioEnergetica = (f.get('REHABILITACIO_ENERGETICA') or '').lower() == 'sí',
+        dataEntrada             = data_raw,
+        teSolarTermica          = _bool_si(f, 'SOLAR TERMICA'),
+        teSolarFotovoltaica     = _bool_si(f, 'SOLAR FOTOVOLTAICA'),
+        teBiomassa              = _bool_si(f, 'SISTEMA BIOMASSA'),
+        teGeotermia             = _bool_si(f, 'ENERGIA GEOTERMICA'),
+    )
 
 class Command(BaseCommand):
     help = 'Importa dades obertes CEE — crea Edificis i Localitzacions'
@@ -126,7 +185,11 @@ class Command(BaseCommand):
                             )
                             edifici.localitzacio = loc
                             edifici.save()
+                            dades_od = _construir_dades_energetiques(grup)
+                            dades_od.edifici = edifici
+                            dades_od.save()
                             edificis_creats += 1
+                            
                         else:
                             self.stdout.write(
                                 f"  [dry] {clau[0].title()} {clau[1]}, "
@@ -141,7 +204,7 @@ class Command(BaseCommand):
                         ImportacioIncidencia.objects.create(
                             importacio=log,
                             num_cas=fila.get('NUM_CAS', ''),
-                            motiu=str(e),
+                            motiu=f"{type(e).__name__}: {e}",
                             dades_raw={
                                 'NUM_CAS':    fila.get('NUM_CAS', ''),
                                 'ADREÇA':     fila.get('ADREÇA', ''),

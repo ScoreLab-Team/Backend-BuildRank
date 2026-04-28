@@ -2,6 +2,7 @@
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
+from django.db.models import Avg
 
 class TipusEdifici(models.TextChoices):
     RESIDENCIAL = 'Residencial', 'Residencial'
@@ -171,6 +172,34 @@ class Edifici(models.Model):
         default=TipusEdificiOpenData.DESCONEGUT,
         blank=True
     )
+    @property
+    def qualificacio_efectiva(self):
+        habitatges_amb_dades = self.habitatges.filter(
+            dadesEnergetiques__isnull=False
+        ).select_related('dadesEnergetiques')
+
+        if habitatges_amb_dades.exists():
+            mitjana = habitatges_amb_dades.aggregate(
+                consum=Avg('dadesEnergetiques__consumEnergiaPrimaria'),
+                emissions=Avg('dadesEnergetiques__emissionsCO2'),
+            )
+            return {
+                'font': 'usuaris',
+                'consum': mitjana['consum'],
+                'emissions': mitjana['emissions'],
+                'n_habitatges': habitatges_amb_dades.count(),
+            }
+
+        if hasattr(self, 'dades_energetiques_opendata'):
+            od = self.dades_energetiques_opendata
+            return {
+                'font': 'opendata',
+                'consum': od.consumEnergiaPrimaria,
+                'emissions': od.emissionsCO2,
+                'n_habitatges': 0,
+            }
+
+        return {'font': None}
     actiu = models.BooleanField(default=True)
     dataDesactivacio = models.DateTimeField(null=True, blank=True)
     motivDesactivacio = models.TextField(blank=True)
@@ -200,7 +229,7 @@ class Edifici(models.Model):
         null=True,
         blank=True
     )
-
+    
     objects = models.Manager()  # opcional: Per defecte 
     actius = EdificiActiuManager() # Manager personalitzat per només retornar edificis actius
 
@@ -287,7 +316,58 @@ class DadesEnergetiques(models.Model):
 
     def __str__(self):
         return f"Qualificacio {self.qualificacioGlobal} - Data entrada: {self.dataEntrada}"
+class DadesEnergetiquesOpenData(models.Model):
+    """
+    US13 — Dades energètiques agregades provinents de l'open data CEE.
+    Una per edifici. Es guarda la primera fila representativa del grup.
+    No substitueix DadesEnergetiques (que és per habitatge amb usuari).
+    """
+    edifici = models.OneToOneField(
+        Edifici,
+        on_delete=models.CASCADE,
+        related_name='dades_energetiques_opendata'
+    )
 
+    # Qualificació global
+    qualificacioGlobal      = models.CharField(max_length=1, choices=LletraEnergetica.choices, null=True, blank=True)
+    consumEnergiaPrimaria   = models.FloatField(default=0)
+    consumEnergiaFinal      = models.FloatField(default=0)
+    emissionsCO2            = models.FloatField(default=0)
+    costAnualEnergia        = models.FloatField(default=0)
+
+    # Desglossament per servei
+    energiaCalefaccio       = models.FloatField(default=0)
+    energiaRefrigeracio     = models.FloatField(default=0)
+    energiaACS              = models.FloatField(default=0)
+    energiaEnllumenament    = models.FloatField(default=0)
+
+    emissionsCalefaccio     = models.FloatField(default=0)
+    emissionsRefrigeracio   = models.FloatField(default=0)
+    emissionsACS            = models.FloatField(default=0)
+    emissionsEnllumenament  = models.FloatField(default=0)
+
+    # Envolupant
+    aillamentTermic         = models.FloatField(default=0)
+    valorFinestres          = models.FloatField(default=0)
+
+    # Metadades
+    normativa               = models.CharField(max_length=255, blank=True)
+    einaCertificacio        = models.CharField(max_length=255, blank=True)
+    motiuCertificacio       = models.CharField(max_length=255, blank=True)
+    rehabilitacioEnergetica = models.BooleanField(default=False)
+    dataEntrada             = models.DateField(null=True, blank=True)
+
+    # Renovables
+    teSolarTermica          = models.BooleanField(default=False)
+    teSolarFotovoltaica     = models.BooleanField(default=False)
+    teBiomassa              = models.BooleanField(default=False)
+    teGeotermia             = models.BooleanField(default=False)
+
+    class Meta:
+        verbose_name = 'Dades energètiques open data'
+
+    def __str__(self):
+        return f"CEE {self.qualificacioGlobal} — Edifici {self.edifici_id}"
 
 class Habitatge(models.Model):
     referenciaCadastral = models.CharField(max_length=50, primary_key=True)

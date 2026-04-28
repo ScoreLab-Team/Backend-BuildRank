@@ -10,6 +10,14 @@ class TipusEdifici(models.TextChoices):
     EDUCATIU = 'Educatiu', 'Educatiu'
     MIXT = 'Mixt', 'Mixt'
 
+# OPENDATA: Tipus d'edifici segons dades obertes de l'Ajuntament de Barcelona (si coincideix amb els nostres, sinó es mapegen a TipusEdifici)
+class TipusEdificiOpenData(models.TextChoices):
+    BLOC_PISOS        = 'BlocPisos',    'Bloc de pisos'
+    UNIFAMILIAR       = 'Unifamiliar',  'Casa unifamiliar'
+    HABITATGE_BLOC    = 'HabitatgeBloc','Habitatge individual en bloc'
+    TERCIARI          = 'Terciari',     'Terciari'
+    DESCONEGUT        = 'Desconegut',   'Desconegut'
+
 class TipusOrientacio(models.TextChoices):
     NORD = 'Nord', 'Nord'
     SUD = 'Sud', 'Sud'
@@ -152,6 +160,17 @@ class Edifici(models.Model):
         help_text="Origen de la classificació: oficial, estimada o insuficient."
     )
 
+    font_open_data = models.BooleanField(
+        default=False,
+        help_text="True si les dades bàsiques provenen d'open data CEE"
+    )
+    num_cas_origen = models.CharField(max_length=100, blank=True, help_text="Identificador CEE d'origen")
+    tipologia_open_data = models.CharField(
+        max_length=20,
+        choices=TipusEdificiOpenData.choices,
+        default=TipusEdificiOpenData.DESCONEGUT,
+        blank=True
+    )
     actiu = models.BooleanField(default=True)
     dataDesactivacio = models.DateTimeField(null=True, blank=True)
     motivDesactivacio = models.TextField(blank=True)
@@ -583,3 +602,38 @@ class carrersBarcelona(models.Model):
 
     def __str__(self):
         return f"{self.tipus_via} {self.nom_oficial}"
+    
+
+class ImportacioLog(models.Model):
+    """US13 #138 #140 — Registra cada sessió d'importació de dades obertes."""
+    origen          = models.CharField(max_length=255, help_text="URL o nom del fitxer CSV")
+    data_inici      = models.DateTimeField(auto_now_add=True)
+    data_fi         = models.DateTimeField(null=True, blank=True)
+    usuari          = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='importacions'
+    )
+    total_files     = models.IntegerField(default=0)
+    files_ok        = models.IntegerField(default=0)
+    files_error     = models.IntegerField(default=0)
+    edificis_creats  = models.IntegerField(default=0)
+    habitatges_creats = models.IntegerField(default=0)
+    completada      = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['-data_inici']
+        verbose_name = 'Importació open data'
+
+    def __str__(self):
+        return f"Importació {self.data_inici:%Y-%m-%d} ({self.files_ok} ok / {self.files_error} errors)"
+
+
+class ImportacioIncidencia(models.Model):
+    """US13 #140 — Una incidència per fila fallada."""
+    importacio  = models.ForeignKey(ImportacioLog, on_delete=models.CASCADE, related_name='incidencies')
+    num_cas     = models.CharField(max_length=100, blank=True)  # identificador de la fila
+    motiu       = models.TextField()
+    dades_raw   = models.JSONField(null=True, blank=True)   # fila original per debug
+
+    class Meta:
+        ordering = ['id']

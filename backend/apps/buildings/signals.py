@@ -6,31 +6,48 @@ from .models import Habitatge, DadesEnergetiques
 from .scoring import calcular_building_health_score, calcular_classificacio_estimada
 
 
-def _recalcular_edifici(edificio):
-    """Lògica compartida per recalcular BHS i classificació d'un edifici."""
-    if not edificio:
+def _recalcular_edifici(edifici):
+    """Recalcula el BHS i la classificació energètica d'un edifici."""
+    if not edifici:
         return
 
+    update_fields = []
+
     scores = []
-    for h in edificio.habitatges.all():
-        if hasattr(h, "dadesEnergetiques") and h.dadesEnergetiques is not None:
-            score_data = calcular_building_health_score(h.dadesEnergetiques)
-            scores.append(score_data["score"])
+    habitatges = edifici.habitatges.select_related("dadesEnergetiques").all()
+
+    for habitatge in habitatges:
+        dades = getattr(habitatge, "dadesEnergetiques", None)
+
+        if dades is None:
+            continue
+
+        score_data = calcular_building_health_score(dades)
+        scores.append(score_data["score"])
 
     if scores:
-        promedio = sum(scores) / len(scores)
-        edificio.bhs_history.create(score=promedio, version="1.0", pesos={})
-        edificio.puntuacioBase = promedio
+        puntuacio = sum(scores) / len(scores)
 
-    resultat = calcular_classificacio_estimada(edificio)
-    edificio.classificacioEstimada = resultat["classificacio"]
-    edificio.classificacioFont = resultat["font"]
+        edifici.bhs_history.create(
+            score=puntuacio,
+            version="1.0",
+            pesos={},
+        )
 
-    edificio.save(update_fields=[
-        "puntuacioBase",
+        edifici.puntuacioBase = puntuacio
+        update_fields.append("puntuacioBase")
+
+    resultat = calcular_classificacio_estimada(edifici)
+
+    edifici.classificacioEstimada = resultat["classificacio"]
+    edifici.classificacioFont = resultat["font"]
+
+    update_fields.extend([
         "classificacioEstimada",
         "classificacioFont",
     ])
+
+    edifici.save(update_fields=update_fields)
 
 
 @receiver(post_save, sender=Habitatge)
@@ -42,9 +59,9 @@ def signal_habitatge(sender, instance, **kwargs):
 @receiver(post_save, sender=DadesEnergetiques)
 @receiver(post_delete, sender=DadesEnergetiques)
 def signal_dades_energetiques(sender, instance, **kwargs):
-    # La relació és inversa: Habitatge → DadesEnergetiques
     try:
-        habitatge = instance.dades_energetiques  # related_name del OneToOneField
+        habitatge = instance.dades_energetiques
     except Habitatge.DoesNotExist:
-        return  # Creat des de l'admin sense habitatge → ignorem
+        return
+
     _recalcular_edifici(habitatge.edifici)

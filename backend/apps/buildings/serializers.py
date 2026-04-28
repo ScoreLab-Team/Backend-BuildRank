@@ -1,6 +1,16 @@
 # apps/buildings/serializers.py
 from rest_framework import serializers
-from apps.buildings.models import Edifici, Habitatge, DadesEnergetiques, Localitzacio, carrersBarcelona
+from apps.buildings.models import (
+    Edifici,
+    Habitatge,
+    DadesEnergetiques,
+    Localitzacio,
+    carrersBarcelona,
+    CatalegMillora,
+    SimulacioMillora,
+    SimulacioMilloraItem,
+    MilloraImplementada,
+)
 import re
 from datetime import date
 
@@ -41,19 +51,38 @@ class LocalitzacioSerializer(serializers.ModelSerializer):
         carrer = data.get("carrer")
         numero = data.get("numero")
 
-        if not carrer or not numero:
-            raise serializers.ValidationError("Dirección incompleta")
+        if not carrer or numero is None:
+            raise serializers.ValidationError("La direcció és incompleta.")
 
-        try:
-            carrer_obj = carrersBarcelona.objects.get(nom_oficial__iexact=carrer)
-        except carrersBarcelona.DoesNotExist:
+        carrers = carrersBarcelona.objects.filter(nom_oficial__iexact=carrer)
+
+        if not carrers.exists():
             raise serializers.ValidationError(
-                f"La calle '{carrer}' no existe en nuestra base de datos."
+                f"El carrer '{carrer}' no existeix a la base de dades de carrers."
             )
 
-        if numero < carrer_obj.nre_min or numero > carrer_obj.nre_max:
+        numero_valid = False
+        rangs_disponibles = []
+
+        for carrer_obj in carrers:
+            nre_min = carrer_obj.nre_min
+            nre_max = carrer_obj.nre_max
+
+            if nre_min is not None and nre_max is not None:
+                rangs_disponibles.append(f"{nre_min}-{nre_max}")
+
+            min_ok = nre_min is None or numero >= nre_min
+            max_ok = nre_max is None or numero <= nre_max
+
+            if min_ok and max_ok:
+                numero_valid = True
+                break
+
+        if not numero_valid:
+            rangs_text = ", ".join(rangs_disponibles) if rangs_disponibles else "rang no informat"
             raise serializers.ValidationError(
-                f"El número {numero} no está en el rango permitido para {carrer} ({carrer_obj.nre_min}-{carrer_obj.nre_max})"
+                f"El número {numero} no està dins del rang permès per {carrer}. "
+                f"Rangs disponibles: {rangs_text}."
             )
 
         return data
@@ -127,65 +156,108 @@ def _etiqueta_font(font: str | None) -> str:
 # Edifici 2. Detall públic (localitzacio anidada + camps extra)
 class EdificiDetailSerializer(serializers.ModelSerializer):
     localitzacio = LocalitzacioSerializer(read_only=True)
-    
-    # --- US15: Classificació energètica estimada ---
-    classificacio_energetica = serializers.SerializerMethodField(
-        help_text="Classificació energètica de l'edifici. Pot ser oficial o estimada."
+
+    # Camp d'escriptura per crear/actualitzar la relació amb una localització existent.
+    # El frontend envia localitzacioId, i el backend retorna localitzacio anidada.
+    localitzacioId = serializers.PrimaryKeyRelatedField(
+        source="localitzacio",
+        queryset=Localitzacio.objects.all(),
+        write_only=True,
+        required=False,
+        allow_null=True,
     )
+
+    # US15: Classificació energètica estimada/oficial/insuficient.
+    classificacio_energetica = serializers.SerializerMethodField(
+        help_text="Classificació energètica de l'edifici. Pot ser oficial, estimada o insuficient."
+    )
+
+    # Habitatges visibles segons el rol de l'usuari autenticat.
+    habitatges = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Edifici
+        fields = [
+            "idEdifici",
+            "anyConstruccio",
+            "tipologia",
+            "superficieTotal",
+            "nombrePlantes",
+            "reglament",
+            "orientacioPrincipal",
+            "puntuacioBase",
+            "classificacioEstimada",
+            "classificacioFont",
+            "classificacio_energetica",
+            "actiu",
+            "dataDesactivacio",
+            "motivDesactivacio",
+            "localitzacio",
+            "localitzacioId",
+            "administradorFinca",
+            "grupComparable",
+            "habitatges",
+        ]
+        read_only_fields = [
+            "idEdifici",
+            "puntuacioBase",
+            "classificacioEstimada",
+            "classificacioFont",
+            "classificacio_energetica",
+            "actiu",
+            "dataDesactivacio",
+            "motivDesactivacio",
+            "localitzacio",
+            "administradorFinca",
+            "grupComparable",
+            "habitatges",
+        ]
+
     def get_classificacio_energetica(self, obj):
         """
         Retorna la classificació energètica amb tota la informació necessària
-        per mostrar-la correctament a la fitxa de l'edifici.
+        perquè la UI pugui diferenciar si és oficial, estimada o insuficient.
         """
         resultat = calcular_classificacio_estimada(obj)
+
         return {
-            # La lletra (A–G) o null si les dades són insuficients
-            "lletra": resultat["classificacio"],  
-            # Indica clarament si és oficial, estimada o insuficient
-            "font": resultat["font"], 
-            # Etiqueta llegible per mostrar directament a la UI
+            "lletra": resultat["classificacio"],
+            "font": resultat["font"],
             "etiqueta": _etiqueta_font(resultat["font"]),
-            # Missatge explicatiu del càlcul
             "detall": resultat["detall"],
-            # Llista de camps que falten (només present si font='insuficient')
             "dades_insuficients": resultat.get("dades_insuficients"),
         }
-    habitatges = serializers.SerializerMethodField()  # ← NOU
 
     def get_habitatges(self, obj):
-        request = self.context.get('request')
+        request = self.context.get("request")
+
         if not request or not request.user.is_authenticated:
             return []
-        
-        user = request.user
-        role = getattr(getattr(user, 'profile', None), 'role', None)
 
-        if role == RoleChoices.ADMIN and obj.administradorFinca == user:
-            # Admin de la finca veu tots els habitatges
+        user = request.user
+        role = getattr(getattr(user, "profile", None), "role", None)
+
+        if user.is_superuser:
+            qs = obj.habitatges.all()
+        elif role == RoleChoices.ADMIN and obj.administradorFinca == user:
+            # Administrador de finca: veu tots els habitatges de l'edifici que administra.
             qs = obj.habitatges.all()
         else:
-            # Owner/Tenant: només els seus
+            # Owner/Tenant: només veu els habitatges vinculats al seu usuari.
             qs = obj.habitatges.filter(usuari=user)
 
         return HabitatgeResumSerializer(qs, many=True).data
-    class Meta:
-        model = Edifici
-        fields = '__all__'
-        read_only_fields = ['administradorFinca']
-    
-    def create(self, validated_data):
-        user = self.context['request'].user
-        return Edifici.objects.create(administradorFinca=user, **validated_data)
 
     def get_bhs(self, obj):
-        last_bhs = obj.bhs_history.first()  # devuelve el último registrado
+        last_bhs = obj.bhs_history.first()
         if last_bhs:
             return {
                 "score": last_bhs.score,
                 "version": last_bhs.version,
-                "pesos": last_bhs.pesos
+                "pesos": last_bhs.pesos,
             }
-    # validacio any de construcció
+        return None
+
     def validate_anyConstruccio(self, value):
         any_actual = date.today().year
         if value < 1800 or value > any_actual:
@@ -194,7 +266,6 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
             )
         return value
 
-    # validacio superficie
     def validate_superficieTotal(self, value):
         if value <= 0:
             raise serializers.ValidationError(
@@ -206,3 +277,115 @@ class RankingSerializer(serializers.ModelSerializer):
     class Meta:
         model = Edifici
         fields = ['idEdifici','puntuacioBase'] #Afegir posició
+
+class CatalegMilloraSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CatalegMillora
+        fields = [
+            'idMillora',
+            'slug',
+            'nom',
+            'descripcio',
+            'categoria',
+            'activa',
+            'unitatBase',
+            'costEstimatBase',
+            'mantenimentAnual',
+            'vidaUtil',
+            'estalviEnergeticEstimat',
+            'impactePunts',
+            'nivellConfianca',
+            'ambit',
+            'requereixAcordComunitat',
+            'tipusAcordEstimat',
+            'requereixLlicenciaMunicipal',
+            'requereixTecnicCompetent',
+            'requereixCeePrePost',
+            'bloquejadorsFrequents',
+            'parametresBase',
+        ]
+
+
+class SimulacioMilloraItemInputSerializer(serializers.Serializer):
+    milloraId = serializers.IntegerField()
+    quantitat = serializers.FloatField(required=False, allow_null=True, min_value=0)
+    coberturaPercent = serializers.FloatField(required=False, default=100, min_value=0, max_value=100)
+
+
+class SimulacioMilloraPreviewSerializer(serializers.Serializer):
+    descripcio = serializers.CharField(required=False, allow_blank=True, default="")
+    millores = SimulacioMilloraItemInputSerializer(many=True)
+
+    def validate_millores(self, value):
+        if not value:
+            raise serializers.ValidationError("Cal seleccionar com a mínim una millora.")
+
+        ids = [item["milloraId"] for item in value]
+        existing_ids = set(
+            CatalegMillora.objects
+            .filter(idMillora__in=ids, activa=True)
+            .values_list("idMillora", flat=True)
+        )
+
+        missing = sorted(set(ids) - existing_ids)
+        if missing:
+            raise serializers.ValidationError(
+                f"Les millores següents no existeixen o no estan actives: {missing}"
+            )
+
+        return value
+
+
+class SimulacioMilloraItemSerializer(serializers.ModelSerializer):
+    millora = CatalegMilloraSerializer(read_only=True)
+
+    class Meta:
+        model = SimulacioMilloraItem
+        fields = [
+            'id',
+            'millora',
+            'quantitat',
+            'coberturaPercent',
+            'costEstimatParcial',
+            'reduccioConsumParcial',
+            'reduccioEmissionsParcial',
+            'impactePuntsParcial',
+            'resultatParcial',
+        ]
+
+
+class SimulacioMilloraSerializer(serializers.ModelSerializer):
+    items = SimulacioMilloraItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = SimulacioMillora
+        fields = [
+            'id',
+            'descripcio',
+            'edifici',
+            'reduccioConsumPrevista',
+            'reduccioEmissionsPrevista',
+            'costEstimat',
+            'estalviAnual',
+            'dataSimulacio',
+            'versioMotor',
+            'hipotesiBase',
+            'resultat',
+            'items',
+        ]
+        read_only_fields = fields
+
+class MilloraImplementadaSerializer(serializers.ModelSerializer):
+    millora = CatalegMilloraSerializer(read_only=True)
+
+    class Meta:
+        model = MilloraImplementada
+        fields = [
+            "id",
+            "millora",
+            "dataExecucio",
+            "costReal",
+            "estatValidacio",
+            "observacionsAdmin",
+            "documentacioAdjunta",
+        ]

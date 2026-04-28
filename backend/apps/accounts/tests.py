@@ -609,6 +609,44 @@ class AccountUpdateTests(BaseTestData):
         self.assertEqual(self.user.first_name, "NouNom")
         self.assertEqual(self.user.profile.role, RoleChoices.OWNER)
 
+    def test_authenticated_user_can_patch_own_email(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse("me"),
+            {
+                "email": "nou-email@example.com",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "nou-email@example.com")
+        self.assertEqual(response.data["email"], "nou-email@example.com")
+
+    def test_update_account_rejects_duplicate_email(self):
+        User.objects.create_user(
+            email="duplicat@example.com",
+            password="Password123",
+        )
+
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse("me"),
+            {
+                "email": "duplicat@example.com",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertNotEqual(self.user.email, "duplicat@example.com")
+        self.assertIn("email", response.data)
+
 
 
 class AuthEndpointTests(APITestCase):

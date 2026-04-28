@@ -511,13 +511,18 @@ class EdificiDesactivacioDryRunTests(BaseTestData):
     def test_advertencia_millores_en_proces(self):
         """Dry-run detecta millores implementades en procés de validació."""
         millora = CatalegMillora.objects.create(
-            nom="Millora test", categoria="Energia",
-            impactePunts=5.0, parametres="cap",
+            nom="Millora test",
+            categoria="Energia",
+            descripcio="Millora de prova per validar advertències de desactivació.",
+            costMinim=1000.0,
+            costMaxim=1500.0,
+            estalviEnergeticEstimat=5.0,
+            impactePunts=5.0,
         )
         MilloraImplementada.objects.create(
             dataExecucio="2025-01-01",
             costReal=1000.0,
-            estatValidacio=EstatValidacio.EN_PROCES,
+            estatValidacio=EstatValidacio.EN_REVISIO,
             millora=millora,
             edifici=self.edifici,
         )

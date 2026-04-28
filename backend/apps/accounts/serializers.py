@@ -218,12 +218,41 @@ class AssignarAdminSerializer(serializers.Serializer):
 class AccountUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ("first_name", "last_name")
+        fields = ("email", "first_name", "last_name")
+        extra_kwargs = {
+            "email": {"required": False},
+            "first_name": {"required": False, "allow_blank": True},
+            "last_name": {"required": False, "allow_blank": True},
+        }
+
+    def validate_email(self, value):
+        value = value.strip().lower()
+
+        if User.objects.exclude(pk=self.instance.pk).filter(email=value).exists():
+            raise serializers.ValidationError(
+                "Ja existeix un usuari amb aquest correu electrònic."
+            )
+
+        return value
 
     def update(self, instance, validated_data):
-        instance.first_name = validated_data.get("first_name", instance.first_name)
-        instance.last_name = validated_data.get("last_name", instance.last_name)
-        instance.save(update_fields=["first_name", "last_name"])
+        update_fields = []
+
+        if "email" in validated_data:
+            instance.email = validated_data["email"]
+            update_fields.append("email")
+
+        if "first_name" in validated_data:
+            instance.first_name = validated_data["first_name"]
+            update_fields.append("first_name")
+
+        if "last_name" in validated_data:
+            instance.last_name = validated_data["last_name"]
+            update_fields.append("last_name")
+
+        if update_fields:
+            instance.save(update_fields=update_fields)
+
         return instance
 
 class RoleUpdateSerializer(serializers.Serializer):

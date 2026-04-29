@@ -24,3 +24,7 @@ staticfiles/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Datasets locals grans / open data
+cee.csv
+backend/cee.csv

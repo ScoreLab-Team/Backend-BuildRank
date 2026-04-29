@@ -2,6 +2,7 @@
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
+from django.db.models import Avg
 
 class TipusEdifici(models.TextChoices):
     RESIDENCIAL = 'Residencial', 'Residencial'
@@ -9,6 +10,14 @@ class TipusEdifici(models.TextChoices):
     SANITARI = 'Sanitari', 'Sanitari'
     EDUCATIU = 'Educatiu', 'Educatiu'
     MIXT = 'Mixt', 'Mixt'
+
+# OPENDATA: Tipus d'edifici segons dades obertes de l'Ajuntament de Barcelona (si coincideix amb els nostres, sinó es mapegen a TipusEdifici)
+class TipusEdificiOpenData(models.TextChoices):
+    BLOC_PISOS        = 'BlocPisos',    'Bloc de pisos'
+    UNIFAMILIAR       = 'Unifamiliar',  'Casa unifamiliar'
+    HABITATGE_BLOC    = 'HabitatgeBloc','Habitatge individual en bloc'
+    TERCIARI          = 'Terciari',     'Terciari'
+    DESCONEGUT        = 'Desconegut',   'Desconegut'
 
 class TipusOrientacio(models.TextChoices):
     NORD = 'Nord', 'Nord'
@@ -152,6 +161,45 @@ class Edifici(models.Model):
         help_text="Origen de la classificació: oficial, estimada o insuficient."
     )
 
+    font_open_data = models.BooleanField(
+        default=False,
+        help_text="True si les dades bàsiques provenen d'open data CEE"
+    )
+    num_cas_origen = models.CharField(max_length=100, blank=True, help_text="Identificador CEE d'origen")
+    tipologia_open_data = models.CharField(
+        max_length=20,
+        choices=TipusEdificiOpenData.choices,
+        default=TipusEdificiOpenData.DESCONEGUT,
+        blank=True
+    )
+    @property
+    def qualificacio_efectiva(self):
+        habitatges_amb_dades = self.habitatges.filter(
+            dadesEnergetiques__isnull=False
+        ).select_related('dadesEnergetiques')
+
+        if habitatges_amb_dades.exists():
+            mitjana = habitatges_amb_dades.aggregate(
+                consum=Avg('dadesEnergetiques__consumEnergiaPrimaria'),
+                emissions=Avg('dadesEnergetiques__emissionsCO2'),
+            )
+            return {
+                'font': 'usuaris',
+                'consum': mitjana['consum'],
+                'emissions': mitjana['emissions'],
+                'n_habitatges': habitatges_amb_dades.count(),
+            }
+
+        if hasattr(self, 'dades_energetiques_opendata'):
+            od = self.dades_energetiques_opendata
+            return {
+                'font': 'opendata',
+                'consum': od.consumEnergiaPrimaria,
+                'emissions': od.emissionsCO2,
+                'n_habitatges': 0,
+            }
+
+        return {'font': None}
     actiu = models.BooleanField(default=True)
     dataDesactivacio = models.DateTimeField(null=True, blank=True)
     motivDesactivacio = models.TextField(blank=True)
@@ -181,6 +229,7 @@ class Edifici(models.Model):
         null=True,
         blank=True
     )
+    
 
     objects = models.Manager()  # opcional: Per defecte 
     actius = EdificiActiuManager() # Manager personalitzat per només retornar edificis actius
@@ -268,7 +317,58 @@ class DadesEnergetiques(models.Model):
 
     def __str__(self):
         return f"Qualificacio {self.qualificacioGlobal} - Data entrada: {self.dataEntrada}"
+class DadesEnergetiquesOpenData(models.Model):
+    """
+    US13 — Dades energètiques agregades provinents de l'open data CEE.
+    Una per edifici. Es guarda la primera fila representativa del grup.
+    No substitueix DadesEnergetiques (que és per habitatge amb usuari).
+    """
+    edifici = models.OneToOneField(
+        Edifici,
+        on_delete=models.CASCADE,
+        related_name='dades_energetiques_opendata'
+    )
 
+    # Qualificació global
+    qualificacioGlobal      = models.CharField(max_length=1, choices=LletraEnergetica.choices, null=True, blank=True)
+    consumEnergiaPrimaria   = models.FloatField(default=0)
+    consumEnergiaFinal      = models.FloatField(default=0)
+    emissionsCO2            = models.FloatField(default=0)
+    costAnualEnergia        = models.FloatField(default=0)
+
+    # Desglossament per servei
+    energiaCalefaccio       = models.FloatField(default=0)
+    energiaRefrigeracio     = models.FloatField(default=0)
+    energiaACS              = models.FloatField(default=0)
+    energiaEnllumenament    = models.FloatField(default=0)
+
+    emissionsCalefaccio     = models.FloatField(default=0)
+    emissionsRefrigeracio   = models.FloatField(default=0)
+    emissionsACS            = models.FloatField(default=0)
+    emissionsEnllumenament  = models.FloatField(default=0)
+
+    # Envolupant
+    aillamentTermic         = models.FloatField(default=0)
+    valorFinestres          = models.FloatField(default=0)
+
+    # Metadades
+    normativa               = models.CharField(max_length=255, blank=True)
+    einaCertificacio        = models.CharField(max_length=255, blank=True)
+    motiuCertificacio       = models.CharField(max_length=255, blank=True)
+    rehabilitacioEnergetica = models.BooleanField(default=False)
+    dataEntrada             = models.DateField(null=True, blank=True)
+
+    # Renovables
+    teSolarTermica          = models.BooleanField(default=False)
+    teSolarFotovoltaica     = models.BooleanField(default=False)
+    teBiomassa              = models.BooleanField(default=False)
+    teGeotermia             = models.BooleanField(default=False)
+
+    class Meta:
+        verbose_name = 'Dades energètiques open data'
+
+    def __str__(self):
+        return f"CEE {self.qualificacioGlobal} — Edifici {self.edifici_id}"
 
 class Habitatge(models.Model):
     referenciaCadastral = models.CharField(max_length=50, primary_key=True)
@@ -583,3 +683,38 @@ class carrersBarcelona(models.Model):
 
     def __str__(self):
         return f"{self.tipus_via} {self.nom_oficial}"
+    
+
+class ImportacioLog(models.Model):
+    """US13 #138 #140 — Registra cada sessió d'importació de dades obertes."""
+    origen          = models.CharField(max_length=255, help_text="URL o nom del fitxer CSV")
+    data_inici      = models.DateTimeField(auto_now_add=True)
+    data_fi         = models.DateTimeField(null=True, blank=True)
+    usuari          = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='importacions'
+    )
+    total_files     = models.IntegerField(default=0)
+    files_ok        = models.IntegerField(default=0)
+    files_error     = models.IntegerField(default=0)
+    edificis_creats  = models.IntegerField(default=0)
+    habitatges_creats = models.IntegerField(default=0)
+    completada      = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['-data_inici']
+        verbose_name = 'Importació open data'
+
+    def __str__(self):
+        return f"Importació {self.data_inici:%Y-%m-%d} ({self.files_ok} ok / {self.files_error} errors)"
+
+
+class ImportacioIncidencia(models.Model):
+    """US13 #140 — Una incidència per fila fallada."""
+    importacio  = models.ForeignKey(ImportacioLog, on_delete=models.CASCADE, related_name='incidencies')
+    num_cas     = models.CharField(max_length=100, blank=True)  # identificador de la fila
+    motiu       = models.TextField()
+    dades_raw   = models.JSONField(null=True, blank=True)   # fila original per debug
+
+    class Meta:
+        ordering = ['id']

@@ -159,7 +159,6 @@ class Command(BaseCommand):
                 for clau, grup in groupby(files, key=_clau_adreca)
             ]
 
-            grups = grups[offset: offset + limit if limit else None]
 
             #self.stdout.write(
             #    f"Processant {len(grups)} edificis "
@@ -195,7 +194,7 @@ class Command(BaseCommand):
                             #self.stdout.write(
                             #    f"  [dry] {clau[0].title()} {clau[1]}, "
                             #    f"{clau[2]} — {edifici.tipologia_open_data}"
-                            #)+
+                            #)
                             return
 
                         ok += len(grup)

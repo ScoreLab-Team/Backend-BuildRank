@@ -1,16 +1,20 @@
 from rest_framework import viewsets
-from rest_framework.decorators import action
+from rest_framework.decorators import action, permission_classes
 from rest_framework.response import Response
 from .pagination import RankingPagination
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.exceptions import NotFound
 
 from .models import Lliga
 from .serializers import LligaSerializer
 from apps.buildings.models import GrupComparable
 from apps.participations.models import Participacio
+from apps.accounts.permissions import ABACMixin, IsAdminSistema
 
 class LligaViewSet(viewsets.ModelViewSet):
     queryset = Lliga.objects.all()
     serializer_class = LligaSerializer
+    permission_classes=[IsAuthenticated]
 
     @action(detail=True, methods=["get"])
     def ranking(self, request, pk=None):
@@ -21,13 +25,10 @@ class LligaViewSet(viewsets.ModelViewSet):
         qs = lliga.participations.select_related("edifici").order_by("-puntuacio")
 
         if group_id:
-            if not lliga.participations.filter(edifici__grupComparable_id=group_id).exists():
-                return Response(
-                    {"error": "Invalid group"},
-                    status=404
-                )
+            if not GrupComparable.objects.filter(idGrup=group_id).exists():
+                raise NotFound("Invalid group")
 
-            qs = qs.filter(edifici__grupComparable_id=group_id)
+            qs = qs.filter(edifici__grupComparable__idGrup=int(group_id))
 
         paginator = RankingPagination()
         page = paginator.paginate_queryset(qs, request)
@@ -47,7 +48,7 @@ class LligaViewSet(viewsets.ModelViewSet):
     def posicio_edifici(self, request, pk=None):
         lliga = self.get_object()
 
-        edifici_id = request.query_params.get("edifici")
+        edifici_id = int(request.query_params.get("edifici"))
         top_n = int(request.query_params.get("top", 3))
         segment = request.query_params.get("segment", "false").lower() == "true"
 
@@ -60,7 +61,7 @@ class LligaViewSet(viewsets.ModelViewSet):
         try:
             participacio = Participacio.objects.select_related("edifici").get(
                 lliga=lliga,
-                edifici_id=edifici_id
+                edifici_id = edifici_id
             )
         except Participacio.DoesNotExist:
             return Response(
@@ -73,7 +74,7 @@ class LligaViewSet(viewsets.ModelViewSet):
         if segment:
             group = participacio.edifici.grupComparable
             if group:
-                qs = qs.filter(edifici__grupComparable=group)
+                qs = qs.filter(edifici__grupComparable_id=group.idGrup)
 
         qs = qs.order_by("-puntuacio")
 

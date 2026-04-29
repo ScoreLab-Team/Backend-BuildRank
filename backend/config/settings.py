@@ -76,9 +76,9 @@ INSTALLED_APPS = [
 
     'apps.buildings',
 
-    "apps.seasons",
-    "apps.leagues",
-    "apps.participations",
+    'apps.seasons',
+    'apps.leagues',
+    'apps.participations',
 ]
 
 MIDDLEWARE = [

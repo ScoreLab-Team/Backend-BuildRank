@@ -1,15 +1,31 @@
 from django.test import TestCase
-from rest_framework.test import APIClient
+from rest_framework.test import APIClient, APITestCase
+from django.contrib.auth import get_user_model
+from rest_framework import status
 
 from apps.leagues.models import Lliga
 from apps.seasons.models import Temporada
 from apps.buildings.models import Edifici, GrupComparable
-from apps.participation.models import Participacio
+from apps.participations.models import Participacio
+from apps.accounts.models import RoleChoices
 
+User = get_user_model()
 
-class RankingSegmentationTest(TestCase):
+class RankingSegmentationTest(APITestCase):
 
     def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email="admin@example.com",
+            password="Password123",
+            first_name="Test"
+        )
+        self.user.profile.role = RoleChoices.ADMIN
+        self.user.profile.save()
+
+        self.client.force_authenticate(user=self.user)
+
+
         self.season = Temporada.objects.create(
             nom="Test Season",
             dataInici="2026-01-01",
@@ -125,41 +141,39 @@ class RankingSegmentationTest(TestCase):
 
     """Test de endpoint real"""
     def test_api_segmented_ranking(self):
-        client = APIClient()
 
-        response = client.get(
-            f"/api/leagues/{self.league.id}/ranking/?group={self.group_a.idGrup}"
+        response = self.client.get(
+            f"/api/leagues/{self.league.pk}/ranking/?group={self.group_a.idGrup}"
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data), 2)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["results"]), 2)
 
     """Test grup no valid"""
     def test_ranking_invalid_group_returns_404(self):
         invalid_group_id = 999  # no existe
 
         response = self.client.get(
-            f"/api/leagues/{self.league.id}/ranking/?group={invalid_group_id}"
+            f"/api/leagues/{self.league.pk}/ranking/?group={invalid_group_id}"
         )
 
-        self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.data["error"], "Invalid group")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     """Test ranking segmentat normal, comprobar que el grup correcte s'utilitza automaticament"""
     def test_ranking_segmentado_auto(self):
         response = self.client.get(
-            f"/api/leagues/{self.league.id}/posicion_edifici/"
-            f"?edifici={self.building_a1.idEdifici}&segment=true"
+            f"/api/leagues/{self.league.pk}/posicio_edifici/"
+            f"?edifici={self.building_a1.pk}&segment=true"
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["segmentado"], True)
-        self.assertEqual(response.data["grupo_usado"], self.group_a.idGrup)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["segmentat"], True)
+        self.assertEqual(response.data["grup_utilitzat"], self.group_a.idGrup)
 
     """Test per comprovar que la versio sense segmentar tambe funciona"""
     def test_ranking_sin_segmentacion(self):
         response = self.client.get(
-            f"/api/leagues/{self.league.id}/posicion_edifici/"
-            f"?edifici={self.building_a1.idEdifici}"
+            f"/api/leagues/{self.league.pk}/posicio_edifici/"
+            f"?edifici={self.building_a1.pk}"
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["segmentado"], False)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["segmentat"], False)

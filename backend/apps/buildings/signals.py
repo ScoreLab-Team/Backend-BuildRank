@@ -4,7 +4,6 @@ from django.dispatch import receiver
 
 from .models import Habitatge, DadesEnergetiques
 from .scoring import calcular_building_health_score, calcular_classificacio_estimada
-from apps.buildings.services.segmentator import BuildingSegmentator
 
 
 def _recalcular_edifici(edifici):
@@ -47,13 +46,6 @@ def _recalcular_edifici(edifici):
         "classificacioEstimada",
         "classificacioFont",
     ])
-
-    if edifici.localitzacio:
-        group = BuildingSegmentator.assign_group(edifici)
-
-        if edifici.grupComparable != group:
-            edifici.grupComparable = group
-            update_fields.append("grupComparable")
 
     edifici.save(update_fields=update_fields)
 

@@ -30,7 +30,7 @@ urlpatterns = [
     path('api/buildings/', include('apps.buildings.urls')),
     path('api/seasons/', include('apps.seasons.urls')),
     path('api/leagues/', include('apps.leagues.urls')),
-    path('api/participation/', include('apps.participation.urls')),
+    path('api/participations/', include('apps.participations.urls')),
     path('api/third-party-service/', ThirdPartyServiceView.as_view())
 ]
 

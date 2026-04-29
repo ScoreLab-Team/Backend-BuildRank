@@ -16,8 +16,8 @@ class DivisioLliga(models.TextChoices):
 
 class Lliga(models.Model):
     nom = models.CharField(max_length=100)
-    categoria = models.CharField(max_length=20, choices=CategoryRanking.choices)
-    divisio = models.CharField(max_length=10, choices=DivisionLeague.choices)
+    categoria = models.CharField(max_length=20, choices=CategoriaRanking.choices)
+    divisio = models.CharField(max_length=10, choices=DivisioLliga.choices)
 
     temporada = models.ForeignKey(
         Temporada,

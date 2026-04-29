@@ -6,7 +6,7 @@ from .pagination import RankingPagination
 from .models import Lliga
 from .serializers import LligaSerializer
 from apps.buildings.models import GrupComparable
-from apps.participation.models import Participacio
+from apps.participations.models import Participacio
 
 class LligaViewSet(viewsets.ModelViewSet):
     queryset = Lliga.objects.all()

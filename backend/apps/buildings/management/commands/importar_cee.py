@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from apps.buildings.models import (
     Edifici,
+    FontClassificacio,
     ImportacioIncidencia,
     ImportacioLog,
     Localitzacio,
@@ -142,12 +143,12 @@ class Command(BaseCommand):
         offset  = options['offset']
 
         log = ImportacioLog.objects.create(origen=fitxer)
-        self.stdout.write(f"Importació #{log.pk} iniciada — dry_run={dry_run}")
+        #self.stdout.write(f"Importació #{log.pk} iniciada — dry_run={dry_run}")
 
         try:
             # Llegir NOMÉS les files necessàries en comptes de tot el CSV
             files = _llegir_chunk(fitxer, offset_edificis=offset, limit_edificis=limit)
-            self.stdout.write(f"Files llegides: {len(files)}")
+            #self.stdout.write(f"Files llegides: {len(files)}")
 
             # Ordenar per adreça abans d'agrupar
             files.sort(key=_clau_adreca)
@@ -160,10 +161,10 @@ class Command(BaseCommand):
 
             grups = grups[offset: offset + limit if limit else None]
 
-            self.stdout.write(
-                f"Processant {len(grups)} edificis "
-                f"(offset={offset}, limit={limit or 'tots'})"
-            )
+            #self.stdout.write(
+            #    f"Processant {len(grups)} edificis "
+            #    f"(offset={offset}, limit={limit or 'tots'})"
+            #)
 
             ok = errors = edificis_creats = 0
 
@@ -191,10 +192,11 @@ class Command(BaseCommand):
                             edificis_creats += 1
                             
                         else:
-                            self.stdout.write(
-                                f"  [dry] {clau[0].title()} {clau[1]}, "
-                                f"{clau[2]} — {edifici.tipologia_open_data}"
-                            )
+                            #self.stdout.write(
+                            #    f"  [dry] {clau[0].title()} {clau[1]}, "
+                            #    f"{clau[2]} — {edifici.tipologia_open_data}"
+                            #)+
+                            return
 
                         ok += len(grup)
 
@@ -221,10 +223,10 @@ class Command(BaseCommand):
             log.data_fi         = timezone.now()
             log.save()
 
-            self.stdout.write(self.style.SUCCESS(
-                f"Fet: {edificis_creats} edificis creats, "
-                f"{ok} files processades, {errors} errors. Log #{log.pk}"
-            ))
+            #self.stdout.write(self.style.SUCCESS(
+            #    f"Fet: {edificis_creats} edificis creats, "
+            #    f"{ok} files processades, {errors} errors. Log #{log.pk}"
+            #))
 
         except Exception as e:
             log.completada = False
@@ -253,15 +255,19 @@ def _construir_edifici(grup: list[dict]) -> Edifici:
     )
 
     any_c = str(primera.get('ANY_CONSTRUCCIO') or '')
+    qualificacio = primera.get("Qualificació de consum d'energia primaria no renovable") or None
 
     return Edifici(
-        anyConstruccio      = int(any_c) if any_c.isdigit() else 0,
-        tipologia           = tipologia_interna,
-        tipologia_open_data = tipologia,
-        superficieTotal     = float((primera.get('METRES_CADASTRE') or '0').replace(',', '.')),
-        nombrePlantes       = 1,
-        reglament           = primera.get('Normativa construcció', '') or '',
-        orientacioPrincipal = TipusOrientacio.SUD,
-        font_open_data      = True,
-        num_cas_origen      = primera.get('NUM_CAS', '') or '',
+        anyConstruccio       = int(any_c) if any_c.isdigit() else 0,
+        tipologia            = tipologia_interna,
+        tipologia_open_data  = tipologia,
+        superficieTotal      = float((primera.get('METRES_CADASTRE') or '0').replace(',', '.')),
+        nombrePlantes        = 1,
+        reglament            = primera.get('Normativa construcció', '') or '',
+        orientacioPrincipal  = TipusOrientacio.SUD,
+        font_open_data       = True,
+        num_cas_origen       = primera.get('NUM_CAS', '') or '',
+        # ← Classificació ve del CEE oficial → font sempre 'oficial'
+        classificacioEstimada = qualificacio,
+        classificacioFont     = FontClassificacio.OFICIAL if qualificacio else FontClassificacio.INSUFICIENT,
     )

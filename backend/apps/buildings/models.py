@@ -230,6 +230,7 @@ class Edifici(models.Model):
         blank=True
     )
     
+
     objects = models.Manager()  # opcional: Per defecte 
     actius = EdificiActiuManager() # Manager personalitzat per només retornar edificis actius
 

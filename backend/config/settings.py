@@ -15,6 +15,25 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+
+    if value is None:
+        return default
+
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_list(name: str, default: str = "") -> list[str]:
+    value = os.environ.get(name, default)
+
+    return [
+        item.strip()
+        for item in value.split(",")
+        if item.strip()
+    ]
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -28,10 +47,15 @@ load_dotenv(BASE_DIR / ".env")
 SECRET_KEY = 'django-insecure-fvw+7u7o-m!1$r0hy6=7q#xb*l-#f9#ink&hk4153utnf^$3w)'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv("DEBUG", "True").lower() == "true"
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
+
+DEBUG = env_bool("DEBUG", default=ENVIRONMENT != "production")
 ENABLE_DEBUG_TOOLBAR = os.getenv("ENABLE_DEBUG_TOOLBAR", "False").lower() == "true"
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = env_list(
+    "ALLOWED_HOSTS",
+    default="localhost,127.0.0.1,0.0.0.0",
+)
 
 
 # Application definition
@@ -145,8 +169,6 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CORS_ALLOW_ALL_ORIGINS = True
-
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -197,3 +219,42 @@ if DEBUG:
 
 # Third-party API key 
 THIRD_PARTY_API_KEY = os.getenv("THIRD_PARTY_API_KEY")
+
+# -----------------------------------------------------------------------------
+# Entorns / CORS / CSRF
+# -----------------------------------------------------------------------------
+# Les variables següents permeten separar comportament de desenvolupament,
+# test i producció sense modificar el codi. En producció NO s'hauria d'usar
+# CORS_ALLOW_ALL_ORIGINS=True.
+
+CORS_ALLOW_ALL_ORIGINS = env_bool("CORS_ALLOW_ALL_ORIGINS", default=False)
+
+CORS_ALLOWED_ORIGINS = env_list(
+    "CORS_ALLOWED_ORIGINS",
+    default=(
+        "http://localhost,"
+        "http://127.0.0.1,"
+        "http://localhost:3000,"
+        "http://127.0.0.1:3000,"
+        "http://localhost:5173,"
+        "http://127.0.0.1:5173,"
+        "http://localhost:8080,"
+        "http://127.0.0.1:8080"
+    ),
+)
+
+CSRF_TRUSTED_ORIGINS = env_list(
+    "CSRF_TRUSTED_ORIGINS",
+    default=(
+        "http://localhost,"
+        "http://127.0.0.1,"
+        "http://localhost:3000,"
+        "http://127.0.0.1:3000,"
+        "http://localhost:5173,"
+        "http://127.0.0.1:5173,"
+        "http://localhost:8080,"
+        "http://127.0.0.1:8080"
+    ),
+)
+
+CORS_ALLOW_CREDENTIALS = env_bool("CORS_ALLOW_CREDENTIALS", default=True)

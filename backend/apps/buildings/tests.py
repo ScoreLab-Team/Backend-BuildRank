@@ -1017,3 +1017,461 @@ class ClassificacioEstimadaSerializerTests(BaseTestData):
         font = response.data["classificacio_energetica"]["font"]
         self.assertIn(font, [FontClassificacio.ESTIMADA, FontClassificacio.INSUFICIENT])
         self.assertNotEqual(font, FontClassificacio.OFICIAL)
+
+# ============================================================================
+# US13 — Importació open data CEE
+# ============================================================================
+import csv, io, tempfile, os
+from unittest.mock import patch
+from apps.buildings.models import (
+    ImportacioLog, ImportacioIncidencia,
+    DadesEnergetiquesOpenData, TipusEdificiOpenData, FontClassificacio,
+)
+from apps.buildings.management.commands.importar_cee import (
+    _clau_adreca, _construir_edifici, _construir_dades_energetiques,
+    _llegir_chunk, _f, _bool_si,
+)
+from apps.buildings.services.open_data_tipologia import map_tipus_edifici
+
+
+def _csv_amb_files(files: list[dict]) -> str:
+    """Genera un fitxer CSV temporal amb les files donades i retorna la seva ruta."""
+    if not files:
+        return ''
+    fieldnames = list(files[0].keys())
+    tmp = tempfile.NamedTemporaryFile(
+        mode='w', suffix='.csv', delete=False,
+        encoding='utf-8-sig', newline=''
+    )
+    writer = csv.DictWriter(tmp, fieldnames=fieldnames, delimiter=',')
+    writer.writeheader()
+    writer.writerows(files)
+    tmp.close()
+    return tmp.name
+
+
+def _fila_base(**kwargs) -> dict:
+    """Fila mínima vàlida del CSV CEE. Sobreescriu camps amb kwargs."""
+    base = {
+        'NUM_CAS': 'TEST001',
+        'ADREÇA': 'Carrer Test',
+        'NUMERO': '10',
+        'ESCALA': '',
+        'PIS': '1',
+        'PORTA': 'A',
+        'CODI_POSTAL': '08001',
+        'POBLACIO': 'Barcelona',
+        'COMARCA': 'Barcelonès',
+        'NOM_PROVINCIA': 'Barcelona',
+        'CODI_POBLACIO': '08019',
+        'CODI_COMARCA': '13',
+        'CODI_PROVINCIA': '08',
+        'REFERENCIA CADASTRAL': '1234567AA1234A0001AA',
+        'ZONA CLIMATICA': 'C2',
+        'METRES_CADASTRE': '80,5',
+        'ANY_CONSTRUCCIO': '1990',
+        'US_EDIFICI': "Bloc d'habitatges plurifamiliar",
+        "Qualificació de consum d'energia primaria no renovable": 'D',
+        'Energia primària no renovable': '150,5',
+        'Qualificacio d\'emissions de CO2': 'D',
+        'Emissions de CO2': '30,2',
+        'Consum d\'energia final': '100,0',
+        'Cost anual aproximat d\'energia per habitatge': '800,0',
+        'VEHICLE ELECTRIC': 'NO',
+        'SOLAR TERMICA': 'NO',
+        'SOLAR FOTOVOLTAICA': 'NO',
+        'SISTEMA BIOMASSA': 'NO',
+        'XARXA DISTRICTE': 'NO',
+        'ENERGIA GEOTERMICA': 'NO',
+        'INFORME_INS_TECNICA_EDIFICI': '',
+        'Eina de certificacio': 'CE3X',
+        'VALOR AILLAMENTS': '0,5',
+        'VALOR FINESTRES': '2,5',
+        'Motiu de la certificacio': 'Lloguer',
+        'VALOR AILLAMENTS CTE': '0,49',
+        'VALOR FINESTRES CTE': '2,1',
+        'UTM_X': '',
+        'UTM_Y': '',
+        'Normativa construcció': 'NBE-CT-79',
+        'Tipus Tramit': 'Edificis existents',
+        'TIPUS_TERCIARI': '',
+        'Qualificació emissions calefacció': 'D',
+        'Emissions calefacció': '25,0',
+        'Qualificació emissions refrigeració': 'A',
+        'Emissions refrigeració': '1,5',
+        'Qualificació emissions ACS': 'E',
+        'Emissions ACS': '3,7',
+        'Qualificació emissions enllumenament': '',
+        'Emissions enllumenament': '0',
+        'Qualificació energia calefacció': 'D',
+        'Energia calefacció': '110,0',
+        'Qualificació energia refrigeració': 'A',
+        'Energia refrigeració': '5,0',
+        'Qualificació energia ACS': 'E',
+        'Energia ACS': '35,5',
+        'Qualificació energia enllumenament': '',
+        'Energia enllumenament': '0',
+        'Qualificació energia calefacció demanda': 'E',
+        'Energia calefacció demanda': '90,0',
+        'Qualificació energia refrigeració demanda': 'B',
+        'Energia refrigeració demanda': '8,0',
+        'VENTILACIO US RESIDENCIAL': '0,63',
+        'LONGITUD': '2,15899',
+        'LATITUD': '41,38879',
+        'GEOREFERÈNCIA': '',
+        'REHABILITACIO_ENERGETICA': 'No',
+        'ACTUACIONS_REHABILITACIO': '',
+        'DATA_ENTRADA': '15/03/2020',
+    }
+    base.update(kwargs)
+    return base
+
+
+class OpenDataTipologiaTests(TestCase):
+    """US13 #138 — map_tipus_edifici: mapatge de valors del CSV a TipusEdificiOpenData."""
+
+    def test_bloc_pisos_catala(self):
+        self.assertEqual(
+            map_tipus_edifici("Bloc d'habitatges plurifamiliar"),
+            TipusEdificiOpenData.BLOC_PISOS
+        )
+
+    def test_bloc_pisos_castella(self):
+        self.assertEqual(
+            map_tipus_edifici("Bloque de viviendas"),
+            TipusEdificiOpenData.BLOC_PISOS
+        )
+
+    def test_unifamiliar_catala(self):
+        self.assertEqual(
+            map_tipus_edifici("Habitatge unifamiliar"),
+            TipusEdificiOpenData.UNIFAMILIAR
+        )
+
+    def test_habitatge_bloc(self):
+        self.assertEqual(
+            map_tipus_edifici("Habitatge individual en bloc d'habitatges"),
+            TipusEdificiOpenData.HABITATGE_BLOC
+        )
+
+    def test_terciari(self):
+        self.assertEqual(
+            map_tipus_edifici("Terciari"),
+            TipusEdificiOpenData.TERCIARI
+        )
+
+    def test_valor_desconegut_retorna_desconegut(self):
+        self.assertEqual(
+            map_tipus_edifici("Valor que no existeix"),
+            TipusEdificiOpenData.DESCONEGUT
+        )
+
+    def test_string_buit_retorna_desconegut(self):
+        self.assertEqual(map_tipus_edifici(""), TipusEdificiOpenData.DESCONEGUT)
+
+    def test_none_retorna_desconegut(self):
+        self.assertEqual(map_tipus_edifici(None), TipusEdificiOpenData.DESCONEGUT)
+
+    def test_espais_extra_no_trenquen(self):
+        """Valors amb espais al voltant es mapegen correctament."""
+        self.assertEqual(
+            map_tipus_edifici("  Terciari  "),
+            TipusEdificiOpenData.TERCIARI
+        )
+
+
+class OpenDataHelpersTests(TestCase):
+    """US13 — Funcions helpers del command: _f, _bool_si, _clau_adreca."""
+
+    def test_f_converteix_coma_decimal(self):
+        fila = {'METRES_CADASTRE': '80,5'}
+        self.assertAlmostEqual(_f(fila, 'METRES_CADASTRE'), 80.5)
+
+    def test_f_camp_buit_retorna_zero(self):
+        fila = {'METRES_CADASTRE': ''}
+        self.assertEqual(_f(fila, 'METRES_CADASTRE'), 0.0)
+
+    def test_f_camp_absent_retorna_zero(self):
+        self.assertEqual(_f({}, 'CAMP_INEXISTENT'), 0.0)
+
+    def test_bool_si_positiu(self):
+        self.assertTrue(_bool_si({'SOLAR TERMICA': 'SI'}, 'SOLAR TERMICA'))
+        self.assertTrue(_bool_si({'SOLAR TERMICA': 'si'}, 'SOLAR TERMICA'))
+
+    def test_bool_si_negatiu(self):
+        self.assertFalse(_bool_si({'SOLAR TERMICA': 'NO'}, 'SOLAR TERMICA'))
+        self.assertFalse(_bool_si({'SOLAR TERMICA': ''}, 'SOLAR TERMICA'))
+
+    def test_clau_adreca_normalitza_majuscules(self):
+        fila = {'ADREÇA': 'carrer test', 'NUMERO': '10', 'CODI_POSTAL': '08001'}
+        clau = _clau_adreca(fila)
+        self.assertEqual(clau[0], 'CARRER TEST')
+
+    def test_clau_adreca_camps_buits(self):
+        """Files sense adreça no llancen excepció."""
+        clau = _clau_adreca({})
+        self.assertEqual(clau, ('', '', ''))
+
+
+class ConstruirEdificiTests(TestCase):
+    """US13 #139 — _construir_edifici: mapatge de camps CSV a model Edifici."""
+
+    def test_tipologia_open_data_assignada(self):
+        grup = [_fila_base()]
+        edifici = _construir_edifici(grup)
+        self.assertEqual(edifici.tipologia_open_data, TipusEdificiOpenData.BLOC_PISOS)
+
+    def test_terciari_mapeja_a_comercial(self):
+        grup = [_fila_base(**{'US_EDIFICI': 'Terciari'})]
+        edifici = _construir_edifici(grup)
+        self.assertEqual(edifici.tipologia, 'Comercial')
+
+    def test_residencial_mapeja_a_residencial(self):
+        grup = [_fila_base()]
+        edifici = _construir_edifici(grup)
+        self.assertEqual(edifici.tipologia, 'Residencial')
+
+    def test_any_construccio_assignat(self):
+        grup = [_fila_base(**{'ANY_CONSTRUCCIO': '1975'})]
+        edifici = _construir_edifici(grup)
+        self.assertEqual(edifici.anyConstruccio, 1975)
+
+    def test_any_construccio_invalid_posa_zero(self):
+        grup = [_fila_base(**{'ANY_CONSTRUCCIO': 'desconegut'})]
+        edifici = _construir_edifici(grup)
+        self.assertEqual(edifici.anyConstruccio, 0)
+
+    def test_superficie_converteix_coma(self):
+        grup = [_fila_base(**{'METRES_CADASTRE': '120,75'})]
+        edifici = _construir_edifici(grup)
+        self.assertAlmostEqual(edifici.superficieTotal, 120.75)
+
+    def test_font_open_data_sempre_true(self):
+        edifici = _construir_edifici([_fila_base()])
+        self.assertTrue(edifici.font_open_data)
+
+    def test_num_cas_origen_assignat(self):
+        grup = [_fila_base(**{'NUM_CAS': 'ABC123'})]
+        edifici = _construir_edifici(grup)
+        self.assertEqual(edifici.num_cas_origen, 'ABC123')
+
+
+class ConstruirDadesEnergetiquesTests(TestCase):
+    """US13 #139 — _construir_dades_energetiques: mapatge de camps energètics."""
+
+    def test_qualificacio_global_assignada(self):
+        grup = [_fila_base()]
+        dades = _construir_dades_energetiques(grup)
+        self.assertEqual(dades.qualificacioGlobal, 'D')
+
+    def test_consum_energia_primaria_convertit(self):
+        grup = [_fila_base(**{'Energia primària no renovable': '200,5'})]
+        dades = _construir_dades_energetiques(grup)
+        self.assertAlmostEqual(dades.consumEnergiaPrimaria, 200.5)
+
+    def test_solar_termica_si(self):
+        grup = [_fila_base(**{'SOLAR TERMICA': 'SI'})]
+        dades = _construir_dades_energetiques(grup)
+        self.assertTrue(dades.teSolarTermica)
+
+    def test_solar_termica_no(self):
+        grup = [_fila_base(**{'SOLAR TERMICA': 'NO'})]
+        dades = _construir_dades_energetiques(grup)
+        self.assertFalse(dades.teSolarTermica)
+
+    def test_rehabilitacio_energetica_si(self):
+        grup = [_fila_base(**{'REHABILITACIO_ENERGETICA': 'Sí'})]
+        dades = _construir_dades_energetiques(grup)
+        self.assertTrue(dades.rehabilitacioEnergetica)
+
+    def test_data_entrada_parsejada(self):
+        grup = [_fila_base(**{'DATA_ENTRADA': '15/03/2020'})]
+        dades = _construir_dades_energetiques(grup)
+        # Agafem els primers 10 chars — el command guarda com a string YYYY-MM-DD o DD/MM/YYYY
+        self.assertIsNotNone(dades.dataEntrada)
+
+
+class LlegirChunkTests(TestCase):
+    """US13 — _llegir_chunk: lectura parcial del CSV per offset i limit."""
+
+    def setUp(self):
+        self.files = [
+            _fila_base(**{'ADREÇA': f'Carrer {i}', 'NUMERO': str(i), 'NUM_CAS': f'C{i:03d}'})
+            for i in range(1, 21)  # 20 adreces úniques
+        ]
+        self.csv_path = _csv_amb_files(self.files)
+
+    def tearDown(self):
+        if os.path.exists(self.csv_path):
+            os.unlink(self.csv_path)
+
+    def test_limit_retorna_nombre_correcte_dedifici(self):
+        files = _llegir_chunk(self.csv_path, offset_edificis=0, limit_edificis=5)
+        adreces = {_clau_adreca(f) for f in files}
+        self.assertEqual(len(adreces), 5)
+
+    def test_offset_salta_primers_edificis(self):
+        chunk_a = _llegir_chunk(self.csv_path, offset_edificis=0, limit_edificis=5)
+        chunk_b = _llegir_chunk(self.csv_path, offset_edificis=5, limit_edificis=5)
+        adreces_a = {_clau_adreca(f) for f in chunk_a}
+        adreces_b = {_clau_adreca(f) for f in chunk_b}
+        self.assertTrue(adreces_a.isdisjoint(adreces_b), "Els chunks no haurien de solapar-se")
+
+    def test_limit_none_retorna_tot(self):
+        files = _llegir_chunk(self.csv_path, offset_edificis=0, limit_edificis=None)
+        adreces = {_clau_adreca(f) for f in files}
+        self.assertEqual(len(adreces), 20)
+
+    def test_offset_major_que_total_retorna_buit(self):
+        files = _llegir_chunk(self.csv_path, offset_edificis=999, limit_edificis=10)
+        self.assertEqual(files, [])
+
+
+class ImportarCeeCommandTests(TestCase):
+    """US13 #138 #139 #140 — Command complet: integració amb BD."""
+
+    def setUp(self):
+        self.files_csv = [
+            _fila_base(**{
+                'ADREÇA': 'Carrer Integració', 'NUMERO': '1',
+                'NUM_CAS': 'INT001', 'US_EDIFICI': "Bloc d'habitatges plurifamiliar",
+            }),
+            _fila_base(**{
+                'ADREÇA': 'Carrer Integració', 'NUMERO': '2',
+                'NUM_CAS': 'INT002', 'US_EDIFICI': 'Habitatge unifamiliar',
+            }),
+        ]
+        self.csv_path = _csv_amb_files(self.files_csv)
+
+    def tearDown(self):
+        if os.path.exists(self.csv_path):
+            os.unlink(self.csv_path)
+
+    def _run_command(self, **kwargs):
+        from django.core.management import call_command
+        call_command('importar_cee', self.csv_path, **kwargs)
+
+    def test_crea_edificis_i_localitzacions(self):
+        """Sense --dry-run es creen Edifici i Localitzacio a la BD."""
+        self._run_command(limit=2)
+        self.assertEqual(Edifici.objects.filter(font_open_data=True).count(), 2)
+
+    def test_crea_dades_energetiques_opendata(self):
+        """Cada edifici importat té DadesEnergetiquesOpenData associades."""
+        self._run_command(limit=2)
+        edificis = Edifici.objects.filter(font_open_data=True)
+        for e in edificis:
+            self.assertTrue(
+                hasattr(e, 'dades_energetiques_opendata'),
+                f"Edifici {e.idEdifici} no té DadesEnergetiquesOpenData"
+            )
+
+    def test_dry_run_no_escriu_a_bd(self):
+        """--dry-run no crea cap Edifici a la BD."""
+        self._run_command(limit=2, dry_run=True)
+        self.assertEqual(Edifici.objects.filter(font_open_data=True).count(), 0)
+
+    def test_log_creat_amb_resum_correcte(self):
+        """ImportacioLog registra edificis_creats i completada=True."""
+        self._run_command(limit=2)
+        log = ImportacioLog.objects.latest('data_inici')
+        self.assertTrue(log.completada)
+        self.assertEqual(log.edificis_creats, 2)
+        self.assertEqual(log.files_error, 0)
+
+    def test_limit_respectat(self):
+        """--limit 1 crea exactament 1 edifici."""
+        self._run_command(limit=1)
+        self.assertEqual(Edifici.objects.filter(font_open_data=True).count(), 1)
+
+    def test_classificacio_font_oficial_per_opendata(self):
+        """
+        Edificis importats de l'open data (CEE oficial) tenen
+        classificacioFont='oficial', no 'estimada'.
+        """
+        self._run_command(limit=2)
+        for e in Edifici.objects.filter(font_open_data=True):
+            self.assertEqual(
+                e.classificacioFont, FontClassificacio.OFICIAL,
+                f"Edifici {e.idEdifici}: esperava 'oficial', obtingut '{e.classificacioFont}'"
+            )
+
+    def test_incidencia_registrada_per_fila_invalida(self):
+        """
+        Una fila amb LATITUD invàlida genera una ImportacioIncidencia
+        i no trenca la importació de la resta.
+        """
+        files_amb_error = self.files_csv + [
+            _fila_base(**{
+                'ADREÇA': 'Carrer Error', 'NUMERO': '99',
+                'NUM_CAS': 'ERR001', 'LATITUD': 'no-es-un-numero',
+            })
+        ]
+        csv_path_error = _csv_amb_files(files_amb_error)
+        try:
+            from django.core.management import call_command
+            call_command('importar_cee', csv_path_error, limit=3)
+            log = ImportacioLog.objects.latest('data_inici')
+            self.assertGreater(log.files_error, 0)
+            self.assertTrue(
+                ImportacioIncidencia.objects.filter(importacio=log).exists()
+            )
+        finally:
+            os.unlink(csv_path_error)
+
+
+class OpenDataClassificacioFontTests(TestCase):
+    """
+    US13 — Verifica que la lògica de font és correcta:
+    open data → oficial, habitatges usuari → estimada.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from apps.accounts.models import RoleChoices
+        cls.admin = User.objects.create_user(
+            email='admin_od@example.com', password='Password123', first_name='Admin'
+        )
+        cls.admin.profile.role = RoleChoices.ADMIN
+        cls.admin.profile.save()
+
+        cls.grup = GrupComparable.objects.create(
+            idGrup=99, zonaClimatica='C2', tipologia='Residencial', rangSuperficie='0-500'
+        )
+        loc = Localitzacio.objects.create(
+            carrer='Carrer Font', numero=1, codiPostal='08001',
+            barri='', latitud=41.0, longitud=2.0, zonaClimatica='C2',
+        )
+        cls.edifici_od = Edifici.objects.create(
+            anyConstruccio=1990, tipologia='Residencial', superficieTotal=200,
+            reglament='CTE', orientacioPrincipal='Sud',
+            localitzacio=loc, administradorFinca=cls.admin, grupComparable=cls.grup,
+            font_open_data=True,
+            classificacioFont=FontClassificacio.OFICIAL,
+            classificacioEstimada='D',
+        )
+        DadesEnergetiquesOpenData.objects.create(
+            edifici=cls.edifici_od,
+            qualificacioGlobal='D',
+            consumEnergiaPrimaria=150.0,
+            emissionsCO2=30.0,
+        )
+
+    def test_edifici_opendata_te_font_oficial(self):
+        """Edifici seeded des del CEE oficial té classificacioFont='oficial'."""
+        self.assertEqual(self.edifici_od.classificacioFont, FontClassificacio.OFICIAL)
+
+    def test_edifici_sense_opendata_ni_habitatges_es_insuficient(self):
+        """Edifici buit sense dades té font='insuficient'."""
+        from apps.buildings.scoring import calcular_classificacio_estimada
+        loc = Localitzacio.objects.create(
+            carrer='Carrer Buit', numero=2, codiPostal='08001',
+            barri='', latitud=41.0, longitud=2.0, zonaClimatica='C2',
+        )
+        e = Edifici.objects.create(
+            anyConstruccio=2000, tipologia='Residencial', superficieTotal=100,
+            reglament='CTE', orientacioPrincipal='Sud',
+            localitzacio=loc, administradorFinca=self.admin, grupComparable=self.grup,
+        )
+        resultat = calcular_classificacio_estimada(e)
+        self.assertEqual(resultat['font'], FontClassificacio.INSUFICIENT)

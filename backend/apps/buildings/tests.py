@@ -325,7 +325,7 @@ class EdificiEdgeCaseAndPerformanceTests(BaseTestData):
 """
 
 # ============================================================================
-# 4. DESACTIVACIÓ LÒGICA per al AdminSistema 
+# 4. DESACTIVACIÓ LÒGICA per al AdminSistema
 # ============================================================================
 
 class EdificiDesactivacioLogicaTests(BaseTestData):
@@ -333,7 +333,7 @@ class EdificiDesactivacioLogicaTests(BaseTestData):
     Comprova que la desactivació lògica funciona correctament:
     camps, manager actius, visibilitat i reactivació.
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.superuser = User.objects.create_superuser(
@@ -344,36 +344,36 @@ class EdificiDesactivacioLogicaTests(BaseTestData):
             idGrup=1, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="100-200"
         )
         cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=10)
- 
+
     def test_edifici_actiu_per_defecte(self):
         """Un edifici nou té actiu=True i dataDesactivacio=None."""
         self.assertTrue(self.edifici.actiu)
         self.assertIsNone(self.edifici.dataDesactivacio)
         self.assertEqual(self.edifici.motivDesactivacio, "")
- 
+
     def test_manager_actius_exclou_desactivats(self):
         """Edifici.actius no retorna edificis amb actiu=False."""
         self.edifici.actiu = False
         self.edifici.save(update_fields=["actiu"])
- 
+
         ids_actius = list(Edifici.actius.values_list("idEdifici", flat=True))
         self.assertNotIn(self.edifici.idEdifici, ids_actius)
- 
+
         # Restaurar per no afectar altres tests
         self.edifici.actiu = True
         self.edifici.save(update_fields=["actiu"])
- 
+
     def test_manager_objects_inclou_tots(self):
         """Edifici.objects retorna tots els edificis, inclosos els desactivats."""
         self.edifici.actiu = False
         self.edifici.save(update_fields=["actiu"])
- 
+
         ids_tots = list(Edifici.objects.values_list("idEdifici", flat=True))
         self.assertIn(self.edifici.idEdifici, ids_tots)
- 
+
         self.edifici.actiu = True
         self.edifici.save(update_fields=["actiu"])
- 
+
     def test_desactivar_endpoint_posa_actiu_false(self):
         """POST /desactivar/?confirmat=true → actiu=False i dataDesactivacio assignada."""
         self.client.force_authenticate(user=self.superuser)
@@ -384,29 +384,29 @@ class EdificiDesactivacioLogicaTests(BaseTestData):
             QUERY_STRING="confirmat=true",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
- 
+
         self.edifici.refresh_from_db()
         self.assertFalse(self.edifici.actiu)
         self.assertIsNotNone(self.edifici.dataDesactivacio)
         self.assertEqual(self.edifici.motivDesactivacio, "Test desactivació")
- 
+
     def test_reactivar_endpoint_restaura_estat(self):
         """POST /reactivar/ → actiu=True i dataDesactivacio=None."""
         self.edifici.actiu = False
         self.edifici.dataDesactivacio = timezone.now()
         self.edifici.save(update_fields=["actiu", "dataDesactivacio"])
- 
+
         self.client.force_authenticate(user=self.superuser)
         response = self.client.post(
             reverse("edifici-reactivar", args=[self.edifici.idEdifici]),
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
- 
+
         self.edifici.refresh_from_db()
         self.assertTrue(self.edifici.actiu)
         self.assertIsNone(self.edifici.dataDesactivacio)
- 
+
     def test_desactivar_edifici_ja_desactivat_retorna_400(self):
         self.edifici.actiu = False
         self.edifici.save(update_fields=["actiu"])
@@ -420,12 +420,12 @@ class EdificiDesactivacioLogicaTests(BaseTestData):
 
         self.edifici.actiu = True
         self.edifici.save(update_fields=["actiu"])
- 
+
     def test_edifici_desactivat_no_apareix_al_list(self):
         """Un edifici desactivat no apareix a GET /edificis/ per cap rol."""
         self.edifici.actiu = False
         self.edifici.save(update_fields=["actiu"])
- 
+
         for user in [self.admin]:
             with self.subTest(user=user.email):
                 self.client.force_authenticate(user=user)
@@ -433,15 +433,15 @@ class EdificiDesactivacioLogicaTests(BaseTestData):
                 self.assertEqual(response.status_code, status.HTTP_200_OK)
                 ids = [item["idEdifici"] for item in response.data]
                 self.assertNotIn(self.edifici.idEdifici, ids)
- 
+
         self.edifici.actiu = True
         self.edifici.save(update_fields=["actiu"])
- 
+
     def test_inclou_desactivats_nomes_per_superuser(self):
         """?inclou_desactivats=true retorna desactivats només per superuser, no per ADMIN."""
         self.edifici.actiu = False
         self.edifici.save(update_fields=["actiu"])
- 
+
         # Superuser sí veu desactivats
         self.client.force_authenticate(user=self.superuser)
         response = self.client.get(reverse("edifici-list"), {"inclou_desactivats": "true"})
@@ -451,13 +451,13 @@ class EdificiDesactivacioLogicaTests(BaseTestData):
 # ============================================================================
 # DRY-RUN I VALIDACIÓ DE CONSISTÈNCIA (Task #170)
 # ============================================================================
- 
+
 class EdificiDesactivacioDryRunTests(BaseTestData):
     """
     Comprova el comportament del dry-run (sense ?confirmat=true)
     i les advertències de consistència.
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.superuser = User.objects.create_superuser(
@@ -469,7 +469,7 @@ class EdificiDesactivacioDryRunTests(BaseTestData):
             idGrup=1, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="100-200"
         )
         cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=10)
- 
+
     def test_dryrun_sense_confirmat_no_modifica_edifici(self):
         """POST /desactivar/ sense ?confirmat no canvia l'estat de l'edifici."""
         self.client.force_authenticate(user=self.superuser)
@@ -480,7 +480,7 @@ class EdificiDesactivacioDryRunTests(BaseTestData):
         )
         self.edifici.refresh_from_db()
         self.assertTrue(self.edifici.actiu)  # No ha canviat
- 
+
     def test_dryrun_retorna_estructura_correcta(self):
         """La resposta dry-run conté 'advertencies' i 'pot_desactivar'."""
         self.client.force_authenticate(user=self.superuser)
@@ -492,7 +492,7 @@ class EdificiDesactivacioDryRunTests(BaseTestData):
         self.assertIn("advertencies", response.data)
         self.assertIn("pot_desactivar", response.data)
         self.assertIn("edifici_id", response.data)
- 
+
     def test_advertencia_habitatges_amb_usuaris(self):
         """Dry-run detecta habitatges amb usuaris assignats."""
         Habitatge.objects.create(
@@ -507,7 +507,7 @@ class EdificiDesactivacioDryRunTests(BaseTestData):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         advertencies_text = " ".join(response.data["advertencies"])
         self.assertIn("habitatge", advertencies_text.lower())
- 
+
     def test_advertencia_millores_en_proces(self):
         """Dry-run detecta millores implementades en procés de validació."""
         millora = CatalegMillora.objects.create(
@@ -534,17 +534,17 @@ class EdificiDesactivacioDryRunTests(BaseTestData):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         advertencies_text = " ".join(response.data["advertencies"])
         self.assertIn("millora", advertencies_text.lower())
- 
+
  # ============================================================================
 # 6. US20 — PERMISOS DE DESACTIVACIÓ (Tasks #169 + #170)
 # ============================================================================
- 
+
 class EdificiDesactivacioPermisosTests(BaseTestData):
     """
     Comprova que només el superuser pot desactivar/reactivar.
     Tots els altres rols han de rebre 403.
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.superuser = User.objects.create_superuser(
@@ -557,7 +557,7 @@ class EdificiDesactivacioPermisosTests(BaseTestData):
             idGrup=1, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="100-200"
         )
         cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=10)
- 
+
     def test_rols_no_autoritzats_no_poden_desactivar(self):
         for user in [self.admin, self.owner, self.tenant]:
             with self.subTest(user=user.email):
@@ -572,7 +572,7 @@ class EdificiDesactivacioPermisosTests(BaseTestData):
                     response.status_code,
                     [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
                 )
- 
+
     def test_no_autenticat_no_pot_desactivar(self):
         """Usuari no autenticat rep 401 en intentar desactivar."""
         self.client.force_authenticate(user=None)
@@ -585,13 +585,13 @@ class EdificiDesactivacioPermisosTests(BaseTestData):
 # ============================================================================
 # 7. US20 — REGISTRE D'AUDITORIA (Task #171)
 # ============================================================================
- 
+
 class EdificiAuditLogTests(BaseTestData):
     """
     Comprova que EdificiAuditLog es crea correctament
     en desactivar, reactivar i que els camps són correctes.
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.superuser = User.objects.create_superuser(
@@ -602,13 +602,13 @@ class EdificiAuditLogTests(BaseTestData):
             idGrup=1, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="100-200"
         )
         cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=10)
- 
+
     def test_desactivar_crea_audit_log(self):
         """Desactivar un edifici crea un registre EdificiAuditLog amb accio=DESACTIVAR."""
         logs_abans = EdificiAuditLog.objects.filter(
             edifici=self.edifici, accio="DESACTIVAR"
         ).count()
- 
+
         self.client.force_authenticate(user=self.superuser)
         self.client.post(
             reverse("edifici-desactivar", args=[self.edifici.idEdifici]),
@@ -616,12 +616,12 @@ class EdificiAuditLogTests(BaseTestData):
             format="json",
             QUERY_STRING="confirmat=true",
         )
- 
+
         logs_despres = EdificiAuditLog.objects.filter(
             edifici=self.edifici, accio="DESACTIVAR"
         ).count()
         self.assertEqual(logs_despres, logs_abans + 1)
- 
+
     def test_audit_log_conte_camps_correctes(self):
         """El log de desactivació conté edifici_id_snapshot, usuari, motiu i camps_modificats."""
         self.client.force_authenticate(user=self.superuser)
@@ -631,51 +631,51 @@ class EdificiAuditLogTests(BaseTestData):
             format="json",
             QUERY_STRING="confirmat=true",
         )
- 
+
         log = EdificiAuditLog.objects.filter(
             edifici=self.edifici, accio="DESACTIVAR"
         ).latest("timestamp")
- 
+
         self.assertEqual(log.edifici_id_snapshot, self.edifici.idEdifici)
         self.assertEqual(log.usuari, self.superuser)
         self.assertEqual(log.motiu, "Verificació camps")
         self.assertIn("actiu", log.camps_modificats)
         self.assertEqual(log.camps_modificats["actiu"], [True, False])
- 
+
     def test_reactivar_crea_audit_log(self):
         """Reactivar un edifici crea un registre EdificiAuditLog amb accio=REACTIVAR."""
         self.edifici.actiu = False
         self.edifici.save(update_fields=["actiu"])
- 
+
         logs_abans = EdificiAuditLog.objects.filter(
             edifici=self.edifici, accio="REACTIVAR"
         ).count()
- 
+
         self.client.force_authenticate(user=self.superuser)
         self.client.post(
             reverse("edifici-reactivar", args=[self.edifici.idEdifici]),
             format="json",
         )
- 
+
         logs_despres = EdificiAuditLog.objects.filter(
             edifici=self.edifici, accio="REACTIVAR"
         ).count()
         self.assertEqual(logs_despres, logs_abans + 1)
- 
+
     def test_dryrun_no_crea_audit_log(self):
         """El dry-run (sense ?confirmat=true) NO crea cap registre d'auditoria."""
         logs_abans = EdificiAuditLog.objects.filter(edifici=self.edifici).count()
- 
+
         self.client.force_authenticate(user=self.superuser)
         self.client.post(
             reverse("edifici-desactivar", args=[self.edifici.idEdifici]),
             format="json",
             # sense QUERY_STRING confirmat=true
         )
- 
+
         logs_despres = EdificiAuditLog.objects.filter(edifici=self.edifici).count()
         self.assertEqual(logs_despres, logs_abans)
- 
+
     def test_audit_log_preserva_edifici_id_snapshot(self):
         """edifici_id_snapshot es guarda correctament per preservar-lo si l'edifici s'elimina."""
         self.client.force_authenticate(user=self.superuser)
@@ -684,13 +684,13 @@ class EdificiAuditLogTests(BaseTestData):
             format="json",
             QUERY_STRING="confirmat=true",
         )
- 
+
         log = EdificiAuditLog.objects.filter(
             edifici=self.edifici, accio="DESACTIVAR"
         ).latest("timestamp")
- 
+
         self.assertEqual(log.edifici_id_snapshot, self.edifici.idEdifici)
- 
+
         # Restaurar
         self.edifici.actiu = True
         self.edifici.save(update_fields=["actiu"])

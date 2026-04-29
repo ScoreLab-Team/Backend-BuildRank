@@ -161,7 +161,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         administradorFinca manualment.
         """
         serializer.save(administradorFinca=self.request.user)
-    
+
     def get_permissions(self):
         if self.action in ['destroy']:
             return [IsAuthenticated(), EsAdminEdifici()]
@@ -355,7 +355,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return Response({"detail": "No hi ha dades energètiques disponibles."}, status=404)
 
         return Response(dades)
-    
+
     def _preparar_items_simulacio(self, millores_validated):
         """
         Converteix l'entrada validada del serializer en objectes reals del catàleg.
@@ -458,7 +458,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         output = SimulacioMilloraSerializer(simulacio)
         return Response(output.data, status=status.HTTP_201_CREATED)
-    
+
     @action(
         detail=True,
         methods=["get"],
@@ -476,7 +476,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         serializer = MilloraImplementadaSerializer(implementacions, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
-    
+
 
 class HabitatgeViewSet(viewsets.ModelViewSet):
     queryset = Habitatge.objects.all()

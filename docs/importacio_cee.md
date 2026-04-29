@@ -2,6 +2,8 @@
 
 El fitxer `cee.csv` no s’inclou al repositori perquè és massa gran i prové d’un dataset open data simplificat/normalitzat per a l’entorn de desenvolupament i demo.
 
+Aquest enfocament permet treballar amb dades reals sense dependre d’un endpoint extern, millorant la reproductibilitat, el testing i la robustesa del sistema.
+
 ## Copiar el CSV al contenidor
 
 Si el fitxer és a Descàrregues de Windows:
@@ -30,6 +32,6 @@ docker compose exec web python manage.py importar_cee /app/cee.csv --limit 1000 
 
 Les dades CEE s’utilitzen com a font auxiliar inicial. La prioritat funcional del sistema és:
 
-dades introduïdes per l’usuari;
-dades open data CEE;
-estat de dades insuficients.
+1. dades introduïdes per l’usuari
+2. dades open data CEE
+3. estat de dades insuficients

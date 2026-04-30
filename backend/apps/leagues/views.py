@@ -5,7 +5,7 @@ from .pagination import RankingPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.exceptions import NotFound
 
-from .models import Lliga
+from .models import Lliga, RankingHistorico
 from .serializers import LligaSerializer
 from apps.buildings.models import GrupComparable
 from apps.participations.models import Participacio
@@ -105,3 +105,34 @@ class LligaViewSet(viewsets.ModelViewSet):
             "segmentat": segment,
             "grup_utilitzat": participacio.edifici.grupComparable.idGrup if participacio.edifici.grupComparable else None
         })
+        
+    @action(detail=False, methods=["get"])
+    def evolucio(self, request):
+        edifici_id = request.query_params.get("edifici")
+        categoria = request.query_params.get("categoria")
+
+        if not edifici_id or not categoria:
+            return Response(
+                {"error": "edifici and categoria are required"},
+                status=400
+            )
+
+        historial = RankingHistorico.objects.filter(
+            edifici_id=edifici_id,
+            categoria=categoria.upper()
+        ).select_related("temporada").order_by("temporada__dataInici")
+
+        data = [
+            {
+                "temporada": h.temporada.id_temporada,
+                "nom_temporada": h.temporada.nom,
+                "categoria": h.categoria,
+                "puntuacio": h.puntuacio,
+                "posicio": h.posicio,
+                "divisio": h.divisio,
+                "data_calcul": h.dataCalcul,
+            }
+            for h in historial
+        ]
+
+        return Response(data)

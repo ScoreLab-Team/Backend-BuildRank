@@ -164,11 +164,30 @@ class LogoutSerializer(serializers.Serializer):
 
 
 class MeSerializer(serializers.ModelSerializer):
-    role = serializers.CharField(source="profile.role")
+    role = serializers.SerializerMethodField()
+    is_system_admin = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ("id", "email", "first_name", "last_name", "role")
+        fields = (
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "role",
+            "is_staff",
+            "is_superuser",
+            "is_system_admin",
+        )
+
+    def get_role(self, obj):
+        profile = getattr(obj, "profile", None)
+        if profile:
+            return profile.role
+        return None
+
+    def get_is_system_admin(self, obj):
+        return bool(obj.is_superuser)
 
 
 class LocalitzacioResum(serializers.Serializer):

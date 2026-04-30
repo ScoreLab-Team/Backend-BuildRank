@@ -10,6 +10,8 @@ from django.core.cache import cache
 from django.db import connections
 from django.urls import reverse
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from rest_framework.test import APITestCase
 from rest_framework import status
 from rest_framework.test import APITestCase, APIClient
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
@@ -30,7 +32,7 @@ from apps.buildings.models import (
     Localitzacio,
 )
 
-
+User = get_user_model()
 CONCURRENCY_TEST_MODE = os.getenv("RUN_CONCURRENCY_TESTS", "").strip().lower()
 ENABLE_CONCURRENCY_DIAGNOSTIC = CONCURRENCY_TEST_MODE in {"1", "true", "diagnostic", "all", "strict"}
 ENABLE_CONCURRENCY_STRICT = CONCURRENCY_TEST_MODE in {"strict", "all"}
@@ -1285,3 +1287,66 @@ class AdminRoleSemanticsTests(BaseTestData):
         )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+@override_settings(REST_FRAMEWORK=NO_THROTTLE_REST_FRAMEWORK)
+class SystemAdminMeEndpointTests(APITestCase):
+    """Tests per diferenciar administrador de sistema i administrador de finca."""
+
+    def setUp(self):
+        cache.clear()
+
+    def test_me_returns_system_admin_flags_for_superuser(self):
+        user = User.objects.create_superuser(
+            email="sysadmin@example.com",
+            password="Adminpass123",
+        )
+
+        self.client.force_authenticate(user=user)
+
+        response = self.client.get(reverse("me"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["is_staff"])
+        self.assertTrue(response.data["is_superuser"])
+        self.assertTrue(response.data["is_system_admin"])
+
+    def test_me_admin_role_is_not_system_admin(self):
+        user = User.objects.create_user(
+            email="adminfinca@example.com",
+            password="Adminpass123",
+        )
+
+        profile, _ = Profile.objects.get_or_create(user=user)
+        profile.role = RoleChoices.ADMIN
+        profile.save(update_fields=["role"])
+
+        # Recarreguem l'usuari per evitar que el profile quedi cachejat amb el rol anterior.
+        user = User.objects.get(pk=user.pk)
+
+        self.client.force_authenticate(user=user)
+
+        response = self.client.get(reverse("me"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["role"], RoleChoices.ADMIN)
+        self.assertFalse(response.data["is_staff"])
+        self.assertFalse(response.data["is_superuser"])
+        self.assertFalse(response.data["is_system_admin"])
+
+    def test_superuser_can_login_from_app(self):
+        User.objects.create_superuser(
+            email="sysadminlogin@example.com",
+            password="Adminpass123",
+        )
+
+        payload = {
+            "email": "sysadminlogin@example.com",
+            "password": "Adminpass123",
+        }
+
+        response = self.client.post(reverse("login"), payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)

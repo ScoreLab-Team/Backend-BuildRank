@@ -5,7 +5,7 @@ from .pagination import RankingPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.exceptions import NotFound
 
-from .models import Lliga
+from .models import Lliga, RankingHistorico
 from .serializers import LligaSerializer
 from apps.buildings.models import GrupComparable
 from apps.participations.models import Participacio
@@ -104,4 +104,64 @@ class LligaViewSet(viewsets.ModelViewSet):
             "punt_per_top": puntos_para_top,
             "segmentat": segment,
             "grup_utilitzat": participacio.edifici.grupComparable.idGrup if participacio.edifici.grupComparable else None
+        })
+
+    @action(detail=False, methods=["get"])
+    def evolucio(self, request):
+        edifici_id = request.query_params.get("edifici")
+        categoria = request.query_params.get("categoria")
+
+        if not edifici_id or not categoria:
+            return Response(
+                {"error": "edifici and categoria are required"},
+                status=400
+            )
+
+        historial = RankingHistorico.objects.filter(
+            edifici_id=edifici_id,
+            categoria=categoria.upper()
+        ).select_related("temporada").order_by("temporada__dataInici")
+
+        data = [
+            {
+                "temporada": h.temporada.id_temporada,
+                "nom_temporada": h.temporada.nom,
+                "categoria": h.categoria,
+                "puntuacio": h.puntuacio,
+                "posicio": h.posicio,
+                "divisio": h.divisio,
+                "data_calcul": h.dataCalcul,
+            }
+            for h in historial
+        ]
+
+        return Response(data)
+        
+    @action(detail=True, methods=["post"])
+    def generar_snapshot(self, request, pk=None):
+        lliga = self.get_object()
+
+        participacions = lliga.participations.select_related("edifici").order_by("-puntuacio")
+
+        created_or_updated = 0
+
+        for index, participacio in enumerate(participacions, start=1):
+            RankingHistorico.objects.update_or_create(
+                edifici=participacio.edifici,
+                temporada=lliga.temporada,
+                categoria=lliga.categoria,
+                defaults={
+                    "puntuacio": participacio.puntuacio,
+                    "posicio": index,
+                    "divisio": participacio.divisio,
+                }
+            )
+            created_or_updated += 1
+
+        return Response({
+            "message": "Snapshot generated successfully",
+            "lliga": lliga.id,
+            "temporada": lliga.temporada.id_temporada,
+            "categoria": lliga.categoria,
+            "items": created_or_updated,
         })

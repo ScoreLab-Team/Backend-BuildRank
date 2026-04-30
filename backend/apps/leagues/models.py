@@ -29,3 +29,30 @@ class Lliga(models.Model):
 
     def __str__(self):
         return self.nom
+
+class RankingHistorico(models.Model):
+    edifici = models.ForeignKey(
+        "buildings.Edifici",
+        on_delete=models.CASCADE,
+        related_name="ranking_historic"
+    )
+    temporada = models.ForeignKey(
+        Temporada,
+        on_delete=models.CASCADE,
+        related_name="ranking_historic"
+    )
+    categoria = models.CharField(
+        max_length=20,
+        choices=CategoriaRanking.choices
+    )
+    puntuacio = models.FloatField()
+    posicio = models.IntegerField()
+    divisio = models.CharField(max_length=50, blank=True)
+    dataCalcul = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("edifici", "temporada", "categoria")
+        ordering = ["temporada__dataInici", "categoria", "posicio"]
+
+    def __str__(self):
+        return f"{self.edifici} - {self.temporada} - {self.categoria}"

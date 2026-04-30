@@ -1721,20 +1721,15 @@ class MotorSimulacioEspecificUnitTests(BaseTestData):
 
     def test_simulacio_sense_dades_base_usa_fallbacks(self):
         """Prova que si l'edifici no té consums/emissions calculats, usa els FALLBACKS definits al motor"""
-        # Creem un edifici 'buit' sense consums
         edifici_buit = self._create_edifici(self.admin, self.grup, numero=101)
         edifici_buit.superficieTotal = 100
-        # Forcem que no tingui dades prèvies per forçar els fallbacks de l'engine
         edifici_buit.consumFinalKwhAny = None 
         edifici_buit.emissionsKgCO2Any = None
         edifici_buit.save()
 
-        # Simulem amb una llista buida només per veure com calcula la base
         resultat = simular_millores(edifici_buit, [])
         
-        # Comprovem que ha usat el CONSUM_KWH_M2_ANY_FALLBACK (110.0 * 100m2 = 11000)
         self.assertEqual(resultat["abans"]["consumFinalKwhAny"], 11000)
-        # Comprovem que el score base està "clampat" o calculat sense petar
         self.assertIsNotNone(resultat["abans"]["score"])
 
     def test_simulacio_quantitat_zero_o_invalida(self):
@@ -1747,11 +1742,9 @@ class MotorSimulacioEspecificUnitTests(BaseTestData):
             parametresBase={"impactes": {"reduccio_demanda_calefaccio": 0.50}}
         )
         
-        # Li passem quantitat 0 i cobertura 0
         items = [{"millora": millora_buda, "quantitat": 0, "coberturaPercent": 0}]
         resultat = simular_millores(self.edifici, items)
         
-        # No hauria d'haver-hi cap estalvi
         self.assertEqual(resultat["delta"]["reduccioConsumKwhAny"], 0)
         self.assertEqual(resultat["delta"]["reduccioEmissionsKgCO2Any"], 0)
 
@@ -1768,9 +1761,86 @@ class MotorSimulacioEspecificUnitTests(BaseTestData):
         items = [{"millora": millora_extrema, "quantitat": 1, "coberturaPercent": 100}]
         resultat = simular_millores(self.edifici, items)
         
-        # El percentatge de reducció no hauria de passar mai del 100% ni ser negatiu gràcies al clamp
         self.assertLessEqual(resultat["delta"]["reduccioConsumPercent"], 100.0)
         self.assertGreaterEqual(resultat["despres"]["consumFinalKwhAny"], 0.0)
+
+    def test_score_base_amb_historial_bhs(self):
+        """Cobreix les línies 29-30 creant un historial BHS real a la BD"""
+        from apps.buildings.models import BuildingHealthScore
+        
+        BuildingHealthScore.objects.create(
+            edificio=self.edifici,
+            version="1.0",
+            score=88.5,
+            pesos={"clima": 0.5, "envolupant": 0.5} # Camp JSON obligatori
+        )
+        
+        resultat = simular_millores(self.edifici, [])
+        self.assertEqual(resultat["abans"]["score"], 88.5)
+
+    def test_dades_base_amb_habitatges(self):
+        """Cobreix les línies 40 i 66-81 creant dades energètiques reals"""
+        from apps.buildings.models import Habitatge, DadesEnergetiques
+        from django.utils import timezone
+        
+        dades = DadesEnergetiques.objects.create(
+            consumEnergiaPrimaria=2500,
+            consumEnergiaFinal=2000,
+            emissionsCO2=500,
+            costAnualEnergia=400,
+            energiaCalefaccio=1000,
+            energiaRefrigeracio=500,
+            energiaACS=300,
+            energiaEnllumenament=200,
+            emissionsCalefaccio=250,
+            emissionsRefrigeracio=150,
+            emissionsACS=50,
+            emissionsEnllumenament=50,
+            aillamentTermic=2.0,
+            valorFinestres=3.0,
+            normativa="CTE-2019",
+            einaCertificacio="CE3X",
+            motiuCertificacio="Simulació Test",
+            dataEntrada=timezone.now().date() # Camp Data obligatori
+        )
+        
+        Habitatge.objects.create(
+            referenciaCadastral="9876543AB1234C0001DE", # PK
+            planta="1",
+            porta="1A",
+            superficie=100.0,
+            edifici=self.edifici,
+            dadesEnergetiques=dades
+        )
+            
+        resultat = simular_millores(self.edifici, [])
+        
+        self.assertEqual(resultat["abans"]["origenDades"], "dades_energetiques_habitatges")
+        self.assertEqual(resultat["abans"]["consumFinalKwhAny"], 2000)
+
+    def test_inferir_quantitats_per_totes_unitats(self):
+        """Cobreix les línies 84-98 inferint automàticament quantitats segons la unitat"""
+        from apps.buildings.models import UnitatBaseMillora, CatalegMillora
+        
+        unitats = [
+            UnitatBaseMillora.M2,
+            UnitatBaseMillora.UNITAT,
+            UnitatBaseMillora.KWP,
+            UnitatBaseMillora.KWH,
+            UnitatBaseMillora.HABITATGE,
+            UnitatBaseMillora.EDIFICI,
+            "INVENTADA"
+        ]
+        
+        for idx, unitat in enumerate(unitats):
+            millora = CatalegMillora.objects.create(
+                idMillora=9200 + idx,
+                nom=f"Millora prova {unitat}",
+                categoria="envolupant",
+                unitatBase=unitat,
+                parametresBase={}
+            )
+            simular_millores(self.edifici, [{"millora": millora, "quantitat": None, "coberturaPercent": 100}])
 
 # ============================================================================
 # EPIC 4 — PROVES D'INTEGRACIÓ DEL MOTOR DE SIMULACIÓ

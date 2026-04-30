@@ -105,7 +105,7 @@ class LligaViewSet(viewsets.ModelViewSet):
             "segmentat": segment,
             "grup_utilitzat": participacio.edifici.grupComparable.idGrup if participacio.edifici.grupComparable else None
         })
-        
+
     @action(detail=False, methods=["get"])
     def evolucio(self, request):
         edifici_id = request.query_params.get("edifici")
@@ -136,3 +136,32 @@ class LligaViewSet(viewsets.ModelViewSet):
         ]
 
         return Response(data)
+        
+    @action(detail=True, methods=["post"])
+    def generar_snapshot(self, request, pk=None):
+        lliga = self.get_object()
+
+        participacions = lliga.participations.select_related("edifici").order_by("-puntuacio")
+
+        created_or_updated = 0
+
+        for index, participacio in enumerate(participacions, start=1):
+            RankingHistorico.objects.update_or_create(
+                edifici=participacio.edifici,
+                temporada=lliga.temporada,
+                categoria=lliga.categoria,
+                defaults={
+                    "puntuacio": participacio.puntuacio,
+                    "posicio": index,
+                    "divisio": participacio.divisio,
+                }
+            )
+            created_or_updated += 1
+
+        return Response({
+            "message": "Snapshot generated successfully",
+            "lliga": lliga.id,
+            "temporada": lliga.temporada.id_temporada,
+            "categoria": lliga.categoria,
+            "items": created_or_updated,
+        })

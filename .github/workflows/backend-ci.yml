@@ -8,21 +8,13 @@ on:
       - Desenvolupament
       - desenvolupament
       - "feature/**"
-    paths:
-      - "backend/**"
-      - 'README.md'
-      - ".github/workflows/backend-ci.yml"
 
   pull_request:
     branches:
       - main
       - Desenvolupament
       - desenvolupament
-    paths:
-      - "backend/**"
-      - 'README.md'
-      - ".github/workflows/backend-ci.yml"
-
+      
   workflow_dispatch:
 
 concurrency:
@@ -44,9 +36,7 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd="pg_isready -U buildrank_user -d buildrank"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
+          --health-interval=10s --health-timeout=5s --health-retries=5
 
     defaults:
       run:
@@ -107,7 +97,7 @@ jobs:
 
       - name: Check for missing migrations
         run: python manage.py makemigrations --check --dry-run
-      
+
       - name: Run migrations
         run: python manage.py migrate --noinput
 

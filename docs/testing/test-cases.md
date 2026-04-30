@@ -31,3 +31,6 @@
 | TC-ACC-027 | US7 | Permisos | GET /me/ | test_me_requires_authentication | 401 + no autenticat | Pass |
 | TC-ACC-028 | US7 | Seguretat | GET /me/ | test_me_with_tampered_access_token_fails | 401 + token invàlid | Pass |
 | TC-ACC-029 | US7 | Seguretat | GET /me/ | test_me_with_expired_access_token_fails | 401 + token expirat | Pass |
+| TC-BE-ACC-001 | API | `/me/` amb administrador de sistema | Existeix un usuari creat amb `createsuperuser` | Autenticar el superuser i fer `GET /api/accounts/me/` | La resposta retorna `is_staff=true`, `is_superuser=true` i `is_system_admin=true` | Pass |
+| TC-BE-ACC-002 | API | `/me/` amb administrador de finca | Existeix un usuari amb `profile.role="admin"` però sense permisos de superuser | Autenticar l’usuari i fer `GET /api/accounts/me/` | La resposta retorna `role="admin"` però `is_system_admin=false` | Pass |
+| TC-BE-ACC-003 | API | Login d’administrador de sistema | Existeix un usuari creat amb `createsuperuser` | Fer `POST /api/accounts/login/` amb email i contrasenya correctes | La resposta retorna `access` i `refresh` | Pass |

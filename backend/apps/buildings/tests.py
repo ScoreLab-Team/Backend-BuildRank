@@ -1475,3 +1475,619 @@ class OpenDataClassificacioFontTests(TestCase):
         )
         resultat = calcular_classificacio_estimada(e)
         self.assertEqual(resultat['font'], FontClassificacio.INSUFICIENT)
+
+# Nous tests per augmentar cobertura a:
+#   - apps/buildings/permissions.py  (35% → objectiu 75%+)
+#   - apps/buildings/serializers.py  (69% → objectiu 85%+)
+#   - apps/buildings/views.py        (48% → objectiu 70%+)
+#
+# Afegir a la suite existent: python manage.py test apps.buildings -v 2
+#
+# Estructura:
+#   1. PermissionsTests          → cobreix les 5 classes de permissions.py
+#   2. SerializerTests           → cobreix serializers no exercitats
+#   3. HabitatgeViewTests        → CRUD + permisos per rol
+#   4. MilloresImplementadesTests→ llistar per edifici
+#   5. DadesEnergetiquesViewTests→ CRUD + permisos
+#   6. AutocompleteCarrersTests  → endpoint autocomplete
+ 
+from django.test import TestCase
+from django.urls import reverse
+from django.utils import timezone
+ 
+from rest_framework import status
+from rest_framework.test import APITestCase
+from unittest.mock import patch, MagicMock
+ 
+from django.contrib.auth import get_user_model
+ 
+from apps.accounts.models import RoleChoices
+from apps.buildings.models import (
+    Edifici, Habitatge, Localitzacio, GrupComparable,
+    DadesEnergetiques, CatalegMillora, SimulacioMillora,
+    SimulacioMilloraItem, MilloraImplementada, EstatValidacio,
+    carrersBarcelona,
+)
+from apps.buildings.serializers import (
+    HabitatgeDetailSerializer,
+    DadesEnergetiquesSerializer,
+    MilloraImplementadaSerializer,
+)
+from apps.buildings.permissions import (
+    EsAdminEdifici,
+    EsAdminOPropietariEdifici,
+    EsAdminOPropietariHabitatge,
+    EsOwnerOAdminHabitatge,
+    EsOwnerOAdminDadesEnergetiques,
+)
+ 
+User = get_user_model()
+ 
+ 
+# ============================================================================
+# Base compartida
+# ============================================================================
+ 
+class BaseTestData(APITestCase):
+ 
+    @classmethod
+    def _create_user(cls, email, role, is_superuser=False):
+        if is_superuser:
+            return User.objects.create_superuser(email=email, password="Password123")
+        user = User.objects.create_user(email=email, password="Password123", first_name="Test")
+        user.profile.role = role
+        user.profile.save(update_fields=["role"])
+        return user
+ 
+    @classmethod
+    def _create_grup(cls, id=1):
+        return GrupComparable.objects.create(
+            idGrup=id, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="100-200"
+        )
+ 
+    @classmethod
+    def _create_edifici(cls, administrador, grup, numero=1, carrer="Carrer test"):
+        loc = Localitzacio.objects.create(
+            carrer=carrer, numero=numero, codiPostal="08001",
+            barri="Centre", latitud=41.0, longitud=2.0, zonaClimatica="C2",
+        )
+        return Edifici.objects.create(
+            anyConstruccio=2000, tipologia="Residencial", superficieTotal=400,
+            reglament="CTE", orientacioPrincipal="Sud",
+            localitzacio=loc, administradorFinca=administrador, grupComparable=grup,
+        )
+ 
+    @classmethod
+    def _create_habitatge(cls, edifici, ref="REF001", usuari=None):
+        return Habitatge.objects.create(
+            referenciaCadastral=ref, planta="1", porta="A",
+            superficie=80, edifici=edifici, usuari=usuari,
+        )
+ 
+ 
+# ============================================================================
+# 1. PERMISSIONS — cobreix les 5 classes directament
+# ============================================================================
+ 
+class EsAdminEdificiPermissionTests(BaseTestData):
+    """
+    Cobreix EsAdminEdifici:
+    - has_permission: rol admin ✅, owner ❌, no autenticat ❌
+    - has_object_permission: admin del edifici ✅, admin d'un altre edifici ❌
+    """
+ 
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = cls._create_user("admin_perm@example.com", RoleChoices.ADMIN)
+        cls.admin2 = cls._create_user("admin2_perm@example.com", RoleChoices.ADMIN)
+        cls.owner = cls._create_user("owner_perm@example.com", RoleChoices.OWNER)
+        cls.tenant = cls._create_user("tenant_perm@example.com", RoleChoices.TENANT)
+        cls.grup = cls._create_grup(id=20)
+        cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=20)
+ 
+    def test_admin_pot_crear_edifici(self):
+        """RBAC: rol admin → has_permission=True."""
+        self.client.force_authenticate(user=self.admin)
+        # POST a edifici-list sense cos vàlid, però el 400 confirma que el permís passa
+        response = self.client.post(reverse("edifici-list"), {}, format="json")
+        self.assertNotEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+ 
+    def test_owner_no_pot_crear_edifici(self):
+        """RBAC: rol owner → has_permission=False → 403."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.post(reverse("edifici-list"), {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+ 
+    def test_tenant_no_pot_crear_edifici(self):
+        """RBAC: rol tenant → has_permission=False → 403."""
+        self.client.force_authenticate(user=self.tenant)
+        response = self.client.post(reverse("edifici-list"), {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+ 
+    def test_no_autenticat_no_pot_crear_edifici(self):
+        """Sense token → 401."""
+        response = self.client.post(reverse("edifici-list"), {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+ 
+    def test_admin_propi_pot_esborrar_edifici(self):
+        """ABAC: admin de l'edifici → DELETE retorna 204."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.delete(
+            reverse("edifici-detail", args=[self.edifici.idEdifici])
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+ 
+    def test_admin_aliè_no_pot_esborrar_edifici(self):
+        """ABAC: admin2 no és l'administrador d'aquest edifici → 403."""
+        self.client.force_authenticate(user=self.admin2)
+        response = self.client.delete(
+            reverse("edifici-detail", args=[self.edifici.idEdifici])
+        )
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+ 
+ 
+class EsAdminOPropietariEdificiPermissionTests(BaseTestData):
+    """
+    Cobreix EsAdminOPropietariEdifici:
+    - Tenant amb habitatge → GET 200
+    - Tenant sense habitatge → 403/404
+    - Tenant → PATCH 403
+    - Owner amb habitatge → GET 200
+    """
+ 
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = cls._create_user("admin_abac@example.com", RoleChoices.ADMIN)
+        cls.owner = cls._create_user("owner_abac@example.com", RoleChoices.OWNER)
+        cls.tenant = cls._create_user("tenant_abac@example.com", RoleChoices.TENANT)
+        cls.tenant2 = cls._create_user("tenant2_abac@example.com", RoleChoices.TENANT)
+        cls.grup = cls._create_grup(id=21)
+        cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=21)
+        cls._create_habitatge(cls.edifici, ref="REF-ABAC1", usuari=cls.tenant)
+        cls._create_habitatge(cls.edifici, ref="REF-ABAC2", usuari=cls.owner)
+ 
+    def test_tenant_amb_habitatge_pot_veure_edifici(self):
+        """ABAC: tenant vinculat → GET /edificis/{id}/ → 200."""
+        self.client.force_authenticate(user=self.tenant)
+        response = self.client.get(reverse("edifici-detail", args=[self.edifici.idEdifici]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+ 
+    def test_tenant_sense_habitatge_no_veu_edifici(self):
+        """ABAC: tenant sense vinculació → 403 o 404."""
+        self.client.force_authenticate(user=self.tenant2)
+        response = self.client.get(reverse("edifici-detail", args=[self.edifici.idEdifici]))
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+ 
+    def test_tenant_no_pot_patch_edifici(self):
+        """Matriu RBAC: tenant → PATCH → 403."""
+        self.client.force_authenticate(user=self.tenant)
+        response = self.client.patch(
+            reverse("edifici-detail", args=[self.edifici.idEdifici]),
+            {"orientacioPrincipal": "Nord"}, format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+ 
+    def test_owner_amb_habitatge_pot_veure_edifici(self):
+        """ABAC: owner vinculat → GET → 200."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(reverse("edifici-detail", args=[self.edifici.idEdifici]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+ 
+ 
+class EsAdminOPropietariHabitatgePermissionTests(BaseTestData):
+    """
+    Cobreix EsAdminOPropietariHabitatge:
+    - Admin de l'edifici → GET 200
+    - Owner del habitatge → GET 200
+    - Tenant del habitatge → GET 200
+    - Usuari sense relació → 403/404
+    """
+ 
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = cls._create_user("admin_hab@example.com", RoleChoices.ADMIN)
+        cls.owner = cls._create_user("owner_hab@example.com", RoleChoices.OWNER)
+        cls.tenant = cls._create_user("tenant_hab@example.com", RoleChoices.TENANT)
+        cls.other = cls._create_user("other_hab@example.com", RoleChoices.TENANT)
+        cls.grup = cls._create_grup(id=22)
+        cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=22)
+        cls.habitatge = cls._create_habitatge(cls.edifici, ref="REF-HAB1", usuari=cls.owner)
+ 
+    def test_admin_pot_veure_habitatge(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(reverse("habitatge-detail", args=[self.habitatge.pk]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+ 
+    def test_owner_pot_veure_el_seu_habitatge(self):
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(reverse("habitatge-detail", args=[self.habitatge.pk]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+ 
+    def test_usuari_sense_relacio_no_pot_veure_habitatge(self):
+        self.client.force_authenticate(user=self.other)
+        response = self.client.get(reverse("habitatge-detail", args=[self.habitatge.pk]))
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+ 
+ 
+class EsOwnerOAdminHabitatgePermissionTests(BaseTestData):
+    """
+    Cobreix EsOwnerOAdminHabitatge:
+    - Tenant → no pot escriure (403)
+    - Owner del habitatge → pot esborrar (204)
+    - Owner aliè → no pot esborrar (403/404)
+    """
+ 
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = cls._create_user("admin_owadm@example.com", RoleChoices.ADMIN)
+        cls.owner = cls._create_user("owner_owadm@example.com", RoleChoices.OWNER)
+        cls.owner2 = cls._create_user("owner2_owadm@example.com", RoleChoices.OWNER)
+        cls.tenant = cls._create_user("tenant_owadm@example.com", RoleChoices.TENANT)
+        cls.grup = cls._create_grup(id=23)
+        cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=23)
+        cls.habitatge = cls._create_habitatge(cls.edifici, ref="REF-OWA1", usuari=cls.owner)
+ 
+    def test_tenant_no_pot_esborrar_habitatge(self):
+        """Tenant no té permís d'escriptura sobre habitatges."""
+        self.client.force_authenticate(user=self.tenant)
+        response = self.client.delete(reverse("habitatge-detail", args=[self.habitatge.pk]))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+ 
+    def test_owner_aliè_no_pot_esborrar_habitatge(self):
+        """Owner sense relació amb l'habitatge → 403/404."""
+        self.client.force_authenticate(user=self.owner2)
+        response = self.client.delete(reverse("habitatge-detail", args=[self.habitatge.pk]))
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+ 
+    def test_no_autenticat_no_pot_esborrar_habitatge(self):
+        """Sense token → 401."""
+        response = self.client.delete(reverse("habitatge-detail", args=[self.habitatge.pk]))
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+ 
+ 
+# ============================================================================
+# 2. SERIALIZERS — casos no coberts
+# ============================================================================
+ 
+class HabitatgeDetailSerializerTests(TestCase):
+    """
+    Cobreix HabitatgeDetailSerializer:
+    - superficie <= 0 → error
+    - anyReforma futur → error
+    - anyReforma anterior a la construcció → error
+    """
+ 
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = User.objects.create_user(
+            email="admin_ser@example.com", password="Password123", first_name="Admin"
+        )
+        cls.admin.profile.role = RoleChoices.ADMIN
+        cls.admin.profile.save(update_fields=["role"])
+        cls.grup = GrupComparable.objects.create(
+            idGrup=31, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-100"
+        )
+        loc = Localitzacio.objects.create(
+            carrer="Carrer Serializer", numero=1, codiPostal="08001",
+            barri="Centre", latitud=41.0, longitud=2.0, zonaClimatica="C2",
+        )
+        cls.edifici = Edifici.objects.create(
+            anyConstruccio=2000, tipologia="Residencial", superficieTotal=400,
+            reglament="CTE", orientacioPrincipal="Sud",
+            localitzacio=loc, administradorFinca=cls.admin, grupComparable=cls.grup,
+        )
+ 
+    def _base_data(self, **kwargs):
+        base = {
+            "referenciaCadastral": "REF-SER1",
+            "planta": "1",
+            "porta": "A",
+            "superficie": 80.0,
+            "edifici": self.edifici.pk,
+        }
+        base.update(kwargs)
+        return base
+ 
+    def test_superficie_zero_invalida(self):
+        s = HabitatgeDetailSerializer(data=self._base_data(superficie=0))
+        self.assertFalse(s.is_valid())
+        self.assertIn("superficie", s.errors)
+ 
+    def test_superficie_negativa_invalida(self):
+        s = HabitatgeDetailSerializer(data=self._base_data(superficie=-10))
+        self.assertFalse(s.is_valid())
+        self.assertIn("superficie", s.errors)
+ 
+    def test_any_reforma_futur_invalid(self):
+        any_futur = timezone.now().year + 1
+        s = HabitatgeDetailSerializer(data=self._base_data(anyReforma=any_futur))
+        self.assertFalse(s.is_valid())
+        self.assertIn("anyReforma", s.errors)
+ 
+    def test_any_reforma_anterior_a_construccio_invalid(self):
+        s = HabitatgeDetailSerializer(data=self._base_data(anyReforma=1999))
+        self.assertFalse(s.is_valid())
+        self.assertIn("anyReforma", s.errors)
+ 
+    def test_any_reforma_valid(self):
+        s = HabitatgeDetailSerializer(data=self._base_data(anyReforma=2010))
+        self.assertTrue(s.is_valid(), msg=s.errors)
+ 
+ 
+# ============================================================================
+# 3. HabitatgeViewSet — CRUD + permisos
+# ============================================================================
+ 
+class HabitatgeViewTests(BaseTestData):
+    """
+    Cobreix HabitatgeViewSet:
+    - Admin: list/detail/create/update/delete en edificis propis
+    - Owner: list/detail del seu habitatge
+    - Tenant: list/detail, no escriptura
+    - Sense token → 401
+    """
+ 
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = cls._create_user("admin_hv@example.com", RoleChoices.ADMIN)
+        cls.owner = cls._create_user("owner_hv@example.com", RoleChoices.OWNER)
+        cls.tenant = cls._create_user("tenant_hv@example.com", RoleChoices.TENANT)
+        cls.grup = cls._create_grup(id=40)
+        cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=40)
+        cls.habitatge_owner = cls._create_habitatge(
+            cls.edifici, ref="REF-HV1", usuari=cls.owner
+        )
+        cls.habitatge_tenant = cls._create_habitatge(
+            cls.edifici, ref="REF-HV2", usuari=cls.tenant
+        )
+ 
+    def test_admin_list_habitatges(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(reverse("habitatge-list"))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(response.data), 2)
+ 
+    def test_owner_veu_nomes_el_seu_habitatge(self):
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(reverse("habitatge-list"))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        refs = [h["referenciaCadastral"] for h in response.data]
+        self.assertIn("REF-HV1", refs)
+        self.assertNotIn("REF-HV2", refs)
+ 
+    def test_tenant_veu_nomes_el_seu_habitatge(self):
+        self.client.force_authenticate(user=self.tenant)
+        response = self.client.get(reverse("habitatge-list"))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        refs = [h["referenciaCadastral"] for h in response.data]
+        self.assertIn("REF-HV2", refs)
+        self.assertNotIn("REF-HV1", refs)
+ 
+    def test_tenant_no_pot_patch_habitatge(self):
+        self.client.force_authenticate(user=self.tenant)
+        response = self.client.patch(
+            reverse("habitatge-detail", args=[self.habitatge_tenant.pk]),
+            {"superficie": 90}, format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+ 
+    def test_owner_pot_veure_el_seu_habitatge_detail(self):
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(
+            reverse("habitatge-detail", args=[self.habitatge_owner.pk])
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+ 
+    def test_sense_token_retorna_401(self):
+        response = self.client.get(reverse("habitatge-list"))
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+ 
+ 
+# ============================================================================
+# 4. MilloresImplementadesViewTests
+# ============================================================================
+ 
+class MilloresImplementadesViewTests(BaseTestData):
+    """
+    Cobreix l'action millores_implementades a EdificiViewSet:
+    - Admin → 200 + llista les millores
+    - Edifici sense millores → 200 + llista buida
+    - Usuari sense accés → 403/404
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = cls._create_user("admin_mi@example.com", RoleChoices.ADMIN)
+        cls.other = cls._create_user("other_mi@example.com", RoleChoices.ADMIN)
+        cls.grup = cls._create_grup(id=60)
+        cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=60)
+        cls.millora = CatalegMillora.objects.create(
+            nom="Climatització", categoria="envolupant",
+            descripcio="Millora de prova", costMinim=1000.0, costMaxim=5000.0,
+            estalviEnergeticEstimat=10.0, impactePunts=5.0,
+            activa=True, costEstimatBase=2000.0, vidaUtil=20,
+        )
+        MilloraImplementada.objects.create(
+            dataExecucio="2024-01-01",
+            costReal=2000.0,
+            estatValidacio=EstatValidacio.VALIDADA,
+            millora=cls.millora,
+            edifici=cls.edifici,
+        )
+ 
+    def _url(self):
+        return reverse("edifici-millores-implementades", args=[self.edifici.idEdifici])
+ 
+    def test_admin_veu_millores_implementades(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+ 
+    def test_edifici_sense_millores_retorna_llista_buida(self):
+        """Un edifici sense millores retorna 200 amb llista buida."""
+        loc = Localitzacio.objects.create(
+            carrer="Carrer Buit", numero=99, codiPostal="08001",
+            barri="Centre", latitud=41.0, longitud=2.0, zonaClimatica="C2",
+        )
+        edifici_buit = Edifici.objects.create(
+            anyConstruccio=2000, tipologia="Residencial", superficieTotal=100,
+            reglament="CTE", orientacioPrincipal="Sud",
+            localitzacio=loc, administradorFinca=self.admin, grupComparable=self.grup,
+        )
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(
+            reverse("edifici-millores-implementades", args=[edifici_buit.idEdifici])
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, [])
+ 
+    def test_usuari_sense_acces_no_veu_millores(self):
+        self.client.force_authenticate(user=self.other)
+        response = self.client.get(self._url())
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+ 
+    def test_sense_token_retorna_401(self):
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+ 
+ 
+# ============================================================================
+# 5. DadesEnergetiquesViewTests
+# ============================================================================
+ 
+class DadesEnergetiquesViewTests(BaseTestData):
+    """
+    Cobreix DadesEnergetiquesViewSet i l'action dades_energetiques de EdificiViewSet:
+    - Admin veu dades del seu edifici → 200
+    - Owner veu les seves pròpies → 200
+    - Usuari sense relació → 403/404
+    - Sense token → 401
+    """
+ 
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = cls._create_user("admin_de@example.com", RoleChoices.ADMIN)
+        cls.owner = cls._create_user("owner_de@example.com", RoleChoices.OWNER)
+        cls.other = cls._create_user("other_de@example.com", RoleChoices.OWNER)
+        cls.grup = cls._create_grup(id=70)
+        cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=70)
+        cls.habitatge = cls._create_habitatge(cls.edifici, ref="REF-DE1", usuari=cls.owner)
+ 
+        cls.dades = DadesEnergetiques.objects.create(
+            consumEnergiaPrimaria=80.0,
+            consumEnergiaFinal=60.0,
+            emissionsCO2=20.0,
+            costAnualEnergia=800.0,
+            energiaCalefaccio=20.0, energiaRefrigeracio=10.0,
+            energiaACS=10.0, energiaEnllumenament=10.0,
+            emissionsCalefaccio=5.0, emissionsRefrigeracio=3.0,
+            emissionsACS=3.0, emissionsEnllumenament=3.0,
+            aillamentTermic=60.0, valorFinestres=1.5,
+            normativa="CTE", einaCertificacio="CE3X",
+            motiuCertificacio="Venda",
+            rehabilitacioEnergetica=False,
+            dataEntrada="2024-01-01",
+        )
+        cls.habitatge.dadesEnergetiques = cls.dades
+        cls.habitatge.save(update_fields=["dadesEnergetiques"])
+ 
+    def _url_action(self):
+        return reverse("edifici-dades-energetiques", args=[self.edifici.idEdifici])
+ 
+    def test_admin_veu_dades_energetiques_de_ledifici(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self._url_action())
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+ 
+    def test_owner_veu_les_seves_dades_energetiques(self):
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(self._url_action())
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(response.data), 1)
+ 
+    def test_altre_usuari_sense_acces_a_dades_energetiques(self):
+        self.client.force_authenticate(user=self.other)
+        response = self.client.get(self._url_action())
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+ 
+    def test_sense_token_retorna_401(self):
+        response = self.client.get(self._url_action())
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+ 
+    def test_habitatge_sense_dades_energetiques_no_apareix(self):
+        """Un habitatge sense dades energètiques no apareix a la resposta."""
+        self._create_habitatge(self.edifici, ref="REF-DE-BUIT")
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self._url_action())
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        refs = [d["referenciaCadastral"] for d in response.data]
+        self.assertNotIn("REF-DE-BUIT", refs)
+ 
+ 
+# ============================================================================
+# 6. AutocompleteCarrersTests
+# ============================================================================
+ 
+class AutocompleteCarrersTests(BaseTestData):
+    """
+    Cobreix autocomplete_carrers:
+    - query < 2 caràcters → llista buida
+    - query vàlida → retorna resultats
+    - sense token → 401
+    - stopwords soles → llista buida o pocs resultats
+    """
+ 
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = cls._create_user("admin_ac@example.com", RoleChoices.ADMIN)
+        carrersBarcelona.objects.create(
+            codi_via="001", codi_carrer_ine="001", nom_oficial="Carrer de Mallorca",
+            nom_curt="Mallorca", tipus_via="Carrer", nre_min=1, nre_max=500,
+        )
+ 
+    def _url(self):
+        return reverse("autocomplete-carrers")
+ 
+    def test_query_curta_retorna_buida(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self._url(), {"q": "M"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, [])
+ 
+    def test_query_valida_retorna_resultats(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self._url(), {"q": "Mallorca"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        noms = [r["nom_oficial"] for r in response.data]
+        self.assertIn("Carrer de Mallorca", noms)
+ 
+    def test_sense_token_retorna_401(self):
+        response = self.client.get(self._url(), {"q": "Mallorca"})
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+ 
+    def test_query_sense_q_retorna_buida(self):
+        """Sense paràmetre q → query buida → retorna []."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, [])

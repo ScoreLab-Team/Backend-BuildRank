@@ -10,7 +10,8 @@ on:
       - "feature/**"
     paths:
       - "backend/**"
-      - 'README.md'
+      - "docs/**"
+      - "README.md"
       - ".github/workflows/backend-ci.yml"
 
   pull_request:
@@ -20,7 +21,8 @@ on:
       - desenvolupament
     paths:
       - "backend/**"
-      - 'README.md'
+      - "docs/**"
+      - "README.md"
       - ".github/workflows/backend-ci.yml"
 
   workflow_dispatch:

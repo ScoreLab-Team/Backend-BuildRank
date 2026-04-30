@@ -170,10 +170,15 @@ class Command(BaseCommand):
             for clau, grup in grups:
                 try:
                     with transaction.atomic():
+                        primera = grup[0]
+                        num_cas = primera.get('NUM_CAS', '') or ''
+
+                        if num_cas and Edifici.objects.filter(num_cas_origen=num_cas).exists():
+                            continue
+
                         edifici = _construir_edifici(grup)
 
                         if not dry_run:
-                            primera = grup[0]
                             loc = Localitzacio.objects.create(
                                 carrer=clau[0].title(),
                                 numero=int(clau[1]) if clau[1].isdigit() else 0,
@@ -191,11 +196,8 @@ class Command(BaseCommand):
                             edificis_creats += 1
                             
                         else:
-                            #self.stdout.write(
-                            #    f"  [dry] {clau[0].title()} {clau[1]}, "
-                            #    f"{clau[2]} — {edifici.tipologia_open_data}"
-                            #)
-                            return
+                            ok += len(grup)
+                            continue
 
                         ok += len(grup)
 
@@ -215,6 +217,7 @@ class Command(BaseCommand):
                             },
                         )
 
+            log.total_files     = ok + errors
             log.files_ok        = ok
             log.files_error     = errors
             log.edificis_creats = edificis_creats

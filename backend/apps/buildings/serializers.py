@@ -147,7 +147,7 @@ class EdificiListSerializer(serializers.ModelSerializer):
 def _etiqueta_font(font: str | None) -> str:
     """Retorna una etiqueta llegible per a la UI segons l'origen de la classificació."""
     etiquetes = {
-        'oficial':     'Classificació oficial',
+        'oficial':     'Classificació oficial CEE',
         'estimada':    'Classificació estimada',
         'insuficient': 'Dades insuficients',
     }
@@ -188,6 +188,9 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
             "puntuacioBase",
             "classificacioEstimada",
             "classificacioFont",
+            "font_open_data",
+            "num_cas_origen",
+            "tipologia_open_data",
             "classificacio_energetica",
             "actiu",
             "dataDesactivacio",
@@ -203,6 +206,9 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
             "puntuacioBase",
             "classificacioEstimada",
             "classificacioFont",
+            "font_open_data",
+            "num_cas_origen",
+            "tipologia_open_data",
             "classificacio_energetica",
             "actiu",
             "dataDesactivacio",

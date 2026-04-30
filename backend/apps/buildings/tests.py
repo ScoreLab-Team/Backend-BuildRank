@@ -7,9 +7,10 @@ from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
-from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada
+from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora
 from apps.buildings.serializers import EdificiDetailSerializer, LocalitzacioSerializer
 from apps.accounts.models import RoleChoices
+from .simulation.engine import simular_millores, clamp, UnitatBaseMillora
 
 User = get_user_model()
 
@@ -1475,3 +1476,348 @@ class OpenDataClassificacioFontTests(TestCase):
         )
         resultat = calcular_classificacio_estimada(e)
         self.assertEqual(resultat['font'], FontClassificacio.INSUFICIENT)
+
+# ============================================================================
+# EPIC 4 — PROVES UNITÀRIES DEL MOTOR DE SIMULACIÓ
+# ============================================================================
+class MotorSimulacioUnitTests(BaseTestData):
+    """
+    Proves unitàries per validar la matemàtica del motor de simulació.
+    """
+
+    def setUp(self):
+        super().setUp()
+
+        self.admin = self._create_user("admin_motor@example.com", RoleChoices.ADMIN)
+        self.grup = GrupComparable.objects.create(
+            idGrup=99, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-100"
+        )
+        self.edifici = self._create_edifici(self.admin, self.grup, numero=1)
+
+        self.edifici.superficieTotal = 1000.0
+        self.edifici.puntuacioBase = 50.0
+        self.edifici.save()
+        
+        self.millora_sate = CatalegMillora.objects.create(
+            nom="Aïllament SATE",
+            categoria="Envolupant",
+            costMinim=40.0,
+            costMaxim=60.0,
+            estalviEnergeticEstimat=20.0,
+            impactePunts=15.0, 
+            nivellConfianca="alt",
+            unitatBase="m2",
+            parametresBase={
+                "impactes": {
+                    "reduccio_demanda_calefaccio": 0.30,
+                    "reduccio_consum_electric_total_tipica": 0.10
+                }
+            }
+        )
+
+    def test_clamp_function_respecta_els_limits(self):
+        """Prova unitària d'una funció matemàtica aïllada de l'engine."""
+        self.assertEqual(clamp(150, 0, 100), 100)
+        self.assertEqual(clamp(-10, 0, 100), 0)
+        self.assertEqual(clamp(50, 0, 100), 50)
+
+    def test_simular_millores_calcula_be_el_delta(self):
+        """
+        Validem que el motor rep l'input, fa les matemàtiques i retorna
+        l'arbre de dades correcte (abans, despres, delta).
+        """
+        input_motor = [{
+            "millora": self.millora_sate,
+            "quantitat": 100,
+            "coberturaPercent": 100
+        }]
+
+        resultat = simular_millores(self.edifici, input_motor)
+
+        self.assertIn("abans", resultat)
+        self.assertIn("despres", resultat)
+        self.assertIn("delta", resultat)
+        self.assertIn("items", resultat)
+        
+        self.assertEqual(resultat["delta"]["incrementScore"], 15.0)
+        
+        self.assertEqual(resultat["despres"]["score"], 65.0)
+        
+        self.assertGreater(resultat["delta"]["reduccioConsumKwhAny"], 0)
+        self.assertGreater(resultat["delta"]["estalviAnualEstimatiu"], 0)
+
+    def test_simular_plaques_solars_calcula_produccio(self):
+        """Cobreix les branques de l'engine dedicades a la fotovoltaica (KWp)."""
+        millora_fv = CatalegMillora.objects.create(
+            nom="Plaques FV",
+            categoria="Energia",
+            costMinim=4000.0,
+            costMaxim=6000.0,
+            estalviEnergeticEstimat=40.0,
+            impactePunts=20.0,
+            unitatBase="KWp",
+            parametresBase={
+                "impactes": {
+                    "produccio_kwh_per_kwp_any": 1500,
+                    "factor_perdues_sistema": 0.1,
+                    "autoconsum_directe_base": 0.6
+                }
+            }
+        )
+        
+        resultat = simular_millores(self.edifici, [{"millora": millora_fv, "quantitat": 3, "coberturaPercent": 100}])
+        
+        self.assertGreater(resultat["items"][0]["produccioFotovoltaicaKwhAny"], 0)
+        self.assertGreater(resultat["delta"]["reduccioConsumKwhAny"], 0)
+
+    def test_simular_aerotermia_calcula_emissions(self):
+        """Cobreix les branques de l'engine dedicades a la climatització i reducció directa d'emissions."""
+        millora_clima = CatalegMillora.objects.create(
+            nom="Aerotèrmia Alta Eficiència",
+            categoria="Climatització",
+            costMinim=8000.0,
+            costMaxim=12000.0,
+            estalviEnergeticEstimat=60.0,
+            impactePunts=25.0,
+            unitatBase="habitatge",
+            parametresBase={
+                "impactes": {
+                    "reduccio_emissions_calefaccio": 0.60,
+                    "reduccio_demanda_calefaccio": 0.20
+                }
+            }
+        )
+        
+        resultat = simular_millores(self.edifici, [{"millora": millora_clima, "quantitat": 2, "coberturaPercent": 100}])
+        
+        self.assertGreater(resultat["delta"]["reduccioEmissionsKgCO2Any"], 0)
+        self.assertEqual(resultat["despres"]["score"], 75.0)
+
+    def test_simular_edge_cases_i_altres_categories(self):
+        """
+        Test 'escombra' per netejar les línies de codi (coverage) 
+        d'altres tipologies i casos extrems de l'engine.
+        """
+
+        resultat_buit = simular_millores(self.edifici, [])
+        self.assertEqual(resultat_buit["delta"]["incrementScore"], 0.0)
+        self.assertEqual(resultat_buit["delta"]["reduccioConsumKwhAny"], 0.0)
+        
+        millora_led = CatalegMillora.objects.create(
+            nom="Llums LED", categoria="Il·luminació", 
+            costMinim=10, costMaxim=20, estalviEnergeticEstimat=5, 
+            impactePunts=2, unitatBase="m2",
+            parametresBase={"impactes": {"reduccio_consum_electric_total_tipica": 0.15}}
+        )
+        
+        millora_finestres = CatalegMillora.objects.create(
+            nom="Finestres PVC", categoria="Envolupant", 
+            costMinim=200, costMaxim=300, estalviEnergeticEstimat=15, 
+            impactePunts=10, unitatBase="m2",
+            parametresBase={
+                "impactes": {
+                    "reduccio_demanda_calefaccio": 0.15, 
+                    "reduccio_demanda_refrigeracio": 0.10
+                }
+            }
+        )
+        
+        input_motor = [
+            {"millora": millora_led, "quantitat": 100, "coberturaPercent": 50},
+            {"millora": millora_finestres, "quantitat": 20, "coberturaPercent": 100}
+        ]
+        
+        resultat = simular_millores(self.edifici, input_motor)
+        
+        self.assertGreater(resultat["delta"]["costTotalEstimat"], 0)
+        self.assertGreater(resultat["delta"]["estalviAnualEstimatiu"], 0)
+        self.assertGreater(resultat["despres"]["score"], self.edifici.puntuacioBase)
+        self.assertEqual(len(resultat["items"]), 2)
+
+
+class MotorSimulacioEspecificUnitTests(TestCase):
+    def setUp(self):
+        super().setUp()
+
+        self.admin = self._create_user("admin_sim_especific@example.com", RoleChoices.ADMIN)
+        self.grup = GrupComparable.objects.create(
+            idGrup=888,
+            zonaClimatica="C2", 
+            tipologia="Residencial", 
+            rangSuperficie="0-100"
+        )
+        
+        self.edifici = self._create_edifici(self.admin, self.grup, numero=88)
+
+        self.edifici.superficieTotal = 1000.0
+        self.edifici.puntuacioBase = 50.0
+        self.edifici.save()
+
+    def test_simulacio_fotovoltaica_activa_produccio(self):
+        """Prova que la clau 'produccio_kwh_per_kwp_any' activa la lògica de renovables"""
+        millora_fv = CatalegMillora.objects.create(
+            idMillora=9001,
+            nom="Plaques Solars al Terrat",
+            categoria="renovables",
+            unitatBase=UnitatBaseMillora.KWP,
+            cost_orientatiu_unitari=1200,
+            parametresBase={
+                "impactes": {
+                    "produccio_kwh_per_kwp_any": 1500,
+                    "factor_perdues_sistema": 0.15,
+                    "factor_ombra_base": 1.0,
+                    "autoconsum_directe_base": 0.50
+                }
+            }
+        )
+        
+        items = [{"millora": millora_fv, "quantitat": 10, "coberturaPercent": 100}]
+        resultat = simular_millores(self.edifici, items)
+        
+        self.assertGreater(resultat["delta"]["reduccioConsumKwhAny"], 0)
+        self.assertEqual(resultat["items"][0]["produccioFotovoltaicaKwhAny"], 1500 * 10 * 0.85)
+
+    def test_simulacio_aerotermia_activa_reduccio_emissions(self):
+        """Prova que la clau 'reduccio_emissions_calefaccio' activa la lògica de climatització"""
+        millora_aero = CatalegMillora.objects.create(
+            idMillora=9002,
+            nom="Aerotèrmia Centralitzada",
+            categoria="climatitzacio",
+            unitatBase=UnitatBaseMillora.EDIFICI,
+            parametresBase={
+                "impactes": {
+                    "reduccio_emissions_calefaccio": 0.75,
+                    "co2_factor_kg_per_kwh_estalviat": 0.10 # Per forçar un factor diferent
+                }
+            }
+        )
+        
+        items = [{"millora": millora_aero, "quantitat": 1, "coberturaPercent": 100}]
+        resultat = simular_millores(self.edifici, items)
+        
+        self.assertGreater(resultat["delta"]["reduccioEmissionsKgCO2Any"], 0)
+
+    def test_simulacio_envolupant_i_infiltracions(self):
+        """Prova el repartiment de reducció sobre calefacció/refrigeració i infiltracions"""
+        millora_sate = CatalegMillora.objects.create(
+            idMillora=9003,
+            nom="Aïllament SATE",
+            categoria="envolupant",
+            unitatBase=UnitatBaseMillora.M2,
+            parametresBase={
+                "impactes": {
+                    "reduccio_demanda_calefaccio": 0.40,
+                    "reduccio_demanda_refrigeracio": 0.20,
+                    "reduccio_infiltracions": 0.10
+                }
+            }
+        )
+        
+        items = [{"millora": millora_sate, "quantitat": None, "coberturaPercent": 50}]
+        resultat = simular_millores(self.edifici, items)
+        
+        parcial = resultat["items"][0]
+        self.assertGreater(parcial["reduccioConsumKwhAny"], 0)
+        self.assertEqual(parcial["quantitatAplicada"], 500)
+
+# ============================================================================
+# EPIC 4 — PROVES D'INTEGRACIÓ DEL MOTOR DE SIMULACIÓ
+# ============================================================================
+
+class MotorSimulacioIntegrationTests(BaseTestData):
+    """
+    Proves d'integració per validar que l'API respon correctament
+    quan el Frontend (Flutter) demana una previsualització de millores.
+    """
+
+    def setUp(self):
+        super().setUp()
+        
+        self.admin = self._create_user("admin_simulacio@example.com", RoleChoices.ADMIN)
+        self.grup = GrupComparable.objects.create(
+            idGrup=98, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-100"
+        )
+        self.edifici = self._create_edifici(self.admin, self.grup, numero=2)
+        
+        self.edifici.puntuacioBase = 50.0
+        self.edifici.save()
+        
+        self.millora_sate = CatalegMillora.objects.create(
+            nom="Aïllament SATE",
+            categoria="Envolupant",
+            costMinim=40.0,
+            costMaxim=60.0,
+            estalviEnergeticEstimat=20.0,
+            impactePunts=15.0, 
+            nivellConfianca="alt",
+            unitatBase="m2",
+            parametresBase={
+                "impactes": {
+                    "reduccio_demanda_calefaccio": 0.30,
+                    "reduccio_consum_electric_total_tipica": 0.10
+                }
+            }
+        )
+
+    def test_api_simulacio_preview_retorna_200_i_dades_correctes(self):
+        """
+        Validem que cridant a l'endpoint (POST) amb DRF obtenim 
+        el JSON sencer de la simulació per poder-lo mostrar a Flutter.
+        """
+        self.client.force_authenticate(user=self.admin)
+        
+        url = reverse('edifici-simulacions-preview', args=[self.edifici.idEdifici])
+        
+        payload = {
+            "millores": [
+                {
+                    "milloraId": self.millora_sate.idMillora,
+                    "quantitat": 100,
+                    "coberturaPercent": 100
+                }
+            ]
+        }
+        
+        response = self.client.post(url, payload, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        self.assertIn("abans", response.data)
+        self.assertIn("despres", response.data)
+        self.assertIn("delta", response.data)
+        
+        self.assertEqual(response.data["delta"]["incrementScore"], 15.0)
+
+    def test_api_simulacio_get_historial(self):
+        """Cobreix el mètode GET per llistar l'historial de simulacions d'un edifici."""
+        self.client.force_authenticate(user=self.admin)
+        url = reverse('edifici-simulacions', args=[self.edifici.idEdifici])
+        
+        sim = SimulacioMillora.objects.create(
+            edifici=self.edifici,
+            descripcio="Simulació antiga",
+            reduccioConsumPrevista=100.0,
+            reduccioEmissionsPrevista=50.0,
+            costEstimat=5000.0,
+            estalviAnual=200.0,
+            hipotesiBase={"score": 50},
+            resultat={"fake": "data"},
+            versioMotor="SIM-1.0"
+        )
+        
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], sim.id)
+
+    def test_api_simulacio_post_errors_400_i_404(self):
+        """Cobreix el control d'errors del views.py (Exceptions i dades invàlides)."""
+        self.client.force_authenticate(user=self.admin)
+        url = reverse('edifici-simulacions', args=[self.edifici.idEdifici])
+        
+        resp_400 = self.client.post(url, {"un_camp_erroni": 123}, format='json')
+        self.assertEqual(resp_400.status_code, status.HTTP_400_BAD_REQUEST)
+        
+        payload_invalid = {"millores": [{"milloraId": 99999, "quantitat": 1}]}
+        resp_invalid = self.client.post(url, payload_invalid, format='json')
+        self.assertEqual(resp_invalid.status_code, status.HTTP_400_BAD_REQUEST)

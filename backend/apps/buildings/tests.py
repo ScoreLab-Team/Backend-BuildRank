@@ -1635,13 +1635,13 @@ class MotorSimulacioUnitTests(BaseTestData):
         self.assertEqual(len(resultat["items"]), 2)
 
 
-class MotorSimulacioEspecificUnitTests(TestCase):
+class MotorSimulacioEspecificUnitTests(BaseTestData):
     def setUp(self):
         super().setUp()
-
+        
         self.admin = self._create_user("admin_sim_especific@example.com", RoleChoices.ADMIN)
         self.grup = GrupComparable.objects.create(
-            idGrup=888,
+            idGrup=888, # Un ID diferent per evitar xocs
             zonaClimatica="C2", 
             tipologia="Residencial", 
             rangSuperficie="0-100"
@@ -1660,7 +1660,6 @@ class MotorSimulacioEspecificUnitTests(TestCase):
             nom="Plaques Solars al Terrat",
             categoria="renovables",
             unitatBase=UnitatBaseMillora.KWP,
-            cost_orientatiu_unitari=1200,
             parametresBase={
                 "impactes": {
                     "produccio_kwh_per_kwp_any": 1500,

@@ -1,11 +1,14 @@
 from datetime import date
 
-from django.test import TestCase
+from django.test import TestCase, RequestFactory
+from django.contrib.messages.storage.fallback import FallbackStorage
+from django.contrib.admin.sites import AdminSite
 from rest_framework import status
 from rest_framework.test import APITestCase, APIClient
 from django.contrib.auth import get_user_model
 
 from .models import Temporada, EstatTemporada
+from .admin import TemporadaAdmin
 
 User = get_user_model()
 
@@ -206,4 +209,122 @@ class TemporadaAPITest(APITestCase):
         self.client.post(f'/api/seasons/{self.temporada.pk}/iniciar/')
         self.client.force_authenticate(user=self.user)
         response = self.client.post(f'/api/seasons/{self.temporada.pk}/tancar/')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class SeasonManagerExtraTest(TestCase):
+    """Tests addicionals del SeasonManager per cobrir create_season i is_active fora de rang."""
+
+    def test_create_season(self):
+        t = Temporada.objects.create_season('T1', date(2028, 1, 1), date(2028, 12, 31))
+        self.assertEqual(t.nom, 'T1')
+        self.assertEqual(t.estat, EstatTemporada.PENDENT)
+
+    def test_is_active_activa_fora_de_rang(self):
+        t = Temporada.objects.create(
+            nom='Antiga', dataInici=date(2020, 1, 1), dataFi=date(2020, 12, 31), estat='ACTIVA'
+        )
+        self.assertFalse(Temporada.objects.is_active(t))
+
+
+class TemporadaAdminActionTest(TestCase):
+    """Tests de les accions d'admin de Temporada."""
+
+    def setUp(self):
+        self.admin_user = User.objects.create_superuser(
+            email='adminact@example.com', password='Password123'
+        )
+        self.temporada = Temporada.objects.create(**SEASON_DATA)
+
+    def _do_action(self, action_name, queryset):
+        factory = RequestFactory()
+        request = factory.post('/')
+        request.user = self.admin_user
+        setattr(request, 'session', 'session')
+        storage = FallbackStorage(request)
+        setattr(request, '_messages', storage)
+        admin_obj = TemporadaAdmin(Temporada, AdminSite())
+        getattr(admin_obj, action_name)(request, queryset)
+        return list(storage)
+
+    def test_action_iniciar_success(self):
+        msgs = self._do_action('action_iniciar', Temporada.objects.filter(pk=self.temporada.pk))
+        self.temporada.refresh_from_db()
+        self.assertEqual(self.temporada.estat, EstatTemporada.ACTIVA)
+        self.assertTrue(any(m.level_tag == 'success' for m in msgs))
+
+    def test_action_iniciar_error(self):
+        Temporada.objects.iniciar(self.temporada)
+        msgs = self._do_action('action_iniciar', Temporada.objects.filter(pk=self.temporada.pk))
+        self.assertTrue(any(m.level_tag == 'error' for m in msgs))
+
+    def test_action_iniciar_mixed(self):
+        altra = Temporada.objects.create(
+            nom='Altra', dataInici='2027-01-01', dataFi='2027-12-31', estat='TANCADA'
+        )
+        qs = Temporada.objects.filter(pk__in=[self.temporada.pk, altra.pk])
+        msgs = self._do_action('action_iniciar', qs)
+        levels = {m.level_tag for m in msgs}
+        self.assertIn('success', levels)
+        self.assertIn('error', levels)
+
+    def test_action_tancar_success(self):
+        Temporada.objects.iniciar(self.temporada)
+        msgs = self._do_action('action_tancar', Temporada.objects.filter(pk=self.temporada.pk))
+        self.temporada.refresh_from_db()
+        self.assertEqual(self.temporada.estat, EstatTemporada.TANCADA)
+        self.assertTrue(any(m.level_tag == 'success' for m in msgs))
+
+    def test_action_tancar_error(self):
+        msgs = self._do_action('action_tancar', Temporada.objects.filter(pk=self.temporada.pk))
+        self.assertTrue(any(m.level_tag == 'error' for m in msgs))
+
+    def test_action_tancar_mixed(self):
+        Temporada.objects.iniciar(self.temporada)
+        altra = Temporada.objects.create(
+            nom='Altra', dataInici='2027-01-01', dataFi='2027-12-31', estat='PENDENT'
+        )
+        qs = Temporada.objects.filter(pk__in=[self.temporada.pk, altra.pk])
+        msgs = self._do_action('action_tancar', qs)
+        levels = {m.level_tag for m in msgs}
+        self.assertIn('success', levels)
+        self.assertIn('error', levels)
+
+
+class TemporadaAPIExtraTest(APITestCase):
+    """Tests addicionals dels endpoints REST: update, delete i accés no autenticat."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = make_superuser()
+        self.user = make_user()
+        self.temporada = Temporada.objects.create(**SEASON_DATA)
+
+    def test_no_autenticat_no_pot_llistar(self):
+        response = self.client.get('/api/seasons/')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_no_autenticat_no_pot_veure_detall(self):
+        response = self.client.get(f'/api/seasons/{self.temporada.pk}/')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_admin_pot_actualitzar_temporada(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.patch(f'/api/seasons/{self.temporada.pk}/', {'nom': 'Nou nom'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['nom'], 'Nou nom')
+
+    def test_no_admin_no_pot_actualitzar(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.patch(f'/api/seasons/{self.temporada.pk}/', {'nom': 'Nou nom'})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_pot_eliminar_temporada(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.delete(f'/api/seasons/{self.temporada.pk}/')
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+    def test_no_admin_no_pot_eliminar(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.delete(f'/api/seasons/{self.temporada.pk}/')
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

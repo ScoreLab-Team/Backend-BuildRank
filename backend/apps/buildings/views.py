@@ -14,7 +14,7 @@ from apps.accounts.models import RoleChoices
 from .models import (
     Edifici, Habitatge, Localitzacio, DadesEnergetiques,
     carrersBarcelona, EstatValidacio, AccioAudit, EdificiAuditLog,
-    CatalegMillora, SimulacioMillora, SimulacioMilloraItem,
+    CatalegMillora, SimulacioMillora, SimulacioMilloraItem, MilloraImplementada,
 )
 from .serializers import (
     EdificiDetailSerializer, EdificiListSerializer,
@@ -24,6 +24,7 @@ from .serializers import (
     CatalegMilloraSerializer,
     SimulacioMilloraPreviewSerializer,
     SimulacioMilloraSerializer, MilloraImplementadaSerializer,
+    ValidacioMilloraSerializer,
 )
 from .permissions import (
     EsAdminEdifici,
@@ -31,6 +32,7 @@ from .permissions import (
     EsAdminOPropietariHabitatge,
     EsOwnerOAdminHabitatge,
     EsOwnerOAdminDadesEnergetiques,
+    EsAdminMilloraImplementada,
     HasAPIKey,
 )
 from .pagination import RankingPaginacio
@@ -476,6 +478,38 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         serializer = MilloraImplementadaSerializer(implementacions, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class MilloraImplementadaViewSet(viewsets.GenericViewSet):
+    queryset = MilloraImplementada.objects.select_related("millora", "edifici")
+    serializer_class = MilloraImplementadaSerializer
+    permission_classes = [IsAuthenticated, EsAdminMilloraImplementada]
+
+    @action(detail=True, methods=["post"], url_path="validar")
+    def validar(self, request, pk=None):
+        millora_impl = self.get_object()
+
+        input_serializer = ValidacioMilloraSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        nou_estat = input_serializer.validated_data["estatValidacio"]
+        observacions = input_serializer.validated_data.get("observacionsAdmin", "")
+
+        if millora_impl.estatValidacio not in (
+            EstatValidacio.PENDENT_DOCUMENTACIO, EstatValidacio.EN_REVISIO
+        ):
+            return Response(
+                {"detail": "Només es poden validar millores en estat 'PendentDocumentacio' o 'EnRevisió'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        millora_impl.estatValidacio = nou_estat
+        millora_impl.observacionsAdmin = observacions
+        millora_impl.administradorFinca = request.user
+        millora_impl.save(update_fields=["estatValidacio", "observacionsAdmin", "administradorFinca"])
+
+        output_serializer = MilloraImplementadaSerializer(millora_impl)
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
 
 
 class HabitatgeViewSet(viewsets.ModelViewSet):

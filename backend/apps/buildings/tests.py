@@ -1943,3 +1943,135 @@ class MotorSimulacioIntegrationTests(BaseTestData):
         payload_invalid = {"millores": [{"milloraId": 99999, "quantitat": 1}]}
         resp_invalid = self.client.post(url, payload_invalid, format='json')
         self.assertEqual(resp_invalid.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+# ============================================================================
+# US47 — Validació manual de millores implementades
+# ============================================================================
+
+class ValidacioMilloraImplementadaTests(BaseTestData):
+    """
+    Proves de l'endpoint POST /millores-implementades/{id}/validar/
+    Cobreix: permisos, transicions d'estat vàlides i invàlides.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = cls._create_user("admin_val@example.com", RoleChoices.ADMIN)
+        cls.other_admin = cls._create_user("other_admin_val@example.com", RoleChoices.ADMIN)
+        cls.owner = cls._create_user("owner_val@example.com", RoleChoices.OWNER)
+        cls.superuser = User.objects.create_superuser(
+            email="super_val@example.com", password="Password123"
+        )
+        cls.grup = GrupComparable.objects.create(
+            idGrup=77, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-100"
+        )
+        cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=77)
+        cls.cataleg = CatalegMillora.objects.create(
+            nom="Millora US47",
+            categoria="Envolupant",
+            costMinim=1000.0,
+            costMaxim=2000.0,
+            estalviEnergeticEstimat=10.0,
+            impactePunts=5.0,
+        )
+
+    def _crear_millora_impl(self, estat=EstatValidacio.EN_REVISIO):
+        return MilloraImplementada.objects.create(
+            dataExecucio="2025-06-01",
+            costReal=1500.0,
+            estatValidacio=estat,
+            millora=self.cataleg,
+            edifici=self.edifici,
+        )
+
+    def _url(self, pk):
+        return reverse("millora-implementada-validar", args=[pk])
+
+    # --- permisos ---
+
+    def test_admin_propi_pot_validar(self):
+        mi = self._crear_millora_impl()
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["estatValidacio"], "Validada")
+
+    def test_superuser_pot_validar(self):
+        mi = self._crear_millora_impl()
+        self.client.force_authenticate(user=self.superuser)
+        resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Rebutjada", "observacionsAdmin": "Documentació incompleta"}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["estatValidacio"], "Rebutjada")
+        self.assertEqual(resp.data["observacionsAdmin"], "Documentació incompleta")
+
+    def test_admin_daltri_edifici_no_pot_validar(self):
+        mi = self._crear_millora_impl()
+        self.client.force_authenticate(user=self.other_admin)
+        resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_owner_no_pot_validar(self):
+        mi = self._crear_millora_impl()
+        self.client.force_authenticate(user=self.owner)
+        resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_no_pot_validar(self):
+        mi = self._crear_millora_impl()
+        self.client.force_authenticate(user=None)
+        resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
+        self.assertIn(resp.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    # --- transicions d'estat ---
+
+    def test_validar_des_de_pendent_documentacio(self):
+        mi = self._crear_millora_impl(estat=EstatValidacio.PENDENT_DOCUMENTACIO)
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+    def test_no_es_pot_validar_una_millora_ja_validada(self):
+        mi = self._crear_millora_impl(estat=EstatValidacio.VALIDADA)
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Rebutjada"}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_no_es_pot_validar_una_millora_ja_rebutjada(self):
+        mi = self._crear_millora_impl(estat=EstatValidacio.REBUTJADA)
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # --- validació d'input ---
+
+    def test_estat_invalid_retorna_400(self):
+        mi = self._crear_millora_impl()
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(self._url(mi.pk), {"estatValidacio": "EnRevisió"}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_estat_absent_retorna_400(self):
+        mi = self._crear_millora_impl()
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(self._url(mi.pk), {}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # --- efectes secundaris ---
+
+    def test_validar_desa_administrador_finca(self):
+        mi = self._crear_millora_impl()
+        self.client.force_authenticate(user=self.admin)
+        self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
+        mi.refresh_from_db()
+        self.assertEqual(mi.administradorFinca, self.admin)
+
+    def test_admin_pot_validar_multiples_millores(self):
+        """Un admin pot validar més d'una millora (ForeignKey, no OneToOneField)."""
+        mi1 = self._crear_millora_impl()
+        mi2 = self._crear_millora_impl()
+        self.client.force_authenticate(user=self.admin)
+        r1 = self.client.post(self._url(mi1.pk), {"estatValidacio": "Validada"}, format="json")
+        r2 = self.client.post(self._url(mi2.pk), {"estatValidacio": "Rebutjada"}, format="json")
+        self.assertEqual(r1.status_code, status.HTTP_200_OK)
+        self.assertEqual(r2.status_code, status.HTTP_200_OK)

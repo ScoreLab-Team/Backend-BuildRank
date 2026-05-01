@@ -10,6 +10,7 @@ from apps.buildings.models import (
     SimulacioMillora,
     SimulacioMilloraItem,
     MilloraImplementada,
+    EstatValidacio,
 )
 import re
 from datetime import date
@@ -395,3 +396,10 @@ class MilloraImplementadaSerializer(serializers.ModelSerializer):
             "observacionsAdmin",
             "documentacioAdjunta",
         ]
+
+
+class ValidacioMilloraSerializer(serializers.Serializer):
+    ESTATS_PERMESOS = [EstatValidacio.VALIDADA, EstatValidacio.REBUTJADA]
+
+    estatValidacio = serializers.ChoiceField(choices=ESTATS_PERMESOS)
+    observacionsAdmin = serializers.CharField(required=False, allow_blank=True, default="")

@@ -10,6 +10,11 @@ venv/
 # Django
 db.sqlite3
 *.sqlite3
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
 media/
 staticfiles/
 

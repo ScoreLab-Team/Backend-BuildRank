@@ -1,16 +1,18 @@
 # Test Execution Report – Accounts Backend i Buildings Backend
 
 ## Executor
-Martí Borràs
-Mireia Brufau
+Martí Borràs  
+Mireia Brufau  
+Eduard Corrons 
 
 ## Branca
-testing-us1-us7
-feature/testing
+testing-us1-us7  
+feature/testing  
 
 ## Àmbit
-- **Mòdul Accounts:** US1, US2, US3, US4, US5, US6 i US7.
-- **Mòdul Buildings / Simulacions:** US29 i US30.
+- **Mòdul Accounts:** US1, US2, US3, US4, US5, US6 i US7  
+- **Mòdul Buildings (gestió i permisos):** US10, US11, US12, US14, US19, US20  
+- **Mòdul Simulacions:** US29 i US30  
 
 ## Comandes executades
 ```bash

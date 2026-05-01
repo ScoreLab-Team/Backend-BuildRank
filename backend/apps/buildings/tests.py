@@ -7,9 +7,10 @@ from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
-from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada
+from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora
 from apps.buildings.serializers import EdificiDetailSerializer, LocalitzacioSerializer
 from apps.accounts.models import RoleChoices
+from .simulation.engine import simular_millores, clamp, UnitatBaseMillora
 
 User = get_user_model()
 
@@ -325,7 +326,7 @@ class EdificiEdgeCaseAndPerformanceTests(BaseTestData):
 """
 
 # ============================================================================
-# 4. DESACTIVACIÓ LÒGICA per al AdminSistema 
+# 4. DESACTIVACIÓ LÒGICA per al AdminSistema
 # ============================================================================
 
 class EdificiDesactivacioLogicaTests(BaseTestData):
@@ -333,7 +334,7 @@ class EdificiDesactivacioLogicaTests(BaseTestData):
     Comprova que la desactivació lògica funciona correctament:
     camps, manager actius, visibilitat i reactivació.
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.superuser = User.objects.create_superuser(
@@ -344,36 +345,36 @@ class EdificiDesactivacioLogicaTests(BaseTestData):
             idGrup=1, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="100-200"
         )
         cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=10)
- 
+
     def test_edifici_actiu_per_defecte(self):
         """Un edifici nou té actiu=True i dataDesactivacio=None."""
         self.assertTrue(self.edifici.actiu)
         self.assertIsNone(self.edifici.dataDesactivacio)
         self.assertEqual(self.edifici.motivDesactivacio, "")
- 
+
     def test_manager_actius_exclou_desactivats(self):
         """Edifici.actius no retorna edificis amb actiu=False."""
         self.edifici.actiu = False
         self.edifici.save(update_fields=["actiu"])
- 
+
         ids_actius = list(Edifici.actius.values_list("idEdifici", flat=True))
         self.assertNotIn(self.edifici.idEdifici, ids_actius)
- 
+
         # Restaurar per no afectar altres tests
         self.edifici.actiu = True
         self.edifici.save(update_fields=["actiu"])
- 
+
     def test_manager_objects_inclou_tots(self):
         """Edifici.objects retorna tots els edificis, inclosos els desactivats."""
         self.edifici.actiu = False
         self.edifici.save(update_fields=["actiu"])
- 
+
         ids_tots = list(Edifici.objects.values_list("idEdifici", flat=True))
         self.assertIn(self.edifici.idEdifici, ids_tots)
- 
+
         self.edifici.actiu = True
         self.edifici.save(update_fields=["actiu"])
- 
+
     def test_desactivar_endpoint_posa_actiu_false(self):
         """POST /desactivar/?confirmat=true → actiu=False i dataDesactivacio assignada."""
         self.client.force_authenticate(user=self.superuser)
@@ -384,29 +385,29 @@ class EdificiDesactivacioLogicaTests(BaseTestData):
             QUERY_STRING="confirmat=true",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
- 
+
         self.edifici.refresh_from_db()
         self.assertFalse(self.edifici.actiu)
         self.assertIsNotNone(self.edifici.dataDesactivacio)
         self.assertEqual(self.edifici.motivDesactivacio, "Test desactivació")
- 
+
     def test_reactivar_endpoint_restaura_estat(self):
         """POST /reactivar/ → actiu=True i dataDesactivacio=None."""
         self.edifici.actiu = False
         self.edifici.dataDesactivacio = timezone.now()
         self.edifici.save(update_fields=["actiu", "dataDesactivacio"])
- 
+
         self.client.force_authenticate(user=self.superuser)
         response = self.client.post(
             reverse("edifici-reactivar", args=[self.edifici.idEdifici]),
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
- 
+
         self.edifici.refresh_from_db()
         self.assertTrue(self.edifici.actiu)
         self.assertIsNone(self.edifici.dataDesactivacio)
- 
+
     def test_desactivar_edifici_ja_desactivat_retorna_400(self):
         self.edifici.actiu = False
         self.edifici.save(update_fields=["actiu"])
@@ -420,12 +421,12 @@ class EdificiDesactivacioLogicaTests(BaseTestData):
 
         self.edifici.actiu = True
         self.edifici.save(update_fields=["actiu"])
- 
+
     def test_edifici_desactivat_no_apareix_al_list(self):
         """Un edifici desactivat no apareix a GET /edificis/ per cap rol."""
         self.edifici.actiu = False
         self.edifici.save(update_fields=["actiu"])
- 
+
         for user in [self.admin]:
             with self.subTest(user=user.email):
                 self.client.force_authenticate(user=user)
@@ -433,15 +434,15 @@ class EdificiDesactivacioLogicaTests(BaseTestData):
                 self.assertEqual(response.status_code, status.HTTP_200_OK)
                 ids = [item["idEdifici"] for item in response.data]
                 self.assertNotIn(self.edifici.idEdifici, ids)
- 
+
         self.edifici.actiu = True
         self.edifici.save(update_fields=["actiu"])
- 
+
     def test_inclou_desactivats_nomes_per_superuser(self):
         """?inclou_desactivats=true retorna desactivats només per superuser, no per ADMIN."""
         self.edifici.actiu = False
         self.edifici.save(update_fields=["actiu"])
- 
+
         # Superuser sí veu desactivats
         self.client.force_authenticate(user=self.superuser)
         response = self.client.get(reverse("edifici-list"), {"inclou_desactivats": "true"})
@@ -451,13 +452,13 @@ class EdificiDesactivacioLogicaTests(BaseTestData):
 # ============================================================================
 # DRY-RUN I VALIDACIÓ DE CONSISTÈNCIA (Task #170)
 # ============================================================================
- 
+
 class EdificiDesactivacioDryRunTests(BaseTestData):
     """
     Comprova el comportament del dry-run (sense ?confirmat=true)
     i les advertències de consistència.
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.superuser = User.objects.create_superuser(
@@ -469,7 +470,7 @@ class EdificiDesactivacioDryRunTests(BaseTestData):
             idGrup=1, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="100-200"
         )
         cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=10)
- 
+
     def test_dryrun_sense_confirmat_no_modifica_edifici(self):
         """POST /desactivar/ sense ?confirmat no canvia l'estat de l'edifici."""
         self.client.force_authenticate(user=self.superuser)
@@ -480,7 +481,7 @@ class EdificiDesactivacioDryRunTests(BaseTestData):
         )
         self.edifici.refresh_from_db()
         self.assertTrue(self.edifici.actiu)  # No ha canviat
- 
+
     def test_dryrun_retorna_estructura_correcta(self):
         """La resposta dry-run conté 'advertencies' i 'pot_desactivar'."""
         self.client.force_authenticate(user=self.superuser)
@@ -492,7 +493,7 @@ class EdificiDesactivacioDryRunTests(BaseTestData):
         self.assertIn("advertencies", response.data)
         self.assertIn("pot_desactivar", response.data)
         self.assertIn("edifici_id", response.data)
- 
+
     def test_advertencia_habitatges_amb_usuaris(self):
         """Dry-run detecta habitatges amb usuaris assignats."""
         Habitatge.objects.create(
@@ -507,7 +508,7 @@ class EdificiDesactivacioDryRunTests(BaseTestData):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         advertencies_text = " ".join(response.data["advertencies"])
         self.assertIn("habitatge", advertencies_text.lower())
- 
+
     def test_advertencia_millores_en_proces(self):
         """Dry-run detecta millores implementades en procés de validació."""
         millora = CatalegMillora.objects.create(
@@ -534,17 +535,17 @@ class EdificiDesactivacioDryRunTests(BaseTestData):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         advertencies_text = " ".join(response.data["advertencies"])
         self.assertIn("millora", advertencies_text.lower())
- 
+
  # ============================================================================
 # 6. US20 — PERMISOS DE DESACTIVACIÓ (Tasks #169 + #170)
 # ============================================================================
- 
+
 class EdificiDesactivacioPermisosTests(BaseTestData):
     """
     Comprova que només el superuser pot desactivar/reactivar.
     Tots els altres rols han de rebre 403.
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.superuser = User.objects.create_superuser(
@@ -557,7 +558,7 @@ class EdificiDesactivacioPermisosTests(BaseTestData):
             idGrup=1, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="100-200"
         )
         cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=10)
- 
+
     def test_rols_no_autoritzats_no_poden_desactivar(self):
         for user in [self.admin, self.owner, self.tenant]:
             with self.subTest(user=user.email):
@@ -572,7 +573,7 @@ class EdificiDesactivacioPermisosTests(BaseTestData):
                     response.status_code,
                     [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
                 )
- 
+
     def test_no_autenticat_no_pot_desactivar(self):
         """Usuari no autenticat rep 401 en intentar desactivar."""
         self.client.force_authenticate(user=None)
@@ -585,13 +586,13 @@ class EdificiDesactivacioPermisosTests(BaseTestData):
 # ============================================================================
 # 7. US20 — REGISTRE D'AUDITORIA (Task #171)
 # ============================================================================
- 
+
 class EdificiAuditLogTests(BaseTestData):
     """
     Comprova que EdificiAuditLog es crea correctament
     en desactivar, reactivar i que els camps són correctes.
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.superuser = User.objects.create_superuser(
@@ -602,13 +603,13 @@ class EdificiAuditLogTests(BaseTestData):
             idGrup=1, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="100-200"
         )
         cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=10)
- 
+
     def test_desactivar_crea_audit_log(self):
         """Desactivar un edifici crea un registre EdificiAuditLog amb accio=DESACTIVAR."""
         logs_abans = EdificiAuditLog.objects.filter(
             edifici=self.edifici, accio="DESACTIVAR"
         ).count()
- 
+
         self.client.force_authenticate(user=self.superuser)
         self.client.post(
             reverse("edifici-desactivar", args=[self.edifici.idEdifici]),
@@ -616,12 +617,12 @@ class EdificiAuditLogTests(BaseTestData):
             format="json",
             QUERY_STRING="confirmat=true",
         )
- 
+
         logs_despres = EdificiAuditLog.objects.filter(
             edifici=self.edifici, accio="DESACTIVAR"
         ).count()
         self.assertEqual(logs_despres, logs_abans + 1)
- 
+
     def test_audit_log_conte_camps_correctes(self):
         """El log de desactivació conté edifici_id_snapshot, usuari, motiu i camps_modificats."""
         self.client.force_authenticate(user=self.superuser)
@@ -631,51 +632,51 @@ class EdificiAuditLogTests(BaseTestData):
             format="json",
             QUERY_STRING="confirmat=true",
         )
- 
+
         log = EdificiAuditLog.objects.filter(
             edifici=self.edifici, accio="DESACTIVAR"
         ).latest("timestamp")
- 
+
         self.assertEqual(log.edifici_id_snapshot, self.edifici.idEdifici)
         self.assertEqual(log.usuari, self.superuser)
         self.assertEqual(log.motiu, "Verificació camps")
         self.assertIn("actiu", log.camps_modificats)
         self.assertEqual(log.camps_modificats["actiu"], [True, False])
- 
+
     def test_reactivar_crea_audit_log(self):
         """Reactivar un edifici crea un registre EdificiAuditLog amb accio=REACTIVAR."""
         self.edifici.actiu = False
         self.edifici.save(update_fields=["actiu"])
- 
+
         logs_abans = EdificiAuditLog.objects.filter(
             edifici=self.edifici, accio="REACTIVAR"
         ).count()
- 
+
         self.client.force_authenticate(user=self.superuser)
         self.client.post(
             reverse("edifici-reactivar", args=[self.edifici.idEdifici]),
             format="json",
         )
- 
+
         logs_despres = EdificiAuditLog.objects.filter(
             edifici=self.edifici, accio="REACTIVAR"
         ).count()
         self.assertEqual(logs_despres, logs_abans + 1)
- 
+
     def test_dryrun_no_crea_audit_log(self):
         """El dry-run (sense ?confirmat=true) NO crea cap registre d'auditoria."""
         logs_abans = EdificiAuditLog.objects.filter(edifici=self.edifici).count()
- 
+
         self.client.force_authenticate(user=self.superuser)
         self.client.post(
             reverse("edifici-desactivar", args=[self.edifici.idEdifici]),
             format="json",
             # sense QUERY_STRING confirmat=true
         )
- 
+
         logs_despres = EdificiAuditLog.objects.filter(edifici=self.edifici).count()
         self.assertEqual(logs_despres, logs_abans)
- 
+
     def test_audit_log_preserva_edifici_id_snapshot(self):
         """edifici_id_snapshot es guarda correctament per preservar-lo si l'edifici s'elimina."""
         self.client.force_authenticate(user=self.superuser)
@@ -684,13 +685,13 @@ class EdificiAuditLogTests(BaseTestData):
             format="json",
             QUERY_STRING="confirmat=true",
         )
- 
+
         log = EdificiAuditLog.objects.filter(
             edifici=self.edifici, accio="DESACTIVAR"
         ).latest("timestamp")
- 
+
         self.assertEqual(log.edifici_id_snapshot, self.edifici.idEdifici)
- 
+
         # Restaurar
         self.edifici.actiu = True
         self.edifici.save(update_fields=["actiu"])
@@ -1017,3 +1018,928 @@ class ClassificacioEstimadaSerializerTests(BaseTestData):
         font = response.data["classificacio_energetica"]["font"]
         self.assertIn(font, [FontClassificacio.ESTIMADA, FontClassificacio.INSUFICIENT])
         self.assertNotEqual(font, FontClassificacio.OFICIAL)
+
+# ============================================================================
+# US13 — Importació open data CEE
+# ============================================================================
+import csv, io, tempfile, os
+from unittest.mock import patch
+from apps.buildings.models import (
+    ImportacioLog, ImportacioIncidencia,
+    DadesEnergetiquesOpenData, TipusEdificiOpenData, FontClassificacio,
+)
+from apps.buildings.management.commands.importar_cee import (
+    _clau_adreca, _construir_edifici, _construir_dades_energetiques,
+    _llegir_chunk, _f, _bool_si,
+)
+from apps.buildings.services.open_data_tipologia import map_tipus_edifici
+
+
+def _csv_amb_files(files: list[dict]) -> str:
+    """Genera un fitxer CSV temporal amb les files donades i retorna la seva ruta."""
+    if not files:
+        return ''
+    fieldnames = list(files[0].keys())
+    tmp = tempfile.NamedTemporaryFile(
+        mode='w', suffix='.csv', delete=False,
+        encoding='utf-8-sig', newline=''
+    )
+    writer = csv.DictWriter(tmp, fieldnames=fieldnames, delimiter=',')
+    writer.writeheader()
+    writer.writerows(files)
+    tmp.close()
+    return tmp.name
+
+
+def _fila_base(**kwargs) -> dict:
+    """Fila mínima vàlida del CSV CEE. Sobreescriu camps amb kwargs."""
+    base = {
+        'NUM_CAS': 'TEST001',
+        'ADREÇA': 'Carrer Test',
+        'NUMERO': '10',
+        'ESCALA': '',
+        'PIS': '1',
+        'PORTA': 'A',
+        'CODI_POSTAL': '08001',
+        'POBLACIO': 'Barcelona',
+        'COMARCA': 'Barcelonès',
+        'NOM_PROVINCIA': 'Barcelona',
+        'CODI_POBLACIO': '08019',
+        'CODI_COMARCA': '13',
+        'CODI_PROVINCIA': '08',
+        'REFERENCIA CADASTRAL': '1234567AA1234A0001AA',
+        'ZONA CLIMATICA': 'C2',
+        'METRES_CADASTRE': '80,5',
+        'ANY_CONSTRUCCIO': '1990',
+        'US_EDIFICI': "Bloc d'habitatges plurifamiliar",
+        "Qualificació de consum d'energia primaria no renovable": 'D',
+        'Energia primària no renovable': '150,5',
+        'Qualificacio d\'emissions de CO2': 'D',
+        'Emissions de CO2': '30,2',
+        'Consum d\'energia final': '100,0',
+        'Cost anual aproximat d\'energia per habitatge': '800,0',
+        'VEHICLE ELECTRIC': 'NO',
+        'SOLAR TERMICA': 'NO',
+        'SOLAR FOTOVOLTAICA': 'NO',
+        'SISTEMA BIOMASSA': 'NO',
+        'XARXA DISTRICTE': 'NO',
+        'ENERGIA GEOTERMICA': 'NO',
+        'INFORME_INS_TECNICA_EDIFICI': '',
+        'Eina de certificacio': 'CE3X',
+        'VALOR AILLAMENTS': '0,5',
+        'VALOR FINESTRES': '2,5',
+        'Motiu de la certificacio': 'Lloguer',
+        'VALOR AILLAMENTS CTE': '0,49',
+        'VALOR FINESTRES CTE': '2,1',
+        'UTM_X': '',
+        'UTM_Y': '',
+        'Normativa construcció': 'NBE-CT-79',
+        'Tipus Tramit': 'Edificis existents',
+        'TIPUS_TERCIARI': '',
+        'Qualificació emissions calefacció': 'D',
+        'Emissions calefacció': '25,0',
+        'Qualificació emissions refrigeració': 'A',
+        'Emissions refrigeració': '1,5',
+        'Qualificació emissions ACS': 'E',
+        'Emissions ACS': '3,7',
+        'Qualificació emissions enllumenament': '',
+        'Emissions enllumenament': '0',
+        'Qualificació energia calefacció': 'D',
+        'Energia calefacció': '110,0',
+        'Qualificació energia refrigeració': 'A',
+        'Energia refrigeració': '5,0',
+        'Qualificació energia ACS': 'E',
+        'Energia ACS': '35,5',
+        'Qualificació energia enllumenament': '',
+        'Energia enllumenament': '0',
+        'Qualificació energia calefacció demanda': 'E',
+        'Energia calefacció demanda': '90,0',
+        'Qualificació energia refrigeració demanda': 'B',
+        'Energia refrigeració demanda': '8,0',
+        'VENTILACIO US RESIDENCIAL': '0,63',
+        'LONGITUD': '2,15899',
+        'LATITUD': '41,38879',
+        'GEOREFERÈNCIA': '',
+        'REHABILITACIO_ENERGETICA': 'No',
+        'ACTUACIONS_REHABILITACIO': '',
+        'DATA_ENTRADA': '15/03/2020',
+    }
+    base.update(kwargs)
+    return base
+
+
+class OpenDataTipologiaTests(TestCase):
+    """US13 #138 — map_tipus_edifici: mapatge de valors del CSV a TipusEdificiOpenData."""
+
+    def test_bloc_pisos_catala(self):
+        self.assertEqual(
+            map_tipus_edifici("Bloc d'habitatges plurifamiliar"),
+            TipusEdificiOpenData.BLOC_PISOS
+        )
+
+    def test_bloc_pisos_castella(self):
+        self.assertEqual(
+            map_tipus_edifici("Bloque de viviendas"),
+            TipusEdificiOpenData.BLOC_PISOS
+        )
+
+    def test_unifamiliar_catala(self):
+        self.assertEqual(
+            map_tipus_edifici("Habitatge unifamiliar"),
+            TipusEdificiOpenData.UNIFAMILIAR
+        )
+
+    def test_habitatge_bloc(self):
+        self.assertEqual(
+            map_tipus_edifici("Habitatge individual en bloc d'habitatges"),
+            TipusEdificiOpenData.HABITATGE_BLOC
+        )
+
+    def test_terciari(self):
+        self.assertEqual(
+            map_tipus_edifici("Terciari"),
+            TipusEdificiOpenData.TERCIARI
+        )
+
+    def test_valor_desconegut_retorna_desconegut(self):
+        self.assertEqual(
+            map_tipus_edifici("Valor que no existeix"),
+            TipusEdificiOpenData.DESCONEGUT
+        )
+
+    def test_string_buit_retorna_desconegut(self):
+        self.assertEqual(map_tipus_edifici(""), TipusEdificiOpenData.DESCONEGUT)
+
+    def test_none_retorna_desconegut(self):
+        self.assertEqual(map_tipus_edifici(None), TipusEdificiOpenData.DESCONEGUT)
+
+    def test_espais_extra_no_trenquen(self):
+        """Valors amb espais al voltant es mapegen correctament."""
+        self.assertEqual(
+            map_tipus_edifici("  Terciari  "),
+            TipusEdificiOpenData.TERCIARI
+        )
+
+
+class OpenDataHelpersTests(TestCase):
+    """US13 — Funcions helpers del command: _f, _bool_si, _clau_adreca."""
+
+    def test_f_converteix_coma_decimal(self):
+        fila = {'METRES_CADASTRE': '80,5'}
+        self.assertAlmostEqual(_f(fila, 'METRES_CADASTRE'), 80.5)
+
+    def test_f_camp_buit_retorna_zero(self):
+        fila = {'METRES_CADASTRE': ''}
+        self.assertEqual(_f(fila, 'METRES_CADASTRE'), 0.0)
+
+    def test_f_camp_absent_retorna_zero(self):
+        self.assertEqual(_f({}, 'CAMP_INEXISTENT'), 0.0)
+
+    def test_bool_si_positiu(self):
+        self.assertTrue(_bool_si({'SOLAR TERMICA': 'SI'}, 'SOLAR TERMICA'))
+        self.assertTrue(_bool_si({'SOLAR TERMICA': 'si'}, 'SOLAR TERMICA'))
+
+    def test_bool_si_negatiu(self):
+        self.assertFalse(_bool_si({'SOLAR TERMICA': 'NO'}, 'SOLAR TERMICA'))
+        self.assertFalse(_bool_si({'SOLAR TERMICA': ''}, 'SOLAR TERMICA'))
+
+    def test_clau_adreca_normalitza_majuscules(self):
+        fila = {'ADREÇA': 'carrer test', 'NUMERO': '10', 'CODI_POSTAL': '08001'}
+        clau = _clau_adreca(fila)
+        self.assertEqual(clau[0], 'CARRER TEST')
+
+    def test_clau_adreca_camps_buits(self):
+        """Files sense adreça no llancen excepció."""
+        clau = _clau_adreca({})
+        self.assertEqual(clau, ('', '', ''))
+
+
+class ConstruirEdificiTests(TestCase):
+    """US13 #139 — _construir_edifici: mapatge de camps CSV a model Edifici."""
+
+    def test_tipologia_open_data_assignada(self):
+        grup = [_fila_base()]
+        edifici = _construir_edifici(grup)
+        self.assertEqual(edifici.tipologia_open_data, TipusEdificiOpenData.BLOC_PISOS)
+
+    def test_terciari_mapeja_a_comercial(self):
+        grup = [_fila_base(**{'US_EDIFICI': 'Terciari'})]
+        edifici = _construir_edifici(grup)
+        self.assertEqual(edifici.tipologia, 'Comercial')
+
+    def test_residencial_mapeja_a_residencial(self):
+        grup = [_fila_base()]
+        edifici = _construir_edifici(grup)
+        self.assertEqual(edifici.tipologia, 'Residencial')
+
+    def test_any_construccio_assignat(self):
+        grup = [_fila_base(**{'ANY_CONSTRUCCIO': '1975'})]
+        edifici = _construir_edifici(grup)
+        self.assertEqual(edifici.anyConstruccio, 1975)
+
+    def test_any_construccio_invalid_posa_zero(self):
+        grup = [_fila_base(**{'ANY_CONSTRUCCIO': 'desconegut'})]
+        edifici = _construir_edifici(grup)
+        self.assertEqual(edifici.anyConstruccio, 0)
+
+    def test_superficie_converteix_coma(self):
+        grup = [_fila_base(**{'METRES_CADASTRE': '120,75'})]
+        edifici = _construir_edifici(grup)
+        self.assertAlmostEqual(edifici.superficieTotal, 120.75)
+
+    def test_font_open_data_sempre_true(self):
+        edifici = _construir_edifici([_fila_base()])
+        self.assertTrue(edifici.font_open_data)
+
+    def test_num_cas_origen_assignat(self):
+        grup = [_fila_base(**{'NUM_CAS': 'ABC123'})]
+        edifici = _construir_edifici(grup)
+        self.assertEqual(edifici.num_cas_origen, 'ABC123')
+
+
+class ConstruirDadesEnergetiquesTests(TestCase):
+    """US13 #139 — _construir_dades_energetiques: mapatge de camps energètics."""
+
+    def test_qualificacio_global_assignada(self):
+        grup = [_fila_base()]
+        dades = _construir_dades_energetiques(grup)
+        self.assertEqual(dades.qualificacioGlobal, 'D')
+
+    def test_consum_energia_primaria_convertit(self):
+        grup = [_fila_base(**{'Energia primària no renovable': '200,5'})]
+        dades = _construir_dades_energetiques(grup)
+        self.assertAlmostEqual(dades.consumEnergiaPrimaria, 200.5)
+
+    def test_solar_termica_si(self):
+        grup = [_fila_base(**{'SOLAR TERMICA': 'SI'})]
+        dades = _construir_dades_energetiques(grup)
+        self.assertTrue(dades.teSolarTermica)
+
+    def test_solar_termica_no(self):
+        grup = [_fila_base(**{'SOLAR TERMICA': 'NO'})]
+        dades = _construir_dades_energetiques(grup)
+        self.assertFalse(dades.teSolarTermica)
+
+    def test_rehabilitacio_energetica_si(self):
+        grup = [_fila_base(**{'REHABILITACIO_ENERGETICA': 'Sí'})]
+        dades = _construir_dades_energetiques(grup)
+        self.assertTrue(dades.rehabilitacioEnergetica)
+
+    def test_data_entrada_parsejada(self):
+        grup = [_fila_base(**{'DATA_ENTRADA': '15/03/2020'})]
+        dades = _construir_dades_energetiques(grup)
+        # Agafem els primers 10 chars — el command guarda com a string YYYY-MM-DD o DD/MM/YYYY
+        self.assertIsNotNone(dades.dataEntrada)
+
+
+class LlegirChunkTests(TestCase):
+    """US13 — _llegir_chunk: lectura parcial del CSV per offset i limit."""
+
+    def setUp(self):
+        self.files = [
+            _fila_base(**{'ADREÇA': f'Carrer {i}', 'NUMERO': str(i), 'NUM_CAS': f'C{i:03d}'})
+            for i in range(1, 21)  # 20 adreces úniques
+        ]
+        self.csv_path = _csv_amb_files(self.files)
+
+    def tearDown(self):
+        if os.path.exists(self.csv_path):
+            os.unlink(self.csv_path)
+
+    def test_limit_retorna_nombre_correcte_dedifici(self):
+        files = _llegir_chunk(self.csv_path, offset_edificis=0, limit_edificis=5)
+        adreces = {_clau_adreca(f) for f in files}
+        self.assertEqual(len(adreces), 5)
+
+    def test_offset_salta_primers_edificis(self):
+        chunk_a = _llegir_chunk(self.csv_path, offset_edificis=0, limit_edificis=5)
+        chunk_b = _llegir_chunk(self.csv_path, offset_edificis=5, limit_edificis=5)
+        adreces_a = {_clau_adreca(f) for f in chunk_a}
+        adreces_b = {_clau_adreca(f) for f in chunk_b}
+        self.assertTrue(adreces_a.isdisjoint(adreces_b), "Els chunks no haurien de solapar-se")
+
+    def test_limit_none_retorna_tot(self):
+        files = _llegir_chunk(self.csv_path, offset_edificis=0, limit_edificis=None)
+        adreces = {_clau_adreca(f) for f in files}
+        self.assertEqual(len(adreces), 20)
+
+    def test_offset_major_que_total_retorna_buit(self):
+        files = _llegir_chunk(self.csv_path, offset_edificis=999, limit_edificis=10)
+        self.assertEqual(files, [])
+
+
+class ImportarCeeCommandTests(TestCase):
+    """US13 #138 #139 #140 — Command complet: integració amb BD."""
+
+    def setUp(self):
+        self.files_csv = [
+            _fila_base(**{
+                'ADREÇA': 'Carrer Integració', 'NUMERO': '1',
+                'NUM_CAS': 'INT001', 'US_EDIFICI': "Bloc d'habitatges plurifamiliar",
+            }),
+            _fila_base(**{
+                'ADREÇA': 'Carrer Integració', 'NUMERO': '2',
+                'NUM_CAS': 'INT002', 'US_EDIFICI': 'Habitatge unifamiliar',
+            }),
+        ]
+        self.csv_path = _csv_amb_files(self.files_csv)
+
+    def tearDown(self):
+        if os.path.exists(self.csv_path):
+            os.unlink(self.csv_path)
+
+    def _run_command(self, **kwargs):
+        from django.core.management import call_command
+        call_command('importar_cee', self.csv_path, **kwargs)
+
+    def test_crea_edificis_i_localitzacions(self):
+        """Sense --dry-run es creen Edifici i Localitzacio a la BD."""
+        self._run_command(limit=2)
+        self.assertEqual(Edifici.objects.filter(font_open_data=True).count(), 2)
+
+    def test_crea_dades_energetiques_opendata(self):
+        """Cada edifici importat té DadesEnergetiquesOpenData associades."""
+        self._run_command(limit=2)
+        edificis = Edifici.objects.filter(font_open_data=True)
+        for e in edificis:
+            self.assertTrue(
+                hasattr(e, 'dades_energetiques_opendata'),
+                f"Edifici {e.idEdifici} no té DadesEnergetiquesOpenData"
+            )
+
+    def test_dry_run_no_escriu_a_bd(self):
+        """--dry-run no crea cap Edifici a la BD."""
+        self._run_command(limit=2, dry_run=True)
+        self.assertEqual(Edifici.objects.filter(font_open_data=True).count(), 0)
+
+    def test_log_creat_amb_resum_correcte(self):
+        """ImportacioLog registra edificis_creats i completada=True."""
+        self._run_command(limit=2)
+        log = ImportacioLog.objects.latest('data_inici')
+        self.assertTrue(log.completada)
+        self.assertEqual(log.edificis_creats, 2)
+        self.assertEqual(log.files_error, 0)
+
+    def test_limit_respectat(self):
+        """--limit 1 crea exactament 1 edifici."""
+        self._run_command(limit=1)
+        self.assertEqual(Edifici.objects.filter(font_open_data=True).count(), 1)
+
+    def test_classificacio_font_oficial_per_opendata(self):
+        """
+        Edificis importats de l'open data (CEE oficial) tenen
+        classificacioFont='oficial', no 'estimada'.
+        """
+        self._run_command(limit=2)
+        for e in Edifici.objects.filter(font_open_data=True):
+            self.assertEqual(
+                e.classificacioFont, FontClassificacio.OFICIAL,
+                f"Edifici {e.idEdifici}: esperava 'oficial', obtingut '{e.classificacioFont}'"
+            )
+
+    def test_incidencia_registrada_per_fila_invalida(self):
+        """
+        Una fila amb LATITUD invàlida genera una ImportacioIncidencia
+        i no trenca la importació de la resta.
+        """
+        files_amb_error = self.files_csv + [
+            _fila_base(**{
+                'ADREÇA': 'Carrer Error', 'NUMERO': '99',
+                'NUM_CAS': 'ERR001', 'LATITUD': 'no-es-un-numero',
+            })
+        ]
+        csv_path_error = _csv_amb_files(files_amb_error)
+        try:
+            from django.core.management import call_command
+            call_command('importar_cee', csv_path_error, limit=3)
+            log = ImportacioLog.objects.latest('data_inici')
+            self.assertGreater(log.files_error, 0)
+            self.assertTrue(
+                ImportacioIncidencia.objects.filter(importacio=log).exists()
+            )
+        finally:
+            os.unlink(csv_path_error)
+
+
+class OpenDataClassificacioFontTests(TestCase):
+    """
+    US13 — Verifica que la lògica de font és correcta:
+    open data → oficial, habitatges usuari → estimada.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from apps.accounts.models import RoleChoices
+        cls.admin = User.objects.create_user(
+            email='admin_od@example.com', password='Password123', first_name='Admin'
+        )
+        cls.admin.profile.role = RoleChoices.ADMIN
+        cls.admin.profile.save()
+
+        cls.grup = GrupComparable.objects.create(
+            idGrup=99, zonaClimatica='C2', tipologia='Residencial', rangSuperficie='0-500'
+        )
+        loc = Localitzacio.objects.create(
+            carrer='Carrer Font', numero=1, codiPostal='08001',
+            barri='', latitud=41.0, longitud=2.0, zonaClimatica='C2',
+        )
+        cls.edifici_od = Edifici.objects.create(
+            anyConstruccio=1990, tipologia='Residencial', superficieTotal=200,
+            reglament='CTE', orientacioPrincipal='Sud',
+            localitzacio=loc, administradorFinca=cls.admin, grupComparable=cls.grup,
+            font_open_data=True,
+            classificacioFont=FontClassificacio.OFICIAL,
+            classificacioEstimada='D',
+        )
+        DadesEnergetiquesOpenData.objects.create(
+            edifici=cls.edifici_od,
+            qualificacioGlobal='D',
+            consumEnergiaPrimaria=150.0,
+            emissionsCO2=30.0,
+        )
+
+    def test_edifici_opendata_te_font_oficial(self):
+        """Edifici seeded des del CEE oficial té classificacioFont='oficial'."""
+        self.assertEqual(self.edifici_od.classificacioFont, FontClassificacio.OFICIAL)
+
+    def test_edifici_sense_opendata_ni_habitatges_es_insuficient(self):
+        """Edifici buit sense dades té font='insuficient'."""
+        from apps.buildings.scoring import calcular_classificacio_estimada
+        loc = Localitzacio.objects.create(
+            carrer='Carrer Buit', numero=2, codiPostal='08001',
+            barri='', latitud=41.0, longitud=2.0, zonaClimatica='C2',
+        )
+        e = Edifici.objects.create(
+            anyConstruccio=2000, tipologia='Residencial', superficieTotal=100,
+            reglament='CTE', orientacioPrincipal='Sud',
+            localitzacio=loc, administradorFinca=self.admin, grupComparable=self.grup,
+        )
+        resultat = calcular_classificacio_estimada(e)
+        self.assertEqual(resultat['font'], FontClassificacio.INSUFICIENT)
+
+# ============================================================================
+# EPIC 4 — PROVES UNITÀRIES DEL MOTOR DE SIMULACIÓ
+# ============================================================================
+class MotorSimulacioUnitTests(BaseTestData):
+    """
+    Proves unitàries per validar la matemàtica del motor de simulació.
+    """
+
+    def setUp(self):
+        super().setUp()
+
+        self.admin = self._create_user("admin_motor@example.com", RoleChoices.ADMIN)
+        self.grup = GrupComparable.objects.create(
+            idGrup=99, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-100"
+        )
+        self.edifici = self._create_edifici(self.admin, self.grup, numero=1)
+
+        self.edifici.superficieTotal = 1000.0
+        self.edifici.puntuacioBase = 50.0
+        self.edifici.save()
+        
+        self.millora_sate = CatalegMillora.objects.create(
+            nom="Aïllament SATE",
+            categoria="Envolupant",
+            costMinim=40.0,
+            costMaxim=60.0,
+            estalviEnergeticEstimat=20.0,
+            impactePunts=15.0, 
+            nivellConfianca="alt",
+            unitatBase="m2",
+            parametresBase={
+                "impactes": {
+                    "reduccio_demanda_calefaccio": 0.30,
+                    "reduccio_consum_electric_total_tipica": 0.10
+                }
+            }
+        )
+
+    def test_clamp_function_respecta_els_limits(self):
+        """Prova unitària d'una funció matemàtica aïllada de l'engine."""
+        self.assertEqual(clamp(150, 0, 100), 100)
+        self.assertEqual(clamp(-10, 0, 100), 0)
+        self.assertEqual(clamp(50, 0, 100), 50)
+
+    def test_simular_millores_calcula_be_el_delta(self):
+        """
+        Validem que el motor rep l'input, fa les matemàtiques i retorna
+        l'arbre de dades correcte (abans, despres, delta).
+        """
+        input_motor = [{
+            "millora": self.millora_sate,
+            "quantitat": 100,
+            "coberturaPercent": 100
+        }]
+
+        resultat = simular_millores(self.edifici, input_motor)
+
+        self.assertIn("abans", resultat)
+        self.assertIn("despres", resultat)
+        self.assertIn("delta", resultat)
+        self.assertIn("items", resultat)
+        
+        self.assertEqual(resultat["delta"]["incrementScore"], 15.0)
+        
+        self.assertEqual(resultat["despres"]["score"], 65.0)
+        
+        self.assertGreater(resultat["delta"]["reduccioConsumKwhAny"], 0)
+        self.assertGreater(resultat["delta"]["estalviAnualEstimatiu"], 0)
+
+    def test_simular_plaques_solars_calcula_produccio(self):
+        """Cobreix les branques de l'engine dedicades a la fotovoltaica (KWp)."""
+        millora_fv = CatalegMillora.objects.create(
+            nom="Plaques FV",
+            categoria="Energia",
+            costMinim=4000.0,
+            costMaxim=6000.0,
+            estalviEnergeticEstimat=40.0,
+            impactePunts=20.0,
+            unitatBase="KWp",
+            parametresBase={
+                "impactes": {
+                    "produccio_kwh_per_kwp_any": 1500,
+                    "factor_perdues_sistema": 0.1,
+                    "autoconsum_directe_base": 0.6
+                }
+            }
+        )
+        
+        resultat = simular_millores(self.edifici, [{"millora": millora_fv, "quantitat": 3, "coberturaPercent": 100}])
+        
+        self.assertGreater(resultat["items"][0]["produccioFotovoltaicaKwhAny"], 0)
+        self.assertGreater(resultat["delta"]["reduccioConsumKwhAny"], 0)
+
+    def test_simular_aerotermia_calcula_emissions(self):
+        """Cobreix les branques de l'engine dedicades a la climatització i reducció directa d'emissions."""
+        millora_clima = CatalegMillora.objects.create(
+            nom="Aerotèrmia Alta Eficiència",
+            categoria="Climatització",
+            costMinim=8000.0,
+            costMaxim=12000.0,
+            estalviEnergeticEstimat=60.0,
+            impactePunts=25.0,
+            unitatBase="habitatge",
+            parametresBase={
+                "impactes": {
+                    "reduccio_emissions_calefaccio": 0.60,
+                    "reduccio_demanda_calefaccio": 0.20
+                }
+            }
+        )
+        
+        resultat = simular_millores(self.edifici, [{"millora": millora_clima, "quantitat": 2, "coberturaPercent": 100}])
+        
+        self.assertGreater(resultat["delta"]["reduccioEmissionsKgCO2Any"], 0)
+        self.assertEqual(resultat["despres"]["score"], 75.0)
+
+    def test_simular_edge_cases_i_altres_categories(self):
+        """
+        Test 'escombra' per netejar les línies de codi (coverage) 
+        d'altres tipologies i casos extrems de l'engine.
+        """
+
+        resultat_buit = simular_millores(self.edifici, [])
+        self.assertEqual(resultat_buit["delta"]["incrementScore"], 0.0)
+        self.assertEqual(resultat_buit["delta"]["reduccioConsumKwhAny"], 0.0)
+        
+        millora_led = CatalegMillora.objects.create(
+            nom="Llums LED", categoria="Il·luminació", 
+            costMinim=10, costMaxim=20, estalviEnergeticEstimat=5, 
+            impactePunts=2, unitatBase="m2",
+            parametresBase={"impactes": {"reduccio_consum_electric_total_tipica": 0.15}}
+        )
+        
+        millora_finestres = CatalegMillora.objects.create(
+            nom="Finestres PVC", categoria="Envolupant", 
+            costMinim=200, costMaxim=300, estalviEnergeticEstimat=15, 
+            impactePunts=10, unitatBase="m2",
+            parametresBase={
+                "impactes": {
+                    "reduccio_demanda_calefaccio": 0.15, 
+                    "reduccio_demanda_refrigeracio": 0.10
+                }
+            }
+        )
+        
+        input_motor = [
+            {"millora": millora_led, "quantitat": 100, "coberturaPercent": 50},
+            {"millora": millora_finestres, "quantitat": 20, "coberturaPercent": 100}
+        ]
+        
+        resultat = simular_millores(self.edifici, input_motor)
+        
+        self.assertGreater(resultat["delta"]["costTotalEstimat"], 0)
+        self.assertGreater(resultat["delta"]["estalviAnualEstimatiu"], 0)
+        self.assertGreater(resultat["despres"]["score"], self.edifici.puntuacioBase)
+        self.assertEqual(len(resultat["items"]), 2)
+
+
+class MotorSimulacioEspecificUnitTests(BaseTestData):
+    def setUp(self):
+        super().setUp()
+        
+        self.admin = self._create_user("admin_sim_especific@example.com", RoleChoices.ADMIN)
+        self.grup = GrupComparable.objects.create(
+            idGrup=888, # Un ID diferent per evitar xocs
+            zonaClimatica="C2", 
+            tipologia="Residencial", 
+            rangSuperficie="0-100"
+        )
+        
+        self.edifici = self._create_edifici(self.admin, self.grup, numero=88)
+
+        self.edifici.superficieTotal = 1000.0
+        self.edifici.puntuacioBase = 50.0
+        self.edifici.save()
+
+    def test_simulacio_fotovoltaica_activa_produccio(self):
+        """Prova que la clau 'produccio_kwh_per_kwp_any' activa la lògica de renovables"""
+        millora_fv = CatalegMillora.objects.create(
+            idMillora=9001,
+            nom="Plaques Solars al Terrat",
+            categoria="renovables",
+            unitatBase=UnitatBaseMillora.KWP,
+            parametresBase={
+                "impactes": {
+                    "produccio_kwh_per_kwp_any": 1500,
+                    "factor_perdues_sistema": 0.15,
+                    "factor_ombra_base": 1.0,
+                    "autoconsum_directe_base": 0.50
+                }
+            }
+        )
+        
+        items = [{"millora": millora_fv, "quantitat": 10, "coberturaPercent": 100}]
+        resultat = simular_millores(self.edifici, items)
+        
+        self.assertGreater(resultat["delta"]["reduccioConsumKwhAny"], 0)
+        self.assertEqual(resultat["items"][0]["produccioFotovoltaicaKwhAny"], 1500 * 10 * 0.85)
+
+    def test_simulacio_aerotermia_activa_reduccio_emissions(self):
+        """Prova que la clau 'reduccio_emissions_calefaccio' activa la lògica de climatització"""
+        millora_aero = CatalegMillora.objects.create(
+            idMillora=9002,
+            nom="Aerotèrmia Centralitzada",
+            categoria="climatitzacio",
+            unitatBase=UnitatBaseMillora.EDIFICI,
+            parametresBase={
+                "impactes": {
+                    "reduccio_emissions_calefaccio": 0.75,
+                    "co2_factor_kg_per_kwh_estalviat": 0.10 # Per forçar un factor diferent
+                }
+            }
+        )
+        
+        items = [{"millora": millora_aero, "quantitat": 1, "coberturaPercent": 100}]
+        resultat = simular_millores(self.edifici, items)
+        
+        self.assertGreater(resultat["delta"]["reduccioEmissionsKgCO2Any"], 0)
+
+    def test_simulacio_envolupant_i_infiltracions(self):
+        """Prova el repartiment de reducció sobre calefacció/refrigeració i infiltracions"""
+        millora_sate = CatalegMillora.objects.create(
+            idMillora=9003,
+            nom="Aïllament SATE",
+            categoria="envolupant",
+            unitatBase=UnitatBaseMillora.M2,
+            parametresBase={
+                "impactes": {
+                    "reduccio_demanda_calefaccio": 0.40,
+                    "reduccio_demanda_refrigeracio": 0.20,
+                    "reduccio_infiltracions": 0.10
+                }
+            }
+        )
+        
+        items = [{"millora": millora_sate, "quantitat": None, "coberturaPercent": 50}]
+        resultat = simular_millores(self.edifici, items)
+        
+        parcial = resultat["items"][0]
+        self.assertGreater(parcial["reduccioConsumKwhAny"], 0)
+        self.assertEqual(parcial["quantitatAplicada"], 500)
+
+    def test_simulacio_sense_dades_base_usa_fallbacks(self):
+        """Prova que si l'edifici no té consums/emissions calculats, usa els FALLBACKS definits al motor"""
+        edifici_buit = self._create_edifici(self.admin, self.grup, numero=101)
+        edifici_buit.superficieTotal = 100
+        edifici_buit.consumFinalKwhAny = None 
+        edifici_buit.emissionsKgCO2Any = None
+        edifici_buit.save()
+
+        resultat = simular_millores(edifici_buit, [])
+        
+        self.assertEqual(resultat["abans"]["consumFinalKwhAny"], 11000)
+        self.assertIsNotNone(resultat["abans"]["score"])
+
+    def test_simulacio_quantitat_zero_o_invalida(self):
+        """Prova com reacciona el motor quan se li passa una quantitat de 0 o cobertura 0"""
+        millora_buda = CatalegMillora.objects.create(
+            idMillora=9004,
+            nom="Millora sense efecte",
+            categoria="envolupant",
+            unitatBase=UnitatBaseMillora.M2,
+            parametresBase={"impactes": {"reduccio_demanda_calefaccio": 0.50}}
+        )
+        
+        items = [{"millora": millora_buda, "quantitat": 0, "coberturaPercent": 0}]
+        resultat = simular_millores(self.edifici, items)
+        
+        self.assertEqual(resultat["delta"]["reduccioConsumKwhAny"], 0)
+        self.assertEqual(resultat["delta"]["reduccioEmissionsKgCO2Any"], 0)
+
+    def test_funcions_auxiliars_clamp_i_limits(self):
+        """Força valors extrems per comprovar que les funcions clamp i _round funcionen correctament"""
+        millora_extrema = CatalegMillora.objects.create(
+            idMillora=9005,
+            nom="Millora Extrema",
+            categoria="climatitzacio",
+            unitatBase=UnitatBaseMillora.EDIFICI,
+            parametresBase={"impactes": {"reduccio_emissions_calefaccio": 5.0}} # 500% de reducció per forçar límits
+        )
+        
+        items = [{"millora": millora_extrema, "quantitat": 1, "coberturaPercent": 100}]
+        resultat = simular_millores(self.edifici, items)
+        
+        self.assertLessEqual(resultat["delta"]["reduccioConsumPercent"], 100.0)
+        self.assertGreaterEqual(resultat["despres"]["consumFinalKwhAny"], 0.0)
+
+    def test_score_base_amb_historial_bhs(self):
+        """Cobreix les línies 29-30 creant un historial BHS real a la BD"""
+        from apps.buildings.models import BuildingHealthScore
+        
+        BuildingHealthScore.objects.create(
+            edificio=self.edifici,
+            version="1.0",
+            score=88.5,
+            pesos={"clima": 0.5, "envolupant": 0.5} # Camp JSON obligatori
+        )
+        
+        resultat = simular_millores(self.edifici, [])
+        self.assertEqual(resultat["abans"]["score"], 88.5)
+
+    def test_dades_base_amb_habitatges(self):
+        """Cobreix les línies 40 i 66-81 creant dades energètiques reals"""
+        from apps.buildings.models import Habitatge, DadesEnergetiques
+        from django.utils import timezone
+        
+        dades = DadesEnergetiques.objects.create(
+            consumEnergiaPrimaria=2500,
+            consumEnergiaFinal=2000,
+            emissionsCO2=500,
+            costAnualEnergia=400,
+            energiaCalefaccio=1000,
+            energiaRefrigeracio=500,
+            energiaACS=300,
+            energiaEnllumenament=200,
+            emissionsCalefaccio=250,
+            emissionsRefrigeracio=150,
+            emissionsACS=50,
+            emissionsEnllumenament=50,
+            aillamentTermic=2.0,
+            valorFinestres=3.0,
+            normativa="CTE-2019",
+            einaCertificacio="CE3X",
+            motiuCertificacio="Simulació Test",
+            dataEntrada=timezone.now().date() # Camp Data obligatori
+        )
+        
+        Habitatge.objects.create(
+            referenciaCadastral="9876543AB1234C0001DE", # PK
+            planta="1",
+            porta="1A",
+            superficie=100.0,
+            edifici=self.edifici,
+            dadesEnergetiques=dades
+        )
+            
+        resultat = simular_millores(self.edifici, [])
+        
+        self.assertEqual(resultat["abans"]["origenDades"], "dades_energetiques_habitatges")
+        self.assertEqual(resultat["abans"]["consumFinalKwhAny"], 2000)
+
+    def test_inferir_quantitats_per_totes_unitats(self):
+        """Cobreix les línies 84-98 inferint automàticament quantitats segons la unitat"""
+        from apps.buildings.models import UnitatBaseMillora, CatalegMillora
+        
+        unitats = [
+            UnitatBaseMillora.M2,
+            UnitatBaseMillora.UNITAT,
+            UnitatBaseMillora.KWP,
+            UnitatBaseMillora.KWH,
+            UnitatBaseMillora.HABITATGE,
+            UnitatBaseMillora.EDIFICI,
+            "INVENTADA"
+        ]
+        
+        for idx, unitat in enumerate(unitats):
+            millora = CatalegMillora.objects.create(
+                idMillora=9200 + idx,
+                nom=f"Millora prova {unitat}",
+                categoria="envolupant",
+                unitatBase=unitat,
+                parametresBase={}
+            )
+            simular_millores(self.edifici, [{"millora": millora, "quantitat": None, "coberturaPercent": 100}])
+
+# ============================================================================
+# EPIC 4 — PROVES D'INTEGRACIÓ DEL MOTOR DE SIMULACIÓ
+# ============================================================================
+
+class MotorSimulacioIntegrationTests(BaseTestData):
+    """
+    Proves d'integració per validar que l'API respon correctament
+    quan el Frontend (Flutter) demana una previsualització de millores.
+    """
+
+    def setUp(self):
+        super().setUp()
+        
+        self.admin = self._create_user("admin_simulacio@example.com", RoleChoices.ADMIN)
+        self.grup = GrupComparable.objects.create(
+            idGrup=98, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-100"
+        )
+        self.edifici = self._create_edifici(self.admin, self.grup, numero=2)
+        
+        self.edifici.puntuacioBase = 50.0
+        self.edifici.save()
+        
+        self.millora_sate = CatalegMillora.objects.create(
+            nom="Aïllament SATE",
+            categoria="Envolupant",
+            costMinim=40.0,
+            costMaxim=60.0,
+            estalviEnergeticEstimat=20.0,
+            impactePunts=15.0, 
+            nivellConfianca="alt",
+            unitatBase="m2",
+            parametresBase={
+                "impactes": {
+                    "reduccio_demanda_calefaccio": 0.30,
+                    "reduccio_consum_electric_total_tipica": 0.10
+                }
+            }
+        )
+
+    def test_api_simulacio_preview_retorna_200_i_dades_correctes(self):
+        """
+        Validem que cridant a l'endpoint (POST) amb DRF obtenim 
+        el JSON sencer de la simulació per poder-lo mostrar a Flutter.
+        """
+        self.client.force_authenticate(user=self.admin)
+        
+        url = reverse('edifici-simulacions-preview', args=[self.edifici.idEdifici])
+        
+        payload = {
+            "millores": [
+                {
+                    "milloraId": self.millora_sate.idMillora,
+                    "quantitat": 100,
+                    "coberturaPercent": 100
+                }
+            ]
+        }
+        
+        response = self.client.post(url, payload, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        self.assertIn("abans", response.data)
+        self.assertIn("despres", response.data)
+        self.assertIn("delta", response.data)
+        
+        self.assertEqual(response.data["delta"]["incrementScore"], 15.0)
+
+    def test_api_simulacio_get_historial(self):
+        """Cobreix el mètode GET per llistar l'historial de simulacions d'un edifici."""
+        self.client.force_authenticate(user=self.admin)
+        url = reverse('edifici-simulacions', args=[self.edifici.idEdifici])
+        
+        sim = SimulacioMillora.objects.create(
+            edifici=self.edifici,
+            descripcio="Simulació antiga",
+            reduccioConsumPrevista=100.0,
+            reduccioEmissionsPrevista=50.0,
+            costEstimat=5000.0,
+            estalviAnual=200.0,
+            hipotesiBase={"score": 50},
+            resultat={"fake": "data"},
+            versioMotor="SIM-1.0"
+        )
+        
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], sim.id)
+
+    def test_api_simulacio_post_errors_400_i_404(self):
+        """Cobreix el control d'errors del views.py (Exceptions i dades invàlides)."""
+        self.client.force_authenticate(user=self.admin)
+        url = reverse('edifici-simulacions', args=[self.edifici.idEdifici])
+        
+        resp_400 = self.client.post(url, {"un_camp_erroni": 123}, format='json')
+        self.assertEqual(resp_400.status_code, status.HTTP_400_BAD_REQUEST)
+        
+        payload_invalid = {"millores": [{"milloraId": 99999, "quantitat": 1}]}
+        resp_invalid = self.client.post(url, payload_invalid, format='json')
+        self.assertEqual(resp_invalid.status_code, status.HTTP_400_BAD_REQUEST)

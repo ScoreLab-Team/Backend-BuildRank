@@ -14,6 +14,7 @@ from .views import (
     autocomplete_carrers,
     RankingViewSet,
     CatalegMilloraViewSet,
+    MilloraImplementadaViewSet,
 )
 
 router = DefaultRouter()
@@ -23,6 +24,7 @@ router.register(r'localitzacions', LocalitzacioViewSet, basename='localitzacio')
 router.register(r'dades_energetiques', DadesEnergetiquesViewSet, basename='dades-energetiques')
 router.register(r'ranking', RankingViewSet, basename='ranking')
 router.register(r'millores', CatalegMilloraViewSet, basename='millora')
+router.register(r'millores-implementades', MilloraImplementadaViewSet, basename='millora-implementada')
 
 # urlpatterns = router.urls
 

@@ -30,7 +30,7 @@ class RankingSegmentationTest(APITestCase):
             nom="Test Season",
             dataInici="2026-01-01",
             dataFi="2026-12-31",
-            activa=True
+            estat='ACTIVA'
         )
 
         self.league = Lliga.objects.create(

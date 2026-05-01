@@ -182,6 +182,35 @@ class EsOwnerOAdminDadesEnergetiques(BasePermission):
     
 
 
+class EsAdminMilloraImplementada(BasePermission):
+    """
+    RBAC: rol 'admin' o superuser
+    ABAC: ha de ser l'administrador de finca de l'edifici de la millora
+    """
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            log_denial(request, view.action, 'Usuari no autenticat')
+            return False
+        if request.user.is_superuser:
+            return True
+        if not hasattr(request.user, 'profile'):
+            return False
+        if request.user.profile.role != RoleChoices.ADMIN:
+            log_denial(request, view.action, 'Rol insuficient (requerit: admin)')
+            return False
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        if request.user.is_superuser:
+            return True
+        if obj.edifici.administradorFinca != request.user:
+            log_denial(request, view.action,
+                       'No és admin de l\'edifici d\'aquesta millora',
+                       obj.edifici.idEdifici)
+            return False
+        return True
+
+
 class HasAPIKey(BasePermission):
     def has_permission(self, request, view):
         api_key = request.headers.get("Authorization")

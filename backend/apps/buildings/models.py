@@ -659,10 +659,10 @@ class MilloraImplementada(models.Model):
         related_name='implementacions'
     )
 
-    # relacio 1 a 0..1: una millora implementada es validada per un administrador de finca
-    administradorFinca = models.OneToOneField(
+    # relacio * a 0..1: un admin pot validar moltes millores implementades
+    administradorFinca = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name='validacions',
         null=True,
         blank=True

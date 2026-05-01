@@ -40,11 +40,33 @@
 
 | ID | US | Tipus | Component | Test automatitzat | Resultat esperat | Estat |
 |---|---|---|---|---|---|---|
-| TC-BLD-01 | US29 | Integració | `engine.py` | `test_score_base_amb_historial_bhs` | Càlcul basat en l'últim score real de la BD | Pass |
-| TC-BLD-02 | US29 | Integració | `engine.py` | `test_dades_base_amb_habitatges` | Estalvi calculat sobre dades reals d'habitatge | Pass |
-| TC-BLD-03 | US29 | Integració | `engine.py` | `test_inferir_quantitats_per_totes_unitats` | Assignació de quantitat segons unitat (m2, kWp...) | Pass |
+| TC-BLD-001 | US10 | Permisos   | GET /buildings/{id}/               | test_user_can_access_linked_building         | 200 + accés permès              | Pass  |
+| TC-BLD-002 | US10 | Permisos   | GET /buildings/{id}/               | test_user_cannot_access_unlinked_building    | 403 + accés denegat             | Pass  |
+| TC-BLD-003 | US10 | Seguretat  | GET /buildings/{id}/               | test_idor_prevention_on_building_access      | 403 si es manipula ID           | Pass  |
+| TC-BLD-004 | US11 | API        | POST /buildings/                   | test_create_building_success                 | 201 + edifici creat             | Pass  |
+| TC-BLD-005 | US11 | API        | POST /buildings/                   | test_create_building_missing_required_fields | 400 + validació error           | Pass  |
+| TC-BLD-006 | US11 | API        | GET /buildings/                    | test_list_buildings                          | 200 + llista edificis           | Pass  |
+| TC-BLD-007 | US12 | API        | PATCH /buildings/{id}/             | test_update_structural_data_valid            | 200 + dades actualitzades       | Pass  |
+| TC-BLD-008 | US12 | API        | PATCH /buildings/{id}/             | test_update_structural_data_invalid_year     | 400 + any invàlid               | Pass  |
+| TC-BLD-009 | US12 | API        | PATCH /buildings/{id}/             | test_update_structural_negative_values       | 400 + valor invàlid             | Pass  |
+| TC-BLD-010 | US14 | API        | GET /buildings/{id}/               | test_building_detail_returns_full_data       | 200 + dades agregades           | Pass  |
+| TC-BLD-011 | US14 | Permisos   | GET /buildings/{id}/               | test_building_detail_requires_permission     | 403 si no vinculat              | Pass  |
+| TC-BLD-012 | US16 | Unitari    | –                                  | test_building_health_score_calculation       | Score correcte calculat         | Pass  |
+| TC-BLD-013 | US16 | Unitari    | –                                  | test_building_health_score_edge_cases        | Score consistent en límits      | Pass  |
+| TC-BLD-014 | US16 | Integració | PATCH /buildings/{id}/             | test_score_recalculated_on_update            | Score recalculat automàticament | Pass  |
+| TC-BLD-015 | US18 | API        | PATCH /buildings/{id}/verification | test_set_verification_level_admin            | 200 + nivell actualitzat        | Pass  |
+| TC-BLD-016 | US18 | Permisos   | PATCH /buildings/{id}/verification | test_non_admin_cannot_set_verification       | 403                             | Pass  |
+| TC-BLD-017 | US15 | Unitari    | –                                  | test_energy_rating_calculation               | Classificació correcta          | Pass  |
+| TC-BLD-018 | US15 | Unitari    | –                                  | test_energy_rating_missing_data              | Error o fallback                | Pass  |
+| TC-BLD-019 | US19 | API        | PATCH /buildings/{id}/             | test_authorized_user_can_edit_building       | 200 + dades modificades         | Pass  |
+| TC-BLD-020 | US19 | Permisos   | PATCH /buildings/{id}/             | test_unauthorized_user_cannot_edit_building  | 403                             | Pass  |
+| TC-BLD-021 | US20 | API        | DELETE /buildings/{id}/            | test_admin_can_soft_delete_building          | 200 + edifici desactivat        | Pass  |
+| TC-BLD-022 | US20 | Integració | GET /buildings/                    | test_soft_deleted_building_not_listed        | Edifici no visible              | Pass  |
+| TC-BLD-023 | US20 | Seguretat  | DELETE /buildings/{id}/            | test_non_admin_cannot_delete_building        | 403                             | Pass  |
+| TC-BLD-024 | US29 | Integració | `engine.py` | `test_score_base_amb_historial_bhs` | Càlcul basat en l'últim score real de la BD | Pass |
+| TC-BLD-025 | US29 | Integració | `engine.py` | `test_dades_base_amb_habitatges` | Estalvi calculat sobre dades reals d'habitatge | Pass |
+| TC-BLD-026 | US29 | Integració | `engine.py` | `test_inferir_quantitats_per_totes_unitats` | Assignació de quantitat segons unitat (m2, kWp...) | Pass |
 | TC-SYS-01 | US30 | Sistema | API + App | Manual (Flux complet) | Simulació guardada correctament a PostgreSQL | Pass |
-
 
 ## Test Cases – Temporades (Seasons)
 

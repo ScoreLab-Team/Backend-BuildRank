@@ -3,6 +3,7 @@
 ## Executor
 Martí Borràs  
 Mireia Brufau  
+Eduard Corrons 
 
 ## Branca
 testing-us1-us7  

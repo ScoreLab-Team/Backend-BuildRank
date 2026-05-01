@@ -125,14 +125,19 @@
 | TC-SEA-ADM-006 | Admin | `action_tancar` | `test_action_tancar_mixed` | Missatges success i error en queryset mixt | Pass |
 
 
-## Test Cases – Lligues i Rànquings (US21–US25, US28)
+## Test Cases – Lligues, Rànquings i Participacions (US21–US25, US28)
 
-| ID | US | Tipus | Endpoint | Test automatitzat | Resultat esperat | Estat |
-|---|---|---|---|---|---|---|
-| TC-LGU-001 | US21 | Unitari | – | `test_ranking_global_includes_all_segments` | Ranking global inclou tots els segments | Pass |
-| TC-LGU-002 | US28 | Unitari | – | `test_ranking_segment_group_a` | Segment A conté exactament els edificis del grup A | Pass |
-| TC-LGU-003 | US28 | Unitari | – | `test_ranking_segment_group_b` | Segment B conté exactament l'edifici del grup B | Pass |
-| TC-LGU-004 | US23 | API | GET /leagues/{id}/ranking/?group=X | `test_api_segmented_ranking` | 200 + 2 resultats filtrats per grup | Pass |
-| TC-LGU-005 | US23 | API | GET /leagues/{id}/ranking/?group=999 | `test_ranking_invalid_group_returns_404` | 404 per grup inexistent | Pass |
-| TC-LGU-006 | US25 | API | GET /leagues/{id}/posicio_edifici/?segment=true | `test_ranking_segmentado_auto` | 200, `segmentat=True`, grup detectat automàticament | Pass |
-| TC-LGU-007 | US25 | API | GET /leagues/{id}/posicio_edifici/ | `test_ranking_sin_segmentacion` | 200, `segmentat=False` | Pass |
+| ID          | US   | Tipus   | Endpoint                                        | Test automatitzat                           | Resultat esperat                                                       | Estat |
+|-------------|------|---------|-------------------------------------------------|---------------------------------------------|------------------------------------------------------------------------|---|
+| TC-LGPU-001 | US21 | Unitari | –                                               | `test_ranking_global_includes_all_segments` | Ranking global inclou tots els segments                                | Pass |
+| TC-LGPU-002 | US28 | Unitari | –                                               | `test_ranking_segment_group_a`              | Segment A conté exactament els edificis del grup A                     | Pass |
+| TC-LGPU-003 | US28 | Unitari | –                                               | `test_ranking_segment_group_b`              | Segment B conté exactament l'edifici del grup B                        | Pass |
+| TC-LGPU-004 | US23 | API     | GET /leagues/{id}/ranking/?group=X              | `test_api_segmented_ranking`                | 200 + 2 resultats filtrats per grup                                    | Pass |
+| TC-LGPU-005 | US23 | API     | GET /leagues/{id}/ranking/?group=999            | `test_ranking_invalid_group_returns_404`    | 404 per grup inexistent                                                | Pass |
+| TC-LGPU-006 | US25 | API     | GET /leagues/{id}/posicio_edifici/?segment=true | `test_ranking_segmentado_auto`              | 200, `segmentat=True`, grup detectat automàticament                    | Pass |
+| TC-LGPU-007 | US25 | API     | GET /leagues/{id}/posicio_edifici/              | `test_ranking_sin_segmentacion`             | 200, `segmentat=False`                                                 | Pass |
+| TC-LGPU-008 | US24 | Unitari | -                                               | `test_create participation`                 | Nova participacio. puntuacio = 0, posició = 0, divisió = lliga.divisio | Pass |
+| TC-LGPU-009 | US24 | Unitari | -                                               | `test_update_score` | L'score de la participació canvia a 95 correctament                    | Pass |
+| TC-LGPU-010 | US24 | Unitari | -                                               | `test_get_segment_ranking` | El ranking i la posició retornada son correctes                        | Pass |
+| TC-LGPU-011 | US24 | API     | GET /participations/{id}/update_score           | `test_update_score_endpoint` | L'actualització de la puntuació es la que es demana                    | Pass |
+

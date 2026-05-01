@@ -2,7 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from apps.accounts.permissions import IsAdminSistema
 from .models import Temporada
 from .serializers import TemporadaSerializer
@@ -11,6 +11,7 @@ from .serializers import TemporadaSerializer
 class TemporadaViewSet(viewsets.ModelViewSet):
     queryset = Temporada.objects.all()
     serializer_class = TemporadaSerializer
+    permission_classes=[IsAuthenticated]
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:

@@ -1,7 +1,7 @@
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from .models import Temporada
 from .serializers import TemporadaSerializer
 
@@ -9,6 +9,7 @@ from .serializers import TemporadaSerializer
 class TemporadaViewSet(viewsets.ModelViewSet):
     queryset = Temporada.objects.all()
     serializer_class = TemporadaSerializer
+    permission_classes=[IsAuthenticated]
 
     @action(detail=True, methods=["post"])
     def activar(self, request, pk=None):

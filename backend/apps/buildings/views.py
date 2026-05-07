@@ -771,8 +771,22 @@ class RankingViewSet(viewsets.ReadOnlyModelViewSet):
 class ThirdPartyServiceView(APIView):
     permission_classes = [HasAPIKey]
 
-    def get(self, request):
-        lat = request.query_params.get("lat")
-        lng = request.query_params.get("lng")
+    def post(self, request):
+        points = request.data.get("points", [])
 
-        return Response(10)
+        results = []
+
+        for point in points:
+            lat = point["lat"]
+            lng = point["lng"]
+
+            result = self.calculate(lat, lng)
+
+            results.append(result)
+
+        return Response({
+            "results": results
+        })
+
+    def calculate(self, lat, lng):
+        return 10

@@ -1,7 +1,21 @@
 # apps/buildings/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import EdificiViewSet, EdificisMostrarAPIView, EdificiVeureAPIView, EdificiEditarAPIView, EdificiCrearAPIView, EdificiEsborrarAPIView, HabitatgeViewSet, LocalitzacioViewSet, DadesEnergetiquesViewSet, autocomplete_carrers, RankingViewSet
+from .views import (
+    EdificiViewSet,
+    EdificisMostrarAPIView,
+    EdificiVeureAPIView,
+    EdificiEditarAPIView,
+    EdificiCrearAPIView,
+    EdificiEsborrarAPIView,
+    HabitatgeViewSet,
+    LocalitzacioViewSet,
+    DadesEnergetiquesViewSet,
+    autocomplete_carrers,
+    RankingViewSet,
+    CatalegMilloraViewSet,
+    MilloraImplementadaViewSet,
+)
 
 router = DefaultRouter()
 router.register(r'edificis', EdificiViewSet, basename='edifici')
@@ -9,6 +23,8 @@ router.register(r'habitatges', HabitatgeViewSet, basename='habitatge')
 router.register(r'localitzacions', LocalitzacioViewSet, basename='localitzacio')
 router.register(r'dades_energetiques', DadesEnergetiquesViewSet, basename='dades-energetiques')
 router.register(r'ranking', RankingViewSet, basename='ranking')
+router.register(r'millores', CatalegMilloraViewSet, basename='millora')
+router.register(r'millores-implementades', MilloraImplementadaViewSet, basename='millora-implementada')
 
 # urlpatterns = router.urls
 

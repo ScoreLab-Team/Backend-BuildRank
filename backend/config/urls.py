@@ -28,6 +28,9 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/accounts/', include('apps.accounts.urls')),
     path('api/buildings/', include('apps.buildings.urls')),
+    path('api/seasons/', include('apps.seasons.urls')),
+    path('api/leagues/', include('apps.leagues.urls')),
+    path('api/participations/', include('apps.participations.urls')),
     path('api/third-party-service/', ThirdPartyServiceView.as_view())
 ]
 

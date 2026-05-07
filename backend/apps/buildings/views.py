@@ -3,9 +3,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.decorators import api_view, action
+from rest_framework.decorators import api_view, action, permission_classes
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.db.models import Q
 
 from apps.accounts.permissions import ABACMixin, IsAdminSistema
 from apps.accounts.models import RoleChoices
@@ -13,12 +14,17 @@ from apps.accounts.models import RoleChoices
 from .models import (
     Edifici, Habitatge, Localitzacio, DadesEnergetiques,
     carrersBarcelona, EstatValidacio, AccioAudit, EdificiAuditLog,
+    CatalegMillora, SimulacioMillora, SimulacioMilloraItem, MilloraImplementada,
 )
 from .serializers import (
     EdificiDetailSerializer, EdificiListSerializer,
     HabitatgeDetailSerializer, HabitatgeResumSerializer,
     LocalitzacioSerializer, DadesEnergetiquesSerializer,
     RankingSerializer,
+    CatalegMilloraSerializer,
+    SimulacioMilloraPreviewSerializer,
+    SimulacioMilloraSerializer, MilloraImplementadaSerializer,
+    ValidacioMilloraSerializer,
 )
 from .permissions import (
     EsAdminEdifici,
@@ -26,10 +32,16 @@ from .permissions import (
     EsAdminOPropietariHabitatge,
     EsOwnerOAdminHabitatge,
     EsOwnerOAdminDadesEnergetiques,
+    EsAdminMilloraImplementada,
     HasAPIKey,
 )
+
+from .services.nominatim import NominatimRateLimiter, reverse_geocode, es_barcelona, parse_carrer_numero
+from .services.building_lookup import buscar_edifici
+
 from .pagination import RankingPaginacio
- 
+from django.db import transaction
+from .simulation.engine import simular_millores
  
 # ---------------------------------------------------------------------------
 # Helpers
@@ -70,7 +82,7 @@ def _validar_consistencia_desactivacio(edifici):
  
     # 1. Millores implementades en procés
     millores_pendents = edifici.implementacions.filter(
-        estatValidacio=EstatValidacio.EN_PROCES
+        estatValidacio=EstatValidacio.EN_REVISIO
     ).count()
     if millores_pendents:
         advertencies.append(
@@ -100,7 +112,24 @@ def _validar_consistencia_desactivacio(edifici):
 # ---------------------------------------------------------------------------
 # ViewSets
 # ---------------------------------------------------------------------------
- 
+
+class CatalegMilloraViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Endpoint de catàleg de millores per al frontend.
+    Permet listar i consultar les millores actives disponibles per simular.
+    """
+    serializer_class = CatalegMilloraSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = CatalegMillora.objects.filter(activa=True)
+
+        categoria = self.request.query_params.get("categoria")
+        if categoria:
+            queryset = queryset.filter(categoria=categoria)
+
+        return queryset.order_by("categoria", "nom")
+
 class EdificiViewSet(viewsets.ModelViewSet):
     queryset = Edifici.objects.all()
 
@@ -131,6 +160,14 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return EdificiListSerializer
         return EdificiDetailSerializer  # retrieve, update, create...permission_classes = [IsAuthenticated]
     
+    def perform_create(self, serializer):
+        """
+        Quan un administrador de finca crea un edifici, el backend el vincula
+        automàticament a l'usuari autenticat. El frontend no ha d'enviar
+        administradorFinca manualment.
+        """
+        serializer.save(administradorFinca=self.request.user)
+
     def get_permissions(self):
         if self.action in ['destroy']:
             return [IsAuthenticated(), EsAdminEdifici()]
@@ -325,6 +362,160 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         return Response(dades)
 
+    def _preparar_items_simulacio(self, millores_validated):
+        """
+        Converteix l'entrada validada del serializer en objectes reals del catàleg.
+        """
+        ids = [item["milloraId"] for item in millores_validated]
+        millores_map = {
+            millora.idMillora: millora
+            for millora in CatalegMillora.objects.filter(idMillora__in=ids, activa=True)
+        }
+
+        items = []
+        for item in millores_validated:
+            millora = millores_map[item["milloraId"]]
+            items.append({
+                "millora": millora,
+                "quantitat": item.get("quantitat"),
+                "coberturaPercent": item.get("coberturaPercent", 100),
+            })
+
+        return items
+
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='simulacions/preview',
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici]
+    )
+    def simulacions_preview(self, request, pk=None):
+        """
+        Preview de simulació.
+        No guarda res a la base de dades.
+        Pensat perquè Flutter pugui mostrar una comparativa abans/després.
+        """
+        edifici = self.get_object()
+
+        serializer = SimulacioMilloraPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        items = self._preparar_items_simulacio(serializer.validated_data["millores"])
+        resultat = simular_millores(edifici, items)
+
+        return Response(resultat, status=status.HTTP_200_OK)
+
+    @action(
+        detail=True,
+        methods=['get', 'post'],
+        url_path='simulacions',
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici]
+    )
+    def simulacions(self, request, pk=None):
+        """
+        GET: llista simulacions guardades de l'edifici.
+        POST: calcula i guarda una simulació.
+        """
+        edifici = self.get_object()
+
+        if request.method == 'GET':
+            simulacions = (
+                edifici.simulacions
+                .prefetch_related("items__millora")
+                .order_by("-dataSimulacio", "-id")
+            )
+            serializer = SimulacioMilloraSerializer(simulacions, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        serializer = SimulacioMilloraPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        items = self._preparar_items_simulacio(serializer.validated_data["millores"])
+        resultat = simular_millores(edifici, items)
+
+        with transaction.atomic():
+            simulacio = SimulacioMillora.objects.create(
+                descripcio=serializer.validated_data.get("descripcio", ""),
+                edifici=edifici,
+                creadaPer=request.user,
+                versioMotor=resultat["versioMotor"],
+                reduccioConsumPrevista=resultat["delta"]["reduccioConsumKwhAny"],
+                reduccioEmissionsPrevista=resultat["delta"]["reduccioEmissionsKgCO2Any"],
+                costEstimat=resultat["delta"]["costTotalEstimat"],
+                estalviAnual=resultat["delta"]["estalviAnualEstimatiu"],
+                hipotesiBase=resultat["abans"],
+                resultat=resultat,
+                millora=items[0]["millora"] if len(items) == 1 else None,
+            )
+
+            resultat_items = resultat.get("items", [])
+            for item_input, item_resultat in zip(items, resultat_items):
+                SimulacioMilloraItem.objects.create(
+                    simulacio=simulacio,
+                    millora=item_input["millora"],
+                    quantitat=item_resultat.get("quantitatAplicada"),
+                    coberturaPercent=item_resultat.get("coberturaPercent", item_input.get("coberturaPercent", 100)),
+                    costEstimatParcial=item_resultat.get("costEstimat", 0),
+                    reduccioConsumParcial=item_resultat.get("reduccioConsumKwhAny", 0),
+                    reduccioEmissionsParcial=item_resultat.get("reduccioEmissionsKgCO2Any", 0),
+                    impactePuntsParcial=item_resultat.get("impactePunts", 0),
+                    resultatParcial=item_resultat,
+                )
+
+        output = SimulacioMilloraSerializer(simulacio)
+        return Response(output.data, status=status.HTTP_201_CREATED)
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="millores-implementades",
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici],
+    )
+    def millores_implementades(self, request, pk=None):
+        edifici = self.get_object()
+
+        implementacions = (
+            edifici.implementacions
+            .select_related("millora")
+            .order_by("-dataExecucio", "-id")
+        )
+
+        serializer = MilloraImplementadaSerializer(implementacions, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class MilloraImplementadaViewSet(viewsets.GenericViewSet):
+    queryset = MilloraImplementada.objects.select_related("millora", "edifici")
+    serializer_class = MilloraImplementadaSerializer
+    permission_classes = [IsAuthenticated, EsAdminMilloraImplementada]
+
+    @action(detail=True, methods=["post"], url_path="validar")
+    def validar(self, request, pk=None):
+        millora_impl = self.get_object()
+
+        input_serializer = ValidacioMilloraSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        nou_estat = input_serializer.validated_data["estatValidacio"]
+        observacions = input_serializer.validated_data.get("observacionsAdmin", "")
+
+        if millora_impl.estatValidacio not in (
+            EstatValidacio.PENDENT_DOCUMENTACIO, EstatValidacio.EN_REVISIO
+        ):
+            return Response(
+                {"detail": "Només es poden validar millores en estat 'PendentDocumentacio' o 'EnRevisió'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        millora_impl.estatValidacio = nou_estat
+        millora_impl.observacionsAdmin = observacions
+        millora_impl.administradorFinca = request.user
+        millora_impl.save(update_fields=["estatValidacio", "observacionsAdmin", "administradorFinca"])
+
+        output_serializer = MilloraImplementadaSerializer(millora_impl)
+        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+
 class HabitatgeViewSet(viewsets.ModelViewSet):
     queryset = Habitatge.objects.all()
 
@@ -464,17 +655,63 @@ class EdificiEsborrarAPIView(ABACMixin, APIView):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def autocomplete_carrers(request):
+    """
+    Suggeriments de carrers per al formulari d'alta d'edifici.
+
+    La cerca és tolerant:
+    - cerca a nom_oficial i nom_curt
+    - ignora paraules habituals com "carrer", "de", "avinguda"
+    - retorna codi_via i codi_carrer_ine per facilitar depuració
+    """
     query = request.GET.get('q', '').strip()
-    if not query:
+
+    if len(query) < 2:
         return Response([])
 
-    resultados = (carrersBarcelona.objects
-                  .filter(nom_oficial__icontains=query)
-                  .values('nom_oficial', 'tipus_via', 'nre_min', 'nre_max')
-                  .distinct()[:5])
+    stopwords = {
+        'carrer', 'calle', 'c/', 'c',
+        'avinguda', 'avenida', 'av', 'av.',
+        'passeig', 'paseo', 'pg', 'pg.',
+        'plaça', 'plaza', 'pl', 'pl.',
+        'de', 'del', 'la', 'les', 'el', 'els',
+    }
 
-    return Response(list(resultados))
+    terms = [
+        term.strip()
+        for term in query.replace(',', ' ').split()
+        if term.strip().lower() not in stopwords
+    ]
+
+    if not terms:
+        terms = [query]
+
+    queryset = carrersBarcelona.objects.all()
+
+    for term in terms:
+        queryset = queryset.filter(
+            Q(nom_oficial__icontains=term)
+            | Q(nom_curt__icontains=term)
+            | Q(tipus_via__icontains=term)
+        )
+
+    resultats = (
+        queryset
+        .values(
+            'codi_via',
+            'codi_carrer_ine',
+            'nom_oficial',
+            'nom_curt',
+            'tipus_via',
+            'nre_min',
+            'nre_max',
+        )
+        .order_by('nom_oficial', 'nre_min')
+        .distinct()[:10]
+    )
+
+    return Response(list(resultats))
 
 class RankingViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = RankingSerializer
@@ -536,16 +773,60 @@ class RankingViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ThirdPartyServiceView(APIView):
+    """
+    POST /api/third-party/score/
+ 
+    Body:
+        { "points": [{"lat": 41.38, "lng": 2.17}, ...] }
+ 
+    Resposta per punt:
+        { "lat": 41.38, "lng": 2.17, "score": 73.4 }
+        { "lat": 41.38, "lng": 2.17, "score": null }   # edifici sense puntuació
+        { "lat": 41.38, "lng": 2.17, "error": "..." }  # fora de BCN, error geocodificació, etc.
+    """
+ 
     permission_classes = [HasAPIKey]
-
-    def get(self, request):
-        lat = request.query_params.get("lat")
-        lng = request.query_params.get("lng")
-
-        data = {
-            "lat": lat,
-            "lng": lng,
-            "result": 10
-        }
-
-        return Response(data)
+ 
+    def post(self, request):
+        points = request.data.get("points", [])
+ 
+        if not isinstance(points, list):
+            return Response(
+                {"error": "'points' ha de ser una llista."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+ 
+        rate_limiter = NominatimRateLimiter()
+        results = []
+ 
+        for point in points:
+            lat = point.get("lat")
+            lng = point.get("lng")
+ 
+            if lat is None or lng is None:
+                results.append({"lat": lat, "lng": lng, "error": "Coordenades incompletes."})
+                continue
+ 
+            address = reverse_geocode(lat, lng, rate_limiter)
+            if address is None:
+                results.append({"lat": lat, "lng": lng, "error": "Error de geocodificació."})
+                continue
+ 
+            if not es_barcelona(address, lat, lng):
+                results.append({"lat": lat, "lng": lng, "error": "Coordenades fora de Barcelona."})
+                continue
+ 
+            carrer, numero = parse_carrer_numero(address)
+            if not carrer:
+                results.append({"lat": lat, "lng": lng, "error": "No s'ha pogut determinar el carrer."})
+                continue
+ 
+            edifici, _ = buscar_edifici(carrer, numero)
+ 
+            results.append({
+                "lat": lat,
+                "lng": lng,
+                "score": round(edifici.puntuacioBase, 2) if edifici and edifici.puntuacioBase else None,
+            })
+ 
+        return Response({"results": results})

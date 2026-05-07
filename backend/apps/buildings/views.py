@@ -35,6 +35,10 @@ from .permissions import (
     EsAdminMilloraImplementada,
     HasAPIKey,
 )
+
+from .services.nominatim import NominatimRateLimiter, reverse_geocode, es_barcelona, parse_carrer_numero
+from .services.building_lookup import buscar_edifici
+
 from .pagination import RankingPaginacio
 from django.db import transaction
 from .simulation.engine import simular_millores
@@ -769,10 +773,60 @@ class RankingViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ThirdPartyServiceView(APIView):
+    """
+    POST /api/third-party/score/
+ 
+    Body:
+        { "points": [{"lat": 41.38, "lng": 2.17}, ...] }
+ 
+    Resposta per punt:
+        { "lat": 41.38, "lng": 2.17, "score": 73.4 }
+        { "lat": 41.38, "lng": 2.17, "score": null }   # edifici sense puntuació
+        { "lat": 41.38, "lng": 2.17, "error": "..." }  # fora de BCN, error geocodificació, etc.
+    """
+ 
     permission_classes = [HasAPIKey]
-
-    def get(self, request):
-        lat = request.query_params.get("lat")
-        lng = request.query_params.get("lng")
-
-        return Response(10)
+ 
+    def post(self, request):
+        points = request.data.get("points", [])
+ 
+        if not isinstance(points, list):
+            return Response(
+                {"error": "'points' ha de ser una llista."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+ 
+        rate_limiter = NominatimRateLimiter()
+        results = []
+ 
+        for point in points:
+            lat = point.get("lat")
+            lng = point.get("lng")
+ 
+            if lat is None or lng is None:
+                results.append({"lat": lat, "lng": lng, "error": "Coordenades incompletes."})
+                continue
+ 
+            address = reverse_geocode(lat, lng, rate_limiter)
+            if address is None:
+                results.append({"lat": lat, "lng": lng, "error": "Error de geocodificació."})
+                continue
+ 
+            if not es_barcelona(address, lat, lng):
+                results.append({"lat": lat, "lng": lng, "error": "Coordenades fora de Barcelona."})
+                continue
+ 
+            carrer, numero = parse_carrer_numero(address)
+            if not carrer:
+                results.append({"lat": lat, "lng": lng, "error": "No s'ha pogut determinar el carrer."})
+                continue
+ 
+            edifici, _ = buscar_edifici(carrer, numero)
+ 
+            results.append({
+                "lat": lat,
+                "lng": lng,
+                "score": round(edifici.puntuacioBase, 2) if edifici and edifici.puntuacioBase else None,
+            })
+ 
+        return Response({"results": results})

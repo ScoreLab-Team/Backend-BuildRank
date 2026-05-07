@@ -4,15 +4,18 @@
 Martí Borràs  
 Mireia Brufau  
 Eduard Corrons 
+Oscar Montiel
 
 ## Branca
 testing-us1-us7  
 feature/testing  
+feature/rankingtests
 
 ## Àmbit
 - **Mòdul Accounts:** US1, US2, US3, US4, US5, US6 i US7  
 - **Mòdul Buildings (gestió i permisos):** US10, US11, US12, US14, US19, US20  
 - **Mòdul Simulacions:** US29 i US30  
+- **Mòdul Lligues i Participacions: ** US21, US24, US28
 
 ## Comandes executades
 ```bash
@@ -29,6 +32,15 @@ docker compose exec web coverage report --include="apps/accounts/*"
 docker compose exec web python manage.py test apps.buildings
 docker compose exec web coverage run manage.py test apps.buildings
 docker compose exec web coverage report --include="apps/buildings/*"
+
+# Tests i Coverage - Mòdul Lligues i Participacions
+docker compose exec web python manage.py test apps.participations
+docker compose exec web coverage run manage.py test apps.participations
+docker compose exec web coverage report --include="apps/participations/*"
+
+docker compose exec web python manage.py test apps.leagues
+docker compose exec web coverage run manage.py test apps.leagues
+docker compose exec web coverage report --include="apps/leagues/*"
 ```
 
 ## Resultats
@@ -48,6 +60,12 @@ docker compose exec web coverage report --include="apps/buildings/*"
 - **Coverage (apps.buildings):** 84%
 - **Coverage específic (engine.py):** 99%
 
+### Mòdul Lligues i participacions
+- **Tests executats (apps.buildings):** 11
+- **Tests correctes:** 11
+- **Tests skipped:** 0
+- **Coverage (apps.leagues):** 97%
+- **Coverage (apps.participations):** 96%
 
 ## Validacions realitzades
 ### Django

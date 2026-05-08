@@ -31,7 +31,7 @@ def _llegir_chunk(fitxer: str, offset_edificis: int, limit_edificis: int | None)
         reader = csv.DictReader(f, delimiter=',')
 
         # DEBUG: mostra les columnes reals del CSV
-        print(f"\n[DEBUG] Columnes del CSV: {reader.fieldnames}\n")
+        # print(f"\n[DEBUG] Columnes del CSV: {reader.fieldnames}\n")
 
         for fila in reader:
             clau = _clau_adreca(fila)
@@ -49,8 +49,8 @@ def _llegir_chunk(fitxer: str, offset_edificis: int, limit_edificis: int | None)
 
             files.append(fila)
 
-    print(f"[DEBUG] Total files llegides: {len(files)}")
-    print(f"[DEBUG] Total adreces úniques al chunk: {len(adreces_del_chunk)}\n")
+    # print(f"[DEBUG] Total files llegides: {len(files)}")
+    # print(f"[DEBUG] Total adreces úniques al chunk: {len(adreces_del_chunk)}\n")
     return files
 
 
@@ -121,7 +121,7 @@ class Command(BaseCommand):
         limit   = options['limit']
         offset  = options['offset']
 
-        print(f"[DEBUG] fitxer={fitxer} | dry_run={dry_run} | limit={limit} | offset={offset}\n")
+        # print(f"[DEBUG] fitxer={fitxer} | dry_run={dry_run} | limit={limit} | offset={offset}\n")
 
         log = ImportacioLog.objects.create(origen=fitxer)
 
@@ -134,31 +134,32 @@ class Command(BaseCommand):
                 for clau, grup in groupby(files, key=_clau_adreca)
             ]
 
-            print(f"[DEBUG] Grups (edificis únics) a processar: {len(grups)}\n")
+            # print(f"[DEBUG] Grups (edificis únics) a processar: {len(grups)}\n")
 
             ok = errors = edificis_creats = saltats = 0
 
             for i, (clau, grup) in enumerate(grups):
                 primera = grup[0]
                 num_cas = primera.get('NUM_CAS', '') or ''
-                print(f"[DEBUG] [{i+1}/{len(grups)}] clau={clau} | num_cas='{num_cas}' | files_grup={len(grup)}")
+
+                # print(f"[DEBUG] [{i+1}/{len(grups)}] clau={clau} | num_cas='{num_cas}' | files_grup={len(grup)}")
 
                 try:
                     with transaction.atomic():
 
-                        # --- CHECK DUPLICAT ---
                         if num_cas and Edifici.objects.filter(num_cas_origen=num_cas).exists():
-                            print(f"  → SALTAT (ja existeix num_cas='{num_cas}')")
+                            # print(f"  → SALTAT (ja existeix num_cas='{num_cas}')")
                             saltats += 1
                             continue
 
                         edifici = _construir_edifici(grup)
-                        print(f"  → Edifici construït: tipologia={edifici.tipologia}, any={edifici.anyConstruccio}, qualificacio={edifici.classificacioEstimada}")
+                        # print(f"  → Edifici construït: tipologia={edifici.tipologia}, any={edifici.anyConstruccio}, qualificacio={edifici.classificacioEstimada}")
 
                         if not dry_run:
                             lat_raw = (primera.get('LATITUD') or '0').replace(',', '.')
                             lon_raw = (primera.get('LONGITUD') or '0').replace(',', '.')
-                            print(f"  → Localitzacio: carrer='{clau[0].title()}' num={clau[1]} cp={clau[2]} lat={lat_raw} lon={lon_raw}")
+
+                            # print(f"  → Localitzacio: carrer='{clau[0].title()}' num={clau[1]} cp={clau[2]} lat={lat_raw} lon={lon_raw}")
 
                             loc = Localitzacio.objects.create(
                                 carrer=clau[0].title(),
@@ -171,26 +172,29 @@ class Command(BaseCommand):
                             )
                             edifici.localitzacio = loc
                             edifici.save()
-                            print(f"  → Edifici desat (id={edifici.idEdifici})")
+
+                            # print(f"  → Edifici desat (id={edifici.idEdifici})")
 
                             dades_od = _construir_dades_energetiques(grup)
                             dades_od.edifici = edifici
                             dades_od.save()
-                            print(f"  → DadesEnergetiquesOpenData desades")
+
+                            # print(f"  → DadesEnergetiquesOpenData desades")
 
                             edificis_creats += 1
                         else:
-                            print(f"  → DRY-RUN: no s'escriu res")
+                            # print(f"  → DRY-RUN: no s'escriu res")
                             ok += len(grup)
                             continue
 
                         ok += len(grup)
-                        print(f"  → OK\n")
+                        # print(f"  → OK\n")
 
                 except Exception as e:
                     import traceback
-                    print(f"  → ERROR: {type(e).__name__}: {e}")
-                    print(traceback.format_exc())
+                    # print(f"  → ERROR: {type(e).__name__}: {e}")
+                    # print(traceback.format_exc())
+
                     errors += len(grup)
                     for fila in grup:
                         ImportacioIncidencia.objects.create(
@@ -206,7 +210,7 @@ class Command(BaseCommand):
                             },
                         )
 
-            print(f"\n[DEBUG] RESUM: creats={edificis_creats} | saltats={saltats} | errors={errors} | files_ok={ok}\n")
+            # print(f"\n[DEBUG] RESUM: creats={edificis_creats} | saltats={saltats} | errors={errors} | files_ok={ok}\n")
 
             log.total_files     = ok + errors
             log.files_ok        = ok
@@ -218,8 +222,9 @@ class Command(BaseCommand):
 
         except Exception as e:
             import traceback
-            print(f"[DEBUG] EXCEPCIÓ GLOBAL: {type(e).__name__}: {e}")
-            print(traceback.format_exc())
+            # print(f"[DEBUG] EXCEPCIÓ GLOBAL: {type(e).__name__}: {e}")
+            # print(traceback.format_exc())
+
             log.completada = False
             log.data_fi    = timezone.now()
             log.save()

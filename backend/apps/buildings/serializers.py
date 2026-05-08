@@ -187,6 +187,7 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
             "reglament",
             "orientacioPrincipal",
             "puntuacioBase",
+            "puntuacioBaseOpenData",
             "classificacioEstimada",
             "classificacioFont",
             "font_open_data",
@@ -205,6 +206,7 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "idEdifici",
             "puntuacioBase",
+            "puntuacioBaseOpenData",
             "classificacioEstimada",
             "classificacioFont",
             "font_open_data",

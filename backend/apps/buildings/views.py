@@ -821,12 +821,13 @@ class ThirdPartyServiceView(APIView):
                 results.append({"lat": lat, "lng": lng, "error": "No s'ha pogut determinar el carrer."})
                 continue
  
-            edifici, _ = buscar_edifici(carrer, numero)
+            edifici, match_type = buscar_edifici(carrer, numero)
  
             results.append({
                 "lat": lat,
                 "lng": lng,
                 "score": round(edifici.puntuacioBase, 2) if edifici and edifici.puntuacioBase else None,
+                "match_type": match_type,
             })
  
         return Response({"results": results})

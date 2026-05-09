@@ -840,8 +840,6 @@ class ThirdPartyServiceView(APIView):
                 match_type = "cap"
 
             results.append({
-                "lat": lat,
-                "lng": lng,
                 "score": score,
                 "match_type": match_type,
             })

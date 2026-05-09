@@ -1,4 +1,6 @@
 # apps/buildings/views.py
+from random import random
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, viewsets
@@ -775,59 +777,73 @@ class RankingViewSet(viewsets.ReadOnlyModelViewSet):
 class ThirdPartyServiceView(APIView):
     """
     POST /api/third-party/score/
- 
+
     Body:
         { "points": [{"lat": 41.38, "lng": 2.17}, ...] }
- 
+
     Resposta per punt:
-        { "lat": 41.38, "lng": 2.17, "score": 73.4 }
-        { "lat": 41.38, "lng": 2.17, "score": null }   # edifici sense puntuació
-        { "lat": 41.38, "lng": 2.17, "error": "..." }  # fora de BCN, error geocodificació, etc.
+        { "lat": 41.38, "lng": 2.17, "score": 73.4, "match_type": "exacta" }
+        { "lat": 41.38, "lng": 2.17, "score": 42.0, "match_type": "cap" }   # Score random si no trobat
     """
- 
+
     permission_classes = [HasAPIKey]
- 
+
     def post(self, request):
         points = request.data.get("points", [])
- 
+
         if not isinstance(points, list):
             return Response(
                 {"error": "'points' ha de ser una llista."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
- 
+
         rate_limiter = NominatimRateLimiter()
         results = []
- 
+
         for point in points:
             lat = point.get("lat")
             lng = point.get("lng")
- 
+
             if lat is None or lng is None:
-                results.append({"lat": lat, "lng": lng, "error": "Coordenades incompletes."})
+                results.append({
+                    "score": round(random.uniform(0, 100), 2),
+                    "match_type": "cap",
+                })
                 continue
- 
+
             address = reverse_geocode(lat, lng, rate_limiter)
-            if address is None:
-                results.append({"lat": lat, "lng": lng, "error": "Error de geocodificació."})
+            if address is None or not es_barcelona(address, lat, lng):
+                results.append({
+                    "lat": lat,
+                    "lng": lng,
+                    "score": round(random.uniform(0, 100), 2),
+                    "match_type": "cap",
+                })
                 continue
- 
-            if not es_barcelona(address, lat, lng):
-                results.append({"lat": lat, "lng": lng, "error": "Coordenades fora de Barcelona."})
-                continue
- 
+
             carrer, numero = parse_carrer_numero(address)
             if not carrer:
-                results.append({"lat": lat, "lng": lng, "error": "No s'ha pogut determinar el carrer."})
+                results.append({
+                    "lat": lat,
+                    "lng": lng,
+                    "score": round(random.uniform(0, 100), 2),
+                    "match_type": "cap",
+                })
                 continue
- 
+
             edifici, match_type = buscar_edifici(carrer, numero)
- 
+
+            if edifici and edifici.puntuacioBase:
+                score = round(edifici.puntuacioBase, 2)
+            else:
+                score = round(random.uniform(0, 100), 2)
+                match_type = "cap"
+
             results.append({
                 "lat": lat,
                 "lng": lng,
-                "score": round(edifici.puntuacioBase, 2) if edifici and edifici.puntuacioBase else None,
+                "score": score,
                 "match_type": match_type,
             })
- 
+
         return Response({"results": results})

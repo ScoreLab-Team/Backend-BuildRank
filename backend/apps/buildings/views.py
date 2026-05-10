@@ -527,6 +527,11 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         if not user.is_authenticated or not hasattr(user, 'profile'):
             return Habitatge.objects.none()
 
+        # Excepció per US-H2
+        # Permetem que qualsevol usuari trobi l'habitatge si el que vol és sol·licitar-hi accés
+        if self.action == 'solicitar_acces':
+            return Habitatge.objects.all()
+
         role = user.profile.role
         if role == RoleChoices.ADMIN:
             return Habitatge.objects.filter(edifici__administradorFinca=user)
@@ -622,7 +627,25 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
                 {"detail": "Cal enviar un estat vàlid ('Validada' o 'Rebutjada)"},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+    @action(detail=False, methods=['get'])
+    def pendents(self, request):
+        # Retorna només els habitatges que estan pendents de validació
+        user = request.user
+        if getattr(user.profile, 'role', None) != RoleChoices.ADMIN:
+            return Response(
+                {"detail": "Només els administradors poden veure les sol·licituds pendents."},
+                status=status.HTTP_403_FORBIDDEN
+            )
             
+        # Busquem habitatges del seu edifici que estiguin EN_REVISIO
+        queryset = Habitatge.objects.filter(
+            edifici__administradorFinca=user,
+            estatValidacio=EstatValidacio.EN_REVISIO
+        )
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 class LocalitzacioViewSet(viewsets.ModelViewSet):
     queryset = Localitzacio.objects.all()

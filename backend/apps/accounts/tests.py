@@ -1350,3 +1350,101 @@ class SystemAdminMeEndpointTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("access", response.data)
         self.assertIn("refresh", response.data)
+    
+@override_settings(REST_FRAMEWORK=NO_THROTTLE_REST_FRAMEWORK)
+class PasswordResetTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            email="reset@example.com",
+            password="OldPassword123",
+        )
+
+    def test_password_reset_request_existing_email_returns_uid_and_token(self):
+        response = self.client.post(
+            reverse("password-reset"),
+            {"email": "reset@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("detail", response.data)
+        self.assertIn("uid", response.data)
+        self.assertIn("token", response.data)
+
+    def test_password_reset_request_unknown_email_does_not_enumerate_accounts(self):
+        response = self.client.post(
+            reverse("password-reset"),
+            {"email": "unknown@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("detail", response.data)
+        self.assertNotIn("uid", response.data)
+        self.assertNotIn("token", response.data)
+
+    def test_password_reset_confirm_valid_token_changes_password(self):
+        request_response = self.client.post(
+            reverse("password-reset"),
+            {"email": "reset@example.com"},
+            format="json",
+        )
+
+        response = self.client.post(
+            reverse("password-reset-confirm"),
+            {
+                "uid": request_response.data["uid"],
+                "token": request_response.data["token"],
+                "password": "NewPassword123",
+                "password_confirm": "NewPassword123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("NewPassword123"))
+
+    def test_password_reset_confirm_invalid_token_fails(self):
+        request_response = self.client.post(
+            reverse("password-reset"),
+            {"email": "reset@example.com"},
+            format="json",
+        )
+
+        response = self.client.post(
+            reverse("password-reset-confirm"),
+            {
+                "uid": request_response.data["uid"],
+                "token": "invalid-token",
+                "password": "NewPassword123",
+                "password_confirm": "NewPassword123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("token", response.data)
+
+    def test_password_reset_confirm_password_mismatch_fails(self):
+        request_response = self.client.post(
+            reverse("password-reset"),
+            {"email": "reset@example.com"},
+            format="json",
+        )
+
+        response = self.client.post(
+            reverse("password-reset-confirm"),
+            {
+                "uid": request_response.data["uid"],
+                "token": request_response.data["token"],
+                "password": "NewPassword123",
+                "password_confirm": "DifferentPassword123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password_confirm", response.data)

@@ -9,6 +9,11 @@ class RoleChoices(models.TextChoices):
     OWNER = "owner", "Propietari"
     TENANT = "tenant", "Llogater"
 
+class ValidacioAdmin(models.TextChoices):
+    PENDENT = "pendent", "Pendent de validació"
+    APROVAT = "aprovat", "Aprovat"
+    REBUTJAT = "rebutjat", "Rebutjat"
+
 class User(AbstractUser):
     username = None
     email = models.EmailField(unique=True)
@@ -31,11 +36,26 @@ class Profile(models.Model):
         choices=RoleChoices.choices,
         default=RoleChoices.OWNER,
     )
+
+    # Validació Admin de Finca
+    estatValidacioAdmin = models.CharField(
+        max_length=50,
+        choices=ValidacioAdmin.choices,
+        default=ValidacioAdmin.PENDENT,
+    )
+
+    documentPadro = models.FileField(
+        upload_to='documents_admin/',
+        null = True,
+        blank=True,
+        help_text="Document acreditatiu de l'administrador de finca."
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.user.email} - {self.role}"
+        return f"{self.user.email} - {self.role} ({self.estatValidacioAdmin})"
 
 
 class TokenLoginLog(models.Model):

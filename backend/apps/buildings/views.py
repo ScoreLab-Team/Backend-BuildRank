@@ -543,6 +543,76 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         elif self.action == 'list':
             return [IsAuthenticated(), EsAdminOPropietariHabitatge()]
         return [IsAuthenticated()]
+    
+    @action(detail=True, methods=['post'], url_path='solicitar-acces')
+    def solicitar_acces(self, request, pk=None):
+        # Sol·licitud de vincular-se a aquest habitatge
+        habitatge = self.get_object()
+
+        # Comprovar si l'habitatge ja està ocupat per un usuari validat
+        if habitatge.usuari:
+            return Response(
+                {"detail": "Aquest habitatge ja té un resident assignat."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Posem l'estat en revisió i guardem qui és l'usuari que ho demana
+        habitatge.estatValidacio = EstatValidacio.EN_REVISIO
+        habitatge.solicitant = request.user
+        habitatge.save(update_fields=['estatValidacio', 'solicitant'])
+
+        return Response(
+            {"detail": "Sol·licitud enviada correctament. Pendent de l'aprovació de l'Administrador."},
+            status=status.HTTP_200_OK
+        )
+    
+    @action(detail=True, methods=['post'], url_path='validar-acces')
+    def validar_acces(self, request, pk=None):
+        # L'Administrador de finca aprova o rebutja la sol·licitud
+        habitatge = self.get_object()
+
+        # Només l'admin d'aquest edifici pot validar-ho
+        if habitatge.edifici.administradorFinca != request.user:
+            return Response(
+                {"detail": "No tens permisos per validar accessos en aquest edifici."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Comprovem que realment hi hagi algú pendent
+        if habitatge.estatValidacio != EstatValidacio.EN_REVISIO or not habitatge.solicitant:
+            return Response(
+                {"detail": "Aquest habitatge no té cap sol·licitud pendent de revisió."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        nouEstat = request.data.get('estat')
+        
+        if nouEstat == EstatValidacio.VALIDADA:
+            habitatge.usuari = habitatge.solicitant
+            habitatge.estatValidacio = EstatValidacio.VALIDADA
+            habitatge.solicitant = None
+            habitatge.save(update_fields=['usuari', 'estatValidacio', 'solicitant'])
+
+            return Response(
+                {"detail": "Sol·licitud aprovada. Resident assignat."},
+                status=status.HTTP_200_OK
+            )
+        
+        elif nouEstat == EstatValidacio.REBUTJADA:
+            habitatge.estatValidacio = EstatValidacio.REBUTJADA
+            habitatge.solicitant = None
+            habitatge.save(update_fields=['estatValidacio', 'solicitant'])
+
+            return Response(
+                {"detail": "Sol·licitud rebutjada."},
+                status=status.HTTP_200_OK
+            )
+        
+        else:
+            return Response(
+                {"detail": "Cal enviar un estat vàlid ('Validada' o 'Rebutjada)"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 class LocalitzacioViewSet(viewsets.ModelViewSet):
     queryset = Localitzacio.objects.all()

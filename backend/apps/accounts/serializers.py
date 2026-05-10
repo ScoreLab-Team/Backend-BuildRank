@@ -13,6 +13,9 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework_simplejwt.settings import api_settings
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils.encoding import force_bytes
 
 User = get_user_model()
 
@@ -287,3 +290,60 @@ class RoleUpdateSerializer(serializers.Serializer):
                 "Només es permet canviar entre els rols owner i tenant."
             )
         return value
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def save(self, **kwargs):
+        email = self.validated_data["email"].strip().lower()
+        user = User.objects.filter(email=email, is_active=True).first()
+
+        # No enumeració de comptes: si no existeix, no retornem error.
+        if not user:
+            return {}
+
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+
+        # MVP: retornem uid/token perquè el frontend pugui construir el flux.
+        # En producció això s'enviaria per email.
+        return {
+            "uid": uid,
+            "token": token,
+        }
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    uid = serializers.CharField()
+    token = serializers.CharField()
+    password = serializers.CharField(write_only=True, min_length=8)
+    password_confirm = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        if attrs["password"] != attrs["password_confirm"]:
+            raise serializers.ValidationError(
+                {"password_confirm": "Les contrasenyes no coincideixen."}
+            )
+
+        try:
+            user_id = urlsafe_base64_decode(attrs["uid"]).decode()
+            user = User.objects.get(pk=user_id, is_active=True)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            raise serializers.ValidationError({"token": "Token invàlid o expirat."})
+
+        if not default_token_generator.check_token(user, attrs["token"]):
+            raise serializers.ValidationError({"token": "Token invàlid o expirat."})
+
+        try:
+            validate_password(attrs["password"], user=user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"password": list(exc.messages)})
+
+        attrs["user"] = user
+        return attrs
+
+    def save(self, **kwargs):
+        user = self.validated_data["user"]
+        user.set_password(self.validated_data["password"])
+        user.save(update_fields=["password"])
+        return user

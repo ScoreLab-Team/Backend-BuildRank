@@ -10,6 +10,7 @@ from apps.accounts.permissions import IsAdminSistema, IsAdminFinca, ABACMixin
 from apps.accounts.throttles import LoginThrottle, RegisterThrottle, RefreshThrottle
 from apps.accounts.serializers import (
     RegisterSerializer, LoginSerializer, LogoutSerializer, MeSerializer,
+    PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
     AccountUpdateSerializer, RoleUpdateSerializer,
     EdificiResumSerializer, HabitatgeResumSerializer,
     AssignarResidentSerializer, AssignarAdminSerializer,
@@ -79,6 +80,40 @@ class LogoutView(APIView):
             status=status.HTTP_200_OK,
         )
 
+class PasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [LoginThrottle]
+
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reset_data = serializer.save()
+
+        response_data = {
+            "detail": "Si el correu existeix, s'han generat instruccions per restablir la contrasenya."
+        }
+
+        # MVP: retornem uid/token només si existeix usuari per facilitar integració frontend.
+        # En producció s'hauria d'enviar per email i no retornar el token a la resposta.
+        if reset_data:
+            response_data.update(reset_data)
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+class PasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [LoginThrottle]
+
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(
+            {"detail": "Contrasenya restablerta correctament."},
+            status=status.HTTP_200_OK,
+        )
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]

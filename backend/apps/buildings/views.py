@@ -7,6 +7,7 @@ from rest_framework.decorators import api_view, action, permission_classes
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db.models import Q
+from rest_framework.exceptions import PermissionDenied
 
 from apps.accounts.permissions import ABACMixin, IsAdminSistema, IsAdminFinca
 from apps.accounts.models import RoleChoices, ValidacioAdmin
@@ -537,6 +538,7 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             return HabitatgeResumSerializer
         return HabitatgeDetailSerializer
+    
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [IsAuthenticated(), EsOwnerOAdminHabitatge()]
@@ -545,6 +547,11 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         elif self.action == 'list':
             return [IsAuthenticated(), EsAdminOPropietariHabitatge()]
         return [IsAuthenticated()]
+    
+    def perform_create(self, serializer):
+        if self.request.user.profile.role == RoleChoices.ADMIN:
+            raise PermissionDenied("Els administradors de finca no poden crear habitatges.")
+        serializer.save()
 
 class LocalitzacioViewSet(viewsets.ModelViewSet):
     queryset = Localitzacio.objects.all()

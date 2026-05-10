@@ -2766,3 +2766,36 @@ class TestAdminFincaAltaEdifici(BaseTestData):
         # Comprovem que l'edifici nou s'ha assignat a aquest admin
         nou_edifici = Edifici.objects.latest('idEdifici')
         self.assertEqual(nou_edifici.administradorFinca, admin)
+
+class TestRestriccionsHabitatge(BaseTestData):
+    """
+    Validació (Sprint 3): Restriccions sobre els habitatges.
+    """
+    def test_admin_no_pot_crear_habitatge(self):
+        # Creem un usuari Administrador vàlid i aprovat
+        admin = self._create_user(email="admin_prova@test.com", role=RoleChoices.ADMIN)
+        admin.profile.estatValidacioAdmin = ValidacioAdmin.APROVAT
+        admin.profile.save()
+
+        # Creem un edifici i una localització de prova (necessaris per crear un habitatge)
+        loc = Localitzacio.objects.create(carrer="Carrer Prova", numero=1, codiPostal="08000")
+        edifici = Edifici.objects.create(
+            localitzacio=loc, 
+            anyConstruccio=2000, 
+            superficieTotal=100, 
+            administradorFinca=admin
+        )
+
+        # Intentem fer un POST per crear un habitatge estant loguejats com a ADMIN
+        self.client.force_authenticate(user=admin)
+        url = reverse('habitatge-list')  # Aquest és el nom per defecte que crea el router
+        response = self.client.post(url, {
+            "edifici": edifici.idEdifici,
+            "referenciaCadastral": "1234567AB9999C0001XX",
+            "planta": "1",
+            "porta": "1A",
+            "superficie": 50.0
+        }, format='json')
+
+        # Comprovem que el sistema ens bloqueja amb un 403 Forbidden
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

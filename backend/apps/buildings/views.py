@@ -19,7 +19,7 @@ from .models import (
 )
 from .serializers import (
     EdificiDetailSerializer, EdificiListSerializer,
-    HabitatgeDetailSerializer, HabitatgeResumSerializer,
+    HabitatgeDetailSerializer, HabitatgeMeUpdateSerializer, HabitatgeResumSerializer,
     LocalitzacioSerializer, DadesEnergetiquesSerializer,
     RankingSerializer,
     CatalegMilloraSerializer,
@@ -364,7 +364,33 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return Response({"detail": "No hi ha dades energètiques disponibles."}, status=404)
 
         return Response(dades)
+    @action(
+        detail=True,
+        methods=['patch'],
+        url_path='me/habitatge/(?P<referenciaCadastral>[A-Za-z0-9]+)',
+        permission_classes=[IsAuthenticated],
+    )
+    def me_habitatge(self, request, pk=None, referenciaCadastral=None):
+        edifici = get_object_or_404(Edifici, pk=pk)
 
+        habitatge = get_object_or_404(
+            Habitatge.objects.select_related('dadesEnergetiques', 'edifici'),
+            edifici=edifici,
+            usuari=request.user,
+            referenciaCadastral=referenciaCadastral,
+        )
+
+        serializer = HabitatgeMeUpdateSerializer(
+            habitatge,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        output = HabitatgeDetailSerializer(habitatge, context={'request': request})
+        return Response(output.data, status=status.HTTP_200_OK)
+    
     def _preparar_items_simulacio(self, millores_validated):
         """
         Converteix l'entrada validada del serializer en objectes reals del catàleg.

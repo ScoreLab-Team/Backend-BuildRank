@@ -527,6 +527,11 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         if not user.is_authenticated or not hasattr(user, 'profile'):
             return Habitatge.objects.none()
 
+        # Excepció per US-H2
+        # Permetem que qualsevol usuari trobi l'habitatge si el que vol és sol·licitar-hi accés
+        if self.action == 'solicitar_acces':
+            return Habitatge.objects.all()
+
         role = user.profile.role
         if role == RoleChoices.ADMIN:
             return Habitatge.objects.filter(edifici__administradorFinca=user)
@@ -552,6 +557,95 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         if self.request.user.profile.role == RoleChoices.ADMIN:
             raise PermissionDenied("Els administradors de finca no poden crear habitatges.")
         serializer.save()
+    
+    @action(detail=True, methods=['post'], url_path='solicitar-acces')
+    def solicitar_acces(self, request, pk=None):
+        # Sol·licitud de vincular-se a aquest habitatge
+        habitatge = self.get_object()
+
+        # Comprovar si l'habitatge ja està ocupat per un usuari validat
+        if habitatge.usuari:
+            return Response(
+                {"detail": "Aquest habitatge ja té un resident assignat."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Posem l'estat en revisió i guardem qui és l'usuari que ho demana
+        habitatge.estatValidacio = EstatValidacio.EN_REVISIO
+        habitatge.solicitant = request.user
+        habitatge.save(update_fields=['estatValidacio', 'solicitant'])
+
+        return Response(
+            {"detail": "Sol·licitud enviada correctament. Pendent de l'aprovació de l'Administrador."},
+            status=status.HTTP_200_OK
+        )
+    
+    @action(detail=True, methods=['post'], url_path='validar-acces')
+    def validar_acces(self, request, pk=None):
+        # L'Administrador de finca aprova o rebutja la sol·licitud
+        habitatge = self.get_object()
+
+        # Només l'admin d'aquest edifici pot validar-ho
+        if habitatge.edifici.administradorFinca != request.user:
+            return Response(
+                {"detail": "No tens permisos per validar accessos en aquest edifici."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Comprovem que realment hi hagi algú pendent
+        if habitatge.estatValidacio != EstatValidacio.EN_REVISIO or not habitatge.solicitant:
+            return Response(
+                {"detail": "Aquest habitatge no té cap sol·licitud pendent de revisió."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        nouEstat = request.data.get('estat')
+        
+        if nouEstat == EstatValidacio.VALIDADA:
+            habitatge.usuari = habitatge.solicitant
+            habitatge.estatValidacio = EstatValidacio.VALIDADA
+            habitatge.solicitant = None
+            habitatge.save(update_fields=['usuari', 'estatValidacio', 'solicitant'])
+
+            return Response(
+                {"detail": "Sol·licitud aprovada. Resident assignat."},
+                status=status.HTTP_200_OK
+            )
+        
+        elif nouEstat == EstatValidacio.REBUTJADA:
+            habitatge.estatValidacio = EstatValidacio.REBUTJADA
+            habitatge.solicitant = None
+            habitatge.save(update_fields=['estatValidacio', 'solicitant'])
+
+            return Response(
+                {"detail": "Sol·licitud rebutjada."},
+                status=status.HTTP_200_OK
+            )
+        
+        else:
+            return Response(
+                {"detail": "Cal enviar un estat vàlid ('Validada' o 'Rebutjada)"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+    @action(detail=False, methods=['get'])
+    def pendents(self, request):
+        # Retorna només els habitatges que estan pendents de validació
+        user = request.user
+        if getattr(user.profile, 'role', None) != RoleChoices.ADMIN:
+            return Response(
+                {"detail": "Només els administradors poden veure les sol·licituds pendents."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
+        # Busquem habitatges del seu edifici que estiguin EN_REVISIO
+        queryset = Habitatge.objects.filter(
+            edifici__administradorFinca=user,
+            estatValidacio=EstatValidacio.EN_REVISIO
+        )
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 class LocalitzacioViewSet(viewsets.ModelViewSet):
     queryset = Localitzacio.objects.all()

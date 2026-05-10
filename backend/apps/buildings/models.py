@@ -398,6 +398,7 @@ class Habitatge(models.Model):
     )
 
     ''' # relacio 0..1 a * '''
+    # usuari vinculat i validat (viu a l'habitatge oficialment)
     usuari = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -413,6 +414,22 @@ class Habitatge(models.Model):
         related_name='dades_energetiques', 
         null=True, 
         blank=True
+    )
+
+    # US-H2 -- Sol·licitud d'unió a edifici mitjançant habitatge pendent de validació
+    estatValidacio = models.CharField(
+        max_length=25,
+        choices=EstatValidacio.choices,
+        default=EstatValidacio.EN_REVISIO
+    )
+
+    # Usuari que demana vincular-se a aquest pis
+    solicitant = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="solicituds_habitatge"
     )
 
     def __str__(self):

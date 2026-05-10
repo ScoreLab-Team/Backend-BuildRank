@@ -548,6 +548,11 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), EsAdminOPropietariHabitatge()]
         return [IsAuthenticated()]
     
+    def perform_create(self, serializer):
+        if self.request.user.profile.role == RoleChoices.ADMIN:
+            raise PermissionDenied("Els administradors de finca no poden crear habitatges.")
+        serializer.save()
+    
     @action(detail=True, methods=['post'], url_path='solicitar-acces')
     def solicitar_acces(self, request, pk=None):
         # Sol·licitud de vincular-se a aquest habitatge
@@ -617,10 +622,7 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
                 {"detail": "Cal enviar un estat vàlid ('Validada' o 'Rebutjada)"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-    def perform_create(self, serializer):
-        if self.request.user.profile.role == RoleChoices.ADMIN:
-            raise PermissionDenied("Els administradors de finca no poden crear habitatges.")
-        serializer.save()
+            
 
 class LocalitzacioViewSet(viewsets.ModelViewSet):
     queryset = Localitzacio.objects.all()

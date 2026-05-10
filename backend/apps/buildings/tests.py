@@ -2799,3 +2799,87 @@ class TestRestriccionsHabitatge(BaseTestData):
 
         # Comprovem que el sistema ens bloqueja amb un 403 Forbidden
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+class TestFluxSolicitudHabitatge(BaseTestData):
+    """
+    Validació US-H2: Sol·licitud d'unió a edifici per part d'un owner/tenant
+    """
+    def test_flux_complet_solicitud_i_validacio(self):
+        # Creem usuaris
+        admin = self._create_user(email="admin_edifici@test.com", role=RoleChoices.ADMIN)
+        tenant = self._create_user(email="nou_llogater@test.com", role=RoleChoices.TENANT)
+        
+        # Creem l'edifici i un habitatge buit (sense resident)
+        loc = Localitzacio.objects.create(carrer="Carrer Prova", numero=10, codiPostal="08002")
+        edifici = Edifici.objects.create(
+            localitzacio=loc, anyConstruccio=1990, superficieTotal=200, administradorFinca=admin
+        )
+        habitatge = Habitatge.objects.create(
+            referenciaCadastral="1234567AB9999C0001ZZ",
+            planta="2",
+            porta="B",
+            superficie=75.0,
+            edifici=edifici
+        )
+
+        # El llogater (tenant) sol·licita l'accés
+        self.client.force_authenticate(user=tenant)
+        url_solicitar = reverse('habitatge-solicitar-acces', kwargs={'pk': habitatge.pk})
+        response_solicitar = self.client.post(url_solicitar)
+
+        self.assertEqual(response_solicitar.status_code, status.HTTP_200_OK)
+        
+        # Comprovem a la base de dades que l'habitatge està EN_REVISIO
+        habitatge.refresh_from_db()
+        self.assertEqual(habitatge.estatValidacio, EstatValidacio.EN_REVISIO)
+        self.assertEqual(habitatge.solicitant, tenant)
+        self.assertIsNone(habitatge.usuari)  # Encara no és el resident oficial
+
+        # L'administrador de la finca aprova la sol·licitud
+        self.client.force_authenticate(user=admin)
+        url_validar = reverse('habitatge-validar-acces', kwargs={'pk': habitatge.pk})
+        response_validar = self.client.post(url_validar, {
+            "estat": EstatValidacio.VALIDADA
+        }, format='json')
+
+        self.assertEqual(response_validar.status_code, status.HTTP_200_OK)
+        
+        # Comprovem que tot s'ha aplicat perfectament a la base de dades
+        habitatge.refresh_from_db()
+        self.assertEqual(habitatge.estatValidacio, EstatValidacio.VALIDADA)
+        self.assertEqual(habitatge.usuari, tenant) # Ara ja és el resident oficial
+        self.assertIsNone(habitatge.solicitant)
+
+def test_llistat_pendents_administrador(self):
+        # Preparem dades: Un admin, un llogater i dos habitatges
+        admin = self._create_user(email="admin_llista@test.com", role=RoleChoices.ADMIN)
+        tenant = self._create_user(email="tenant_espera@test.com", role=RoleChoices.TENANT)
+        
+        loc = Localitzacio.objects.create(carrer="Carrer Balmes", numero=5, codiPostal="08007")
+        edifici = Edifici.objects.create(localitzacio=loc, anyConstruccio=2000, superficieTotal=500, administradorFinca=admin)
+        
+        # Habitatge 1: En revisió (hauria de sortir a la llista)
+        h_pendent = Habitatge.objects.create(
+            referenciaCadastral="PENDENT11111", planta="1", porta="1", superficie=50, edifici=edifici,
+            estat_validacio=EstatValidacio.EN_REVISIO, solicitant=tenant
+        )
+        # Habitatge 2: Ja validat (NO hauria de sortir)
+        h_validat = Habitatge.objects.create(
+            referenciaCadastral="VALIDAT22222", planta="1", porta="2", superficie=50, edifici=edifici,
+            estat_validacio=EstatValidacio.VALIDADA, usuari=tenant
+        )
+
+        # Fem la petició com a Administrador
+        self.client.force_authenticate(user=admin)
+        url = reverse('habitatge-pendents')
+        response = self.client.get(url)
+
+        # Verificacions
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1) # Només n'hi ha d'haver un
+        self.assertEqual(response.data[0]['referenciaCadastral'], "PENDENT11111")
+
+        # Verificació de seguretat: Un llogater NO pot veure aquesta llista
+        self.client.force_authenticate(user=tenant)
+        response_denied = self.client.get(url)
+        self.assertEqual(response_denied.status_code, status.HTTP_403_FORBIDDEN)

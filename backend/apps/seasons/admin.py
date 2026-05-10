@@ -6,7 +6,7 @@ from .models import Temporada, EstatTemporada
 
 @admin.register(Temporada)
 class TemporadaAdmin(admin.ModelAdmin):
-    list_display = ('nom', 'dataInici', 'dataFi', 'estat')
+    list_display = ('id', 'nom', 'dataInici', 'dataFi', 'estat')
     list_filter = ('estat',)
     search_fields = ('nom',)
     readonly_fields = ('estat',)

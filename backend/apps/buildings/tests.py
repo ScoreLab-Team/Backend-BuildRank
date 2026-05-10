@@ -2883,3 +2883,273 @@ def test_llistat_pendents_administrador(self):
         self.client.force_authenticate(user=tenant)
         response_denied = self.client.get(url)
         self.assertEqual(response_denied.status_code, status.HTTP_403_FORBIDDEN)
+
+# ============================================================================
+# HABITATGE ME — PATCH /edificis/<id>/me/habitatge/<referenciaCadastral>/
+# ============================================================================
+
+class HabitatgeMeUpdateTests(BaseTestData):
+    """
+    Tests per a l'endpoint PATCH me/habitatge/<ref>/:
+    edició de dades bàsiques i update_or_create de DadesEnergetiques.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.owner = cls._create_user("owner@example.com", RoleChoices.OWNER)
+        cls.other_owner = cls._create_user("other@example.com", RoleChoices.OWNER)
+        cls.tenant = cls._create_user("tenant@example.com", RoleChoices.TENANT)
+
+        cls.grup = GrupComparable.objects.create(
+            idGrup=1, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-200"
+        )
+        cls.edifici = cls._create_edifici(cls.owner, cls.grup, numero=10)
+
+        cls.habitatge = Habitatge.objects.create(
+            referenciaCadastral="HAB001",
+            planta="2", porta="1",
+            superficie=80.0,
+            anyReforma=None,
+            edifici=cls.edifici,
+            usuari=cls.owner,
+        )
+        cls.habitatge_tenant = Habitatge.objects.create(
+            referenciaCadastral="HAB002",
+            planta="3", porta="2",
+            superficie=60.0,
+            edifici=cls.edifici,
+            usuari=cls.tenant,
+        )
+
+    def _url(self, edifici_id, ref):
+        return reverse("edifici-me-habitatge", args=[edifici_id, ref])
+
+    def _dades_energetiques_payload(self, **overrides):
+        base = {
+            "qualificacioGlobal": "B",
+            "consumEnergiaPrimaria": 120.5,
+            "consumEnergiaFinal": 95.2,
+            "emissionsCO2": 28.4,
+            "costAnualEnergia": 850,
+            "energiaCalefaccio": 40,
+            "energiaRefrigeracio": 15,
+            "energiaACS": 25,
+            "energiaEnllumenament": 10,
+            "emissionsCalefaccio": 12,
+            "emissionsRefrigeracio": 4,
+            "emissionsACS": 8,
+            "emissionsEnllumenament": 3,
+            "aillamentTermic": 1.2,
+            "valorFinestres": 2.1,
+            "normativa": "CTE 2019",
+            "einaCertificacio": "CE3X",
+            "motiuCertificacio": "Actualització de dades",
+            "rehabilitacioEnergetica": False,
+            "dataEntrada": "2026-04-29",
+        }
+        return {**base, **overrides}
+
+    # ------------------------------------------------------------------
+    # 1. Autenticació i permisos
+    # ------------------------------------------------------------------
+
+    def test_unauthenticated_returns_401(self):
+        """Sense autenticació → 401."""
+        response = self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB001"), {}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_owner_can_patch_own_habitatge(self):
+        """Owner autenticat pot fer PATCH del seu habitatge → 200."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB001"),
+            {"superficie": 90.0},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_tenant_can_patch_own_habitatge(self):
+        """Tenant autenticat pot fer PATCH del seu habitatge → 200."""
+        self.client.force_authenticate(user=self.tenant)
+        response = self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB002"),
+            {"superficie": 65.0},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_other_user_cannot_patch_habitatge(self):
+        """Usuari sense relació amb l'habitatge → 404."""
+        self.client.force_authenticate(user=self.other_owner)
+        response = self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB001"),
+            {"superficie": 90.0},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_wrong_edifici_returns_404(self):
+        """Referència cadastral correcta però edifici incorrecte → 404."""
+        other_edifici = self._create_edifici(self.owner, self.grup, numero=99)
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(other_edifici.idEdifici, "HAB001"),
+            {"superficie": 90.0},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_nonexistent_habitatge_returns_404(self):
+        """Referència cadastral inexistent → 404."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(self.edifici.idEdifici, "INEXISTENT"),
+            {"superficie": 90.0},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    # ------------------------------------------------------------------
+    # 2. Edició de camps bàsics
+    # ------------------------------------------------------------------
+
+    def test_patch_basic_fields_persisted(self):
+        """Els camps bàsics enviats es guarden correctament a la BD."""
+        self.client.force_authenticate(user=self.owner)
+        self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB001"),
+            {"planta": "3", "porta": "2", "superficie": 95.5, "anyReforma": 2015},
+            format="json",
+        )
+        self.habitatge.refresh_from_db()
+        self.assertEqual(self.habitatge.planta, "3")
+        self.assertEqual(self.habitatge.porta, "2")
+        self.assertEqual(float(self.habitatge.superficie), 95.5)
+        self.assertEqual(self.habitatge.anyReforma, 2015)
+
+    def test_patch_without_dades_energetiques_does_not_touch_them(self):
+        """Si el payload no inclou dadesEnergetiques, no es crea ni modifica res."""
+        self.client.force_authenticate(user=self.owner)
+        self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB001"),
+            {"superficie": 85.0},
+            format="json",
+        )
+        self.habitatge.refresh_from_db()
+        self.assertIsNone(self.habitatge.dadesEnergetiques)
+
+    def test_response_contains_full_habitatge(self):
+        """La resposta retorna l'habitatge complet amb dadesEnergetiques nested."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB001"),
+            {"superficie": 88.0},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("referenciaCadastral", response.data)
+        self.assertIn("dadesEnergetiques", response.data)
+
+    # ------------------------------------------------------------------
+    # 3. Validacions de camps bàsics
+    # ------------------------------------------------------------------
+
+    def test_negative_superficie_rejected(self):
+        """Superfície negativa o zero → 400."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB001"),
+            {"superficie": -10},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("superficie", response.data)
+
+    def test_future_any_reforma_rejected(self):
+        """Any de reforma en el futur → 400."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB001"),
+            {"anyReforma": 2099},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("anyReforma", response.data)
+
+    def test_any_reforma_before_construccio_rejected(self):
+        """Any de reforma anterior a la construcció de l'edifici → 400."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB001"),
+            {"anyReforma": self.edifici.anyConstruccio - 1},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # ------------------------------------------------------------------
+    # 4. update_or_create de DadesEnergetiques
+    # ------------------------------------------------------------------
+
+    def test_creates_dades_energetiques_when_none_exist(self):
+        """Si l'habitatge no té DadesEnergetiques, es creen i es vinculen."""
+        self.assertIsNone(self.habitatge.dadesEnergetiques)
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB001"),
+            {"dadesEnergetiques": self._dades_energetiques_payload()},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.habitatge.refresh_from_db()
+        self.assertIsNotNone(self.habitatge.dadesEnergetiques)
+        self.assertEqual(self.habitatge.dadesEnergetiques.qualificacioGlobal, "B")
+
+    def test_updates_existing_dades_energetiques(self):
+        """Si l'habitatge ja té DadesEnergetiques, s'actualitzen sense crear-ne de noves."""
+        dades = DadesEnergetiques.objects.create(**self._dades_energetiques_payload())
+        self.habitatge.dadesEnergetiques = dades
+        self.habitatge.save(update_fields=["dadesEnergetiques"])
+        id_original = dades.id
+
+        self.client.force_authenticate(user=self.owner)
+        self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB001"),
+            {"dadesEnergetiques": self._dades_energetiques_payload(qualificacioGlobal="A")},
+            format="json",
+        )
+
+        self.habitatge.refresh_from_db()
+        # Mateix objecte (no se n'ha creat un de nou)
+        self.assertEqual(self.habitatge.dadesEnergetiques.id, id_original)
+        self.assertEqual(self.habitatge.dadesEnergetiques.qualificacioGlobal, "A")
+
+    def test_no_orphan_dades_energetiques_on_create(self):
+        """Quan es creen DadesEnergetiques, queden vinculades (no òrfenes)."""
+        self.client.force_authenticate(user=self.owner)
+        self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB001"),
+            {"dadesEnergetiques": self._dades_energetiques_payload()},
+            format="json",
+        )
+        self.habitatge.refresh_from_db()
+        # La FK inversa ha de trobar exactament aquest habitatge
+        self.assertEqual(
+            self.habitatge.dadesEnergetiques.dades_energetiques.pk,
+            self.habitatge.pk,
+        )
+
+    def test_dades_energetiques_response_nested(self):
+        """La resposta inclou dadesEnergetiques nested amb les dades actualitzades."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(self.edifici.idEdifici, "HAB001"),
+            {"dadesEnergetiques": self._dades_energetiques_payload(consumEnergiaPrimaria=200.0)},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(response.data.get("dadesEnergetiques"))
+        self.assertEqual(
+            float(response.data["dadesEnergetiques"]["consumEnergiaPrimaria"]), 200.0
+        )

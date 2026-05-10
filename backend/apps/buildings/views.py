@@ -367,29 +367,18 @@ class EdificiViewSet(viewsets.ModelViewSet):
     @action(
         detail=True,
         methods=['patch'],
-        url_path='me/habitatge',
+        url_path='me/habitatge/(?P<referenciaCadastral>[A-Za-z0-9]+)',
         permission_classes=[IsAuthenticated],
     )
-    def me_habitatge(self, request, pk=None):
-        """
-        PATCH /api/buildings/edificis/<id_edifici>/me/habitatge/
-        Permet a owner/tenant editar el seu habitatge vinculat a aquest edifici,
-        incloent la creació o actualització de les seves DadesEnergetiques.
-        """
+    def me_habitatge(self, request, pk=None, referenciaCadastral=None):
         edifici = get_object_or_404(Edifici, pk=pk)
 
-        habitatge = Habitatge.objects.select_related(
-            'dadesEnergetiques', 'edifici'
-        ).filter(
+        habitatge = get_object_or_404(
+            Habitatge.objects.select_related('dadesEnergetiques', 'edifici'),
             edifici=edifici,
             usuari=request.user,
-        ).first()
-
-        if not habitatge:
-            return Response(
-                {"detail": "No tens cap habitatge vinculat a aquest edifici."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            referenciaCadastral=referenciaCadastral,
+        )
 
         serializer = HabitatgeMeUpdateSerializer(
             habitatge,
@@ -399,7 +388,6 @@ class EdificiViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
 
-        # Retornem l'habitatge complet (amb dadesEnergetiques nested)
         output = HabitatgeDetailSerializer(habitatge, context={'request': request})
         return Response(output.data, status=status.HTTP_200_OK)
     

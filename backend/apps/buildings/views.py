@@ -8,8 +8,8 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db.models import Q
 
-from apps.accounts.permissions import ABACMixin, IsAdminSistema
-from apps.accounts.models import RoleChoices
+from apps.accounts.permissions import ABACMixin, IsAdminSistema, IsAdminFinca
+from apps.accounts.models import RoleChoices, ValidacioAdmin
  
 from .models import (
     Edifici, Habitatge, Localitzacio, DadesEnergetiques,
@@ -25,6 +25,7 @@ from .serializers import (
     SimulacioMilloraPreviewSerializer,
     SimulacioMilloraSerializer, MilloraImplementadaSerializer,
     ValidacioMilloraSerializer,
+    ReclamarEdificiAdminSerializer,
 )
 from .permissions import (
     EsAdminEdifici,
@@ -34,6 +35,7 @@ from .permissions import (
     EsOwnerOAdminDadesEnergetiques,
     EsAdminMilloraImplementada,
     HasAPIKey,
+    log_denial,
 )
 
 from .services.nominatim import NominatimRateLimiter, reverse_geocode, es_barcelona, parse_carrer_numero
@@ -830,3 +832,74 @@ class ThirdPartyServiceView(APIView):
             })
  
         return Response({"results": results})
+
+
+# US-AF1: Alta i assignació d'edificis per a Administradors de Finca
+class AdminFincaEdificiAltaView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminFinca]
+
+    def post(self, request):
+        perfil = request.user.profile
+
+        # Validar estat d'activació de l'Admin
+        if perfil.estatValidacioAdmin != ValidacioAdmin.APROVAT:
+            return Response(
+                {"error": "El teu compte d'administrador encara està pendent de validació o ha estat rebutjat."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        serializer = ReclamarEdificiAdminSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        data = serializer.validated_data
+
+        # Buscar si la localització / edifici ja existeix
+        loc = Localitzacio.objects.filter(
+            carrer__iexact=data['carrer'],
+            numero=data['numero'],
+            codiPostal=data['codiPostal']
+        ).first()
+
+        # Si l'edifici ja existeix
+        if loc and hasattr(loc, 'edifici'):
+            edifici = loc.edifici
+
+            # Bloquejar si ja té administrador
+            if edifici.administradorFinca:
+                if edifici.administradorFinca == request.user:
+                    return Response({"message": "Ja ets l'administrador d'aquest edifici."}, status=status.HTTP_200_OK)
+                
+                # Registrem l'intent denegat per auditoria
+                log_denial(request, "Vincular edifici", "L'edifici ja té un administrador assignat", edifici.idEdifici)
+                return Response(
+                    {"error": "Aquest edifici ja té un administrador de finca assignat."}, 
+                    status=status.HTTP_409_CONFLICT
+                )
+            
+            # Assignar si existeix però no té admin
+            edifici.administradorFinca = request.user
+            edifici.save()
+            return Response({"message": "Edifici assignat correctament."}, status=status.HTTP_200_OK)
+        
+        # Si l'edifici no existeix, el creem i l'assignem
+        if not loc:
+            loc = Localitzacio.objects.create(
+                carrer=data['carrer'],
+                numero=data['numero'],
+                codiPostal=data['codiPostal'],
+                barri="Desconegut"
+            )
+
+        nouEdifici = Edifici.objects.create(
+            localitzacio=loc,
+            anyConstruccio=data.get('anyConstruccio'),
+            tipologia=data.get('tipologia'),
+            superficieTotal=data.get('superficieTotal'),
+            administradorFinca=request.user
+        )
+
+        return Response(
+            {"message": "Edifici creat i assignat correctament.", "edifici_id": nouEdifici.idEdifici}, 
+            status=status.HTTP_201_CREATED
+        )

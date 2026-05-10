@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora
 from apps.buildings.serializers import EdificiDetailSerializer, LocalitzacioSerializer
-from apps.accounts.models import RoleChoices
+from apps.accounts.models import RoleChoices, ValidacioAdmin
 from .simulation.engine import simular_millores, clamp, UnitatBaseMillora
 
 User = get_user_model()
@@ -2690,3 +2690,79 @@ class ValidacioMilloraImplementadaTests(BaseTestData):
         r2 = self.client.post(self._url(mi2.pk), {"estatValidacio": "Rebutjada"}, format="json")
         self.assertEqual(r1.status_code, status.HTTP_200_OK)
         self.assertEqual(r2.status_code, status.HTTP_200_OK)
+
+class TestAdminFincaAltaEdifici(BaseTestData):
+    # US-AF1: Validació de permisos, bloquejos i creació d'edificis per a Administradors de Finca
+
+    def test_bloqueig_admin_no_aprovat(self):
+        # Creem un admin però el deixem en estat PENDENT
+        user = self._create_user(email="admin_pendent@test.com", role=RoleChoices.ADMIN)
+        user.profile.estatValidacioAdmin = ValidacioAdmin.PENDENT,
+        user.profile.save()
+
+        # Intentem donar d'alta un edifici
+        self.client.force_authenticate(user=user)
+        url = reverse('admin-finca-edifici-alta')
+        response = self.client.post(url, {
+            "carrer": "Carrer de Prova",
+            "numero": 10,
+            "codiPostal": "08001"
+        }, format='json')
+
+        # Comprovem que ens retorna un 403 Forbidden i el missatge correcte
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("pendent de validació", response.data['error'])
+
+    def test_bloqueig_edifici_amb_altre_admin(self):
+        # Creem un admin vàlid i un edifici que ja és seu
+        admin1 = self._create_user(email="admin1@test.com", role=RoleChoices.ADMIN)
+        admin1.profile.estat_validacio_admin = ValidacioAdmin.APROVAT
+        admin1.profile.save()
+
+        loc = Localitzacio.objects.create(carrer="Diagonal", numero=1, codiPostal="08001")
+        Edifici.objects.create(localitzacio=loc, anyConstruccio=2000, superficieTotal=100, administradorFinca=admin1)
+
+        # Creem un segon admin vàlid
+        admin2 = self._create_user(email="admin2@test.com", role=RoleChoices.ADMIN)
+        admin2.profile.estatValidacioAdmin = ValidacioAdmin.APROVAT
+        admin2.profile.save()
+
+        # El segon admin intenta "robar" l'edifici
+        self.client.force_authenticate(user=admin2)
+        url = reverse('admin-finca-edifici-alta')
+        response = self.client.post(url, {
+            "carrer": "Diagonal",
+            "numero": 1,
+            "codiPostal": "08001"
+        }, format='json')
+
+        # Comprovem que dóna un Error 409 Conflict per bloqueig
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertIn("ja té un administrador", response.data['error'])
+
+    def test_crear_edifici_si_no_existeix(self):
+        # Creem un admin aprovat
+        admin = self._create_user(email="admin_aprovat@test.com", role=RoleChoices.ADMIN)
+        admin.profile.estatValidacioAdmin = ValidacioAdmin.APROVAT
+        admin.profile.save()
+
+        # Guardem quants edificis hi ha abans
+        edificis_abans = Edifici.objects.count()
+
+        # Fem la petició
+        self.client.force_authenticate(user=admin)
+        url = reverse('admin-finca-edifici-alta')
+        response = self.client.post(url, {
+            "carrer": "Passeig de Gràcia",
+            "numero": 45,
+            "codiPostal": "08007",
+            "superficieTotal": 500
+        }, format='json')
+
+        # Comprovem que es crea correctament (201 Created)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Edifici.objects.count(), edificis_abans + 1)
+        
+        # Comprovem que l'edifici nou s'ha assignat a aquest admin
+        nou_edifici = Edifici.objects.latest('idEdifici')
+        self.assertEqual(nou_edifici.administradorFinca, admin)

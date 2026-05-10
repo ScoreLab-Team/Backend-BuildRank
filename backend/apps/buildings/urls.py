@@ -15,6 +15,7 @@ from .views import (
     RankingViewSet,
     CatalegMilloraViewSet,
     MilloraImplementadaViewSet,
+    AdminFincaEdificiAltaView,
 )
 
 router = DefaultRouter()
@@ -29,6 +30,7 @@ router.register(r'millores-implementades', MilloraImplementadaViewSet, basename=
 # urlpatterns = router.urls
 
 urlpatterns = [
+    path('admin-finca/edificis/alta/', AdminFincaEdificiAltaView.as_view(), name='admin-finca-edifici-alta'),
     # Rutes manuals APIView (compatibilitat), amb noms no col·lisionants amb el router
     path('edificis/manual/', EdificisMostrarAPIView.as_view(), name='edifici-list-manual'),
     path('edificis/manual/<str:pk>/', EdificiVeureAPIView.as_view(), name='edifici-detail-manual'),

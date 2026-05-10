@@ -3,7 +3,7 @@
 ## Executor
 Martí Borràs  
 Mireia Brufau  
-Eduard Corrons 
+Eduard Corrons  
 Oscar Montiel
 
 ## Branca

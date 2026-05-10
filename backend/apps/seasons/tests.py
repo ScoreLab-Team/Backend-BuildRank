@@ -9,6 +9,9 @@ from django.contrib.auth import get_user_model
 
 from .models import Temporada, EstatTemporada
 from .admin import TemporadaAdmin
+from apps.leagues.models import Lliga
+from apps.participations.models import Participacio
+from apps.buildings.models import Edifici, GrupComparable, Localitzacio
 
 User = get_user_model()
 
@@ -328,3 +331,366 @@ class TemporadaAPIExtraTest(APITestCase):
         self.client.force_authenticate(user=self.user)
         response = self.client.delete(f'/api/seasons/{self.temporada.pk}/')
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+
+class TemporadaRankingAPITest(APITestCase):
+    """Tests del nou endpoint global de ranking per temporada."""
+
+    def setUp(self):
+        self.client = APIClient()
+
+        self.user = make_user()
+        self.client.force_authenticate(user=self.user)
+
+        self.temporada = Temporada.objects.create(
+            nom='Temporada Ranking',
+            dataInici='2026-01-01',
+            dataFi='2026-12-31',
+        )
+
+        self.group_a = GrupComparable.objects.create(
+            idGrup=1,
+            zonaClimatica='A',
+            tipologia='Residencial',
+            rangSuperficie='0-100'
+        )
+
+        self.group_b = GrupComparable.objects.create(
+            idGrup=2,
+            zonaClimatica='B',
+            tipologia='Residencial',
+            rangSuperficie='0-100'
+        )
+
+        self.lliga_bronze = Lliga.objects.create(
+            nom='Bronze',
+            categoria='EFICIENCIA',
+            divisio='Bronze',
+            temporada=self.temporada
+        )
+
+        self.lliga_gold = Lliga.objects.create(
+            nom='Gold',
+            categoria='EFICIENCIA',
+            divisio='Gold',
+            temporada=self.temporada
+        )
+
+
+
+
+        self.loc_1 = Localitzacio.objects.create(
+            carrer='Carrer Aragó',
+            numero=1,
+            codiPostal='08001',
+            barri='Eixample'
+        )
+
+        self.loc_2 = Localitzacio.objects.create(
+            carrer='Diagonal',
+            numero=2,
+            codiPostal='08002',
+            barri='Les Corts'
+        )
+
+        self.loc_3 = Localitzacio.objects.create(
+            carrer='Gran Via',
+            numero=3,
+            codiPostal='08003',
+            barri='Centre'
+        )
+
+        self.edifici_1 = Edifici.objects.create(
+            anyConstruccio=2000,
+            tipologia='Residencial',
+            superficieTotal=100,
+            nombrePlantes=1,
+            reglament='CTE',
+            orientacioPrincipal='Nord',
+            grupComparable=self.group_a,
+            localitzacio=self.loc_1
+        )
+
+        self.edifici_2 = Edifici.objects.create(
+            anyConstruccio=2005,
+            tipologia='Residencial',
+            superficieTotal=120,
+            nombrePlantes=2,
+            reglament='CTE',
+            orientacioPrincipal='Sud',
+            grupComparable=self.group_a,
+            localitzacio=self.loc_2
+        )
+
+        self.edifici_3 = Edifici.objects.create(
+            anyConstruccio=2010,
+            tipologia='Residencial',
+            superficieTotal=150,
+            nombrePlantes=3,
+            reglament='CTE',
+            orientacioPrincipal='Est',
+            grupComparable=self.group_b,
+            localitzacio=self.loc_3
+        )
+
+
+
+
+        self.p1 = Participacio.objects.create(
+            edifici=self.edifici_1,
+            lliga=self.lliga_bronze,
+            puntuacio=80,
+            posicio=1,
+            divisio='Bronze'
+        )
+
+        self.p2 = Participacio.objects.create(
+            edifici=self.edifici_2,
+            lliga=self.lliga_gold,
+            puntuacio=95,
+            posicio=1,
+            divisio='Gold'
+        )
+
+        self.p3 = Participacio.objects.create(
+            edifici=self.edifici_3,
+            lliga=self.lliga_gold,
+            puntuacio=70,
+            posicio=2,
+            divisio='Gold'
+        )
+
+    def test_ranking_global_retorna_participacions_de_diferents_lligues(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/ranking/'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.data['results']
+
+        self.assertEqual(len(results), 3)
+
+        lligues = {r['nom_lliga'] for r in results}
+
+        self.assertIn('Bronze', lligues)
+        self.assertIn('Gold', lligues)
+
+    def test_filter_group(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/ranking/?group=1'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.data['results']
+
+        self.assertEqual(len(results), 2)
+
+        edificis = [r['edifici'] for r in results]
+
+        self.assertIn(self.edifici_1.idEdifici, edificis)
+        self.assertIn(self.edifici_2.idEdifici, edificis)
+        self.assertNotIn(self.edifici_3.idEdifici, edificis)
+
+    def test_filter_group_invalid_returns_404(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/ranking/?group=999'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_filter_league(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/ranking/'
+            f'?league={self.lliga_gold.pk}'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.data['results']
+
+        self.assertEqual(len(results), 2)
+
+        for item in results:
+            self.assertEqual(item['lliga'], self.lliga_gold.id)
+            self.assertEqual(item['nom_lliga'], self.lliga_gold.nom)
+
+    def test_filter_invalid_league_returns_404(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/ranking/?league=999'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_filter_search_by_street(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/ranking/?search=arag'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.data['results']
+
+        self.assertEqual(len(results), 1)
+
+        self.assertEqual(results[0]['edifici'], self.edifici_1.idEdifici)
+        self.assertIn('Aragó', results[0]['adreca'])
+
+    def test_ranking_pagination(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/ranking/'
+            f'?page=1&page_size=2'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(len(response.data['results']), 2)
+
+        self.assertIn('count', response.data)
+        self.assertEqual(response.data['count'], 3)
+
+        self.assertIn('next', response.data)
+
+
+    def test_posicio_edifici_dins_top_per_defecte(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/posicio_edifici/'
+            f'?edifici={self.edifici_2.pk}'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(response.data["esta_en_top"], True)
+        self.assertEqual(response.data["top_objectiu"], 3)
+        self.assertEqual(response.data["posicio"], 1)
+        self.assertEqual(response.data["scope"], "lliga")
+
+    def test_posicio_edifici_fora_top_calcula_punts(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/posicio_edifici/'
+            f'?edifici={self.edifici_3.pk}&top=1'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(response.data["esta_en_top"], False)
+        self.assertEqual(response.data["top_objectiu"], 1)
+
+        self.assertGreaterEqual(response.data["punts_per_top"], 0)
+
+    def test_posicio_edifici_segmentat_grup_a(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/posicio_edifici/'
+            f'?edifici={self.edifici_1.pk}&group=true'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertTrue(response.data["grup_comparat"])
+        self.assertEqual(response.data["grup_utilitzat"], self.group_a.idGrup)
+
+        self.assertIn(response.data["posicio"], [1, 2])
+
+    def test_posicio_edifici_no_segmentat_global(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/posicio_edifici/'
+            f'?edifici={self.edifici_1.pk}&group_filter=false'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertFalse(response.data["grup_comparat"])
+
+    def test_posicio_edifici_no_existeix_retorna_404(self):
+
+        fake_building_id = 99999
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/posicio_edifici/'
+            f'?edifici={fake_building_id}'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_posicio_edifici_top_mes_gran_que_ranking(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/posicio_edifici/'
+            f'?edifici={self.edifici_1.pk}&top=999'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+        self.assertIsNotNone(response.data["posicio"])
+        self.assertEqual(response.data["punts_per_top"], 0)
+
+    def test_posicio_edifici_scope_lliga(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/posicio_edifici/'
+            f'?edifici={self.edifici_1.pk}&scope=lliga'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(response.data["scope"], "lliga")
+        self.assertIn("lliga", response.data)
+        self.assertEqual(response.data["lliga"]["id"], self.lliga_bronze.id)
+
+    def test_posicio_edifici_scope_temporada(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/posicio_edifici/'
+            f'?edifici={self.edifici_1.pk}&scope=temporada'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(response.data["scope"], "temporada")
+
+        self.assertIn(response.data["posicio"], range(1, 1000))
+
+    def test_posicio_edifici_scope_i_segment_combined(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/posicio_edifici/'
+            f'?edifici={self.edifici_1.pk}&scope=temporada&group=true'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(response.data["scope"], "temporada")
+        self.assertTrue(response.data["grup_comparat"])
+
+        self.assertIn("grup_utilitzat", response.data)
+
+        self.assertEqual(
+            response.data["grup_utilitzat"],
+            self.group_a.idGrup
+        )
+
+    def test_scope_no_trenca_segment(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/posicio_edifici/'
+            f'?edifici={self.edifici_2.pk}&scope=lliga&group=true'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertTrue(response.data["grup_comparat"])
+        self.assertIn("grup_utilitzat", response.data)

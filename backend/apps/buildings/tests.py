@@ -3153,3 +3153,15 @@ class HabitatgeMeUpdateTests(BaseTestData):
         self.assertEqual(
             float(response.data["dadesEnergetiques"]["consumEnergiaPrimaria"]), 200.0
         )
+
+
+# ============================================================================
+# THIRD PARTY SERVICE — POST /api/third-party/score/
+# ============================================================================
+class ThirdPartyServiceTests(APITestCase):
+    def setUp(self):
+        self.url = '/api/third-party-service/'
+
+    def test_no_api_key_returns_401_or_403(self):
+        response = self.client.post(self.url, {"points": []}, format="json")
+        self.assertIn(response.status_code, [401, 403])

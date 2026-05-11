@@ -38,10 +38,10 @@ Conjuntos cubiertos:
   - Incluye validaciones funcionales del ciclo básico de autenticación.
 
 - `TemporaryConcurrencyRegistrationTests`
-  - Suite diagnóstica opt-in para detectar problemas de concurrencia en registro.
+  - Suite diagnóstica para detectar problemas de concurrencia en registro.
 
 - `StrictConcurrencyRegistrationTests`
-  - Suite estricta opt-in para validar hardening frente a carreras en registro.
+  - Suite estricta para validar hardening frente a carreras en registro.
 
 - `RateLimitingTestCase`
   - Verifica throttling en login, register y refresh.
@@ -69,16 +69,6 @@ Conjuntos cubiertos:
   - Sirve como suite compacta de regresión para errores de detalle y coste de consultas.
 
 ## Suites opt-in o con condiciones especiales
-
-### Concurrencia en registro
-
-Fichero de referencia: `backend/apps/accounts/tests.py`
-
-- Las suites de concurrencia están desactivadas por defecto.
-- Se activan con la variable de entorno `RUN_CONCURRENCY_TESTS`.
-- Modos previstos:
-  - `diagnostic`: activa la suite diagnóstica.
-  - `strict`: activa diagnóstico y validación estricta.
 
 ### Rate limiting
 
@@ -110,14 +100,8 @@ python.exe manage.py test apps.accounts.tests -v 2 --noinput
 python.exe manage.py test -v 2 --noinput
 ```
 
-### Concurrencia diagnóstico
+### Concurrencia
 
 ```powershell
-$env:RUN_CONCURRENCY_TESTS='diagnostic'; python.exe manage.py test apps.accounts.tests.TemporaryConcurrencyRegistrationTests -v 2 --noinput; Remove-Item Env:RUN_CONCURRENCY_TESTS -ErrorAction SilentlyContinue
-```
-
-### Concurrencia strict
-
-```powershell
-$env:RUN_CONCURRENCY_TESTS='strict'; python.exe manage.py test apps.accounts.tests.StrictConcurrencyRegistrationTests -v 2 --noinput; Remove-Item Env:RUN_CONCURRENCY_TESTS -ErrorAction SilentlyContinue
+docker compose exec web python manage.py test apps.accounts.tests.TemporaryConcurrencyRegistrationTests apps.accounts.tests.StrictConcurrencyRegistrationTests -v 2 --noinput
 ```

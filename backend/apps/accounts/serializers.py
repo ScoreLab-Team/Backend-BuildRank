@@ -1,5 +1,5 @@
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from rest_framework import serializers
 
 from apps.accounts.models import Profile, RoleChoices, TokenLoginLog
@@ -72,10 +72,15 @@ class RegisterSerializer(serializers.ModelSerializer):
 
         password = validated_data.pop("password")
 
-        user = User.objects.create_user(
-            password=password,
-            **validated_data,
-        )
+        try:
+            user = User.objects.create_user(
+                password=password,
+                **validated_data,
+            )
+        except IntegrityError:
+            raise serializers.ValidationError(
+                {"email": "Ja existeix un usuari amb aquest email."}
+            )
 
         profile, _ = Profile.objects.get_or_create(user=user)
         profile.role = role

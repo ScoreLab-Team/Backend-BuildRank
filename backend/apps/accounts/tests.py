@@ -937,10 +937,6 @@ class AuthEndpointTests(APITestCase):
         self.assertEqual(response.data["role"], RoleChoices.TENANT)
 
 
-@unittest.skipUnless(
-    ENABLE_CONCURRENCY_DIAGNOSTIC,
-    "Temporary concurrency tests are disabled by default. Set RUN_CONCURRENCY_TESTS=diagnostic (or strict/all) to run.",
-)
 class TemporaryConcurrencyRegistrationTests(TransactionTestCase):
     """Temporary opt-in concurrency tests for registration endpoint."""
 
@@ -1010,10 +1006,6 @@ class TemporaryConcurrencyRegistrationTests(TransactionTestCase):
         self.assertEqual(TokenLoginLog.objects.filter(user__email=email).count(), 0)
 
 
-@unittest.skipUnless(
-    ENABLE_CONCURRENCY_STRICT,
-    "Strict concurrency tests are disabled by default. Set RUN_CONCURRENCY_TESTS=strict (or all) to run.",
-)
 class StrictConcurrencyRegistrationTests(TransactionTestCase):
     """Strict opt-in concurrency checks for registration endpoint behavior."""
 

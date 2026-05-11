@@ -10,6 +10,11 @@ venv/
 # Django
 db.sqlite3
 *.sqlite3
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
 media/
 staticfiles/
 
@@ -24,3 +29,7 @@ staticfiles/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Datasets locals grans / open data
+cee.csv
+backend/cee.csv

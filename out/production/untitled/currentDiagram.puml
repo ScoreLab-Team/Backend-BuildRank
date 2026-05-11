@@ -1,0 +1,269 @@
+@startuml
+
+' =====================
+' ENUMS
+' =====================
+
+enum TipusEdifici
+enum TipusEdificiOpenData
+enum TipusOrientacio
+enum LletraEnergetica
+enum FontClassificacio
+enum EstatValidacio
+enum CategoriaMillora
+enum AmbitActuacio
+enum TipusAcord
+enum NivellConfianca
+
+' =====================
+' USUARI
+' =====================
+
+class Usuari
+class AdministradorFinca
+
+Usuari <|-- AdministradorFinca
+
+' =====================
+' EDIFICIS CORE
+' =====================
+
+class Edifici {
+  idEdifici : int
+  anyConstruccio : int
+  tipologia : TipusEdifici
+  superficieTotal : float
+  reglament : String
+  orientacioPrincipal : TipusOrientacio
+  puntuacioBase : float
+  classificacioEstimada : LletraEnergetica
+  classificacioFont : FontClassificacio
+  actiu : boolean
+}
+
+class Localitzacio {
+  carrer : String
+  numero : int
+  codiPostal : String
+  barri : String
+}
+
+class GrupComparable {
+  idGrup : int
+  zonaClimatica : String
+  tipologia : TipusEdifici
+  rangSuperficie : String
+}
+
+class Habitatge {
+  referenciaCadastral : String
+  planta : String
+  porta : String
+  superficie : float
+}
+
+class DadesEnergetiques {
+  qualificacioGlobal : LletraEnergetica
+  consumEnergiaPrimaria : float
+  emissionsCO2 : float
+}
+
+class DadesEnergetiquesOpenData {
+  qualificacioGlobal : LletraEnergetica
+  consumEnergiaPrimaria : float
+  emissionsCO2 : float
+}
+
+' =====================
+' AUDITORIA
+' =====================
+
+class EdificiAuditLog
+
+' =====================
+' IMPORTACIÓ OPEN DATA
+' =====================
+
+class ImportacioLog
+class ImportacioIncidencia
+
+' =====================
+' CATÀLEG I SIMULACIÓ
+' =====================
+
+class CatalegMillora {
+  idMillora : int
+  nom : String
+  categoria : CategoriaMillora
+  ambit : AmbitActuacio
+}
+
+class SimulacioMillora {
+  descripcio : String
+  costEstimat : float
+  estalviAnual : float
+}
+
+class SimulacioMilloraItem {
+  quantitat : float
+  coberturaPercent : float
+}
+
+class MilloraImplementada {
+  dataExecucio : Date
+  costReal : float
+  estatValidacio : EstatValidacio
+}
+
+
+' =====================
+' ACCOUNTS / AUTH
+' =====================
+
+class User {
+  email : String
+  first_name : String
+  last_name : String
+}
+
+class Profile {
+  role : RoleChoices
+  created_at : Date
+  updated_at : Date
+}
+
+class TokenLoginLog {
+  status : String
+  login_at : Date
+  logout_at : Date
+  ip_address : String
+}
+
+class AccessDenialLog {
+  role : String
+  accio : String
+  motiu : String
+  timestamp : Date
+}
+
+enum RoleChoices {
+  admin
+  owner
+  tenant
+}
+
+' =====================
+' SEASONS
+' =====================
+
+class Temporada {
+  id_temporada : int
+  nom : String
+  dataInici : Date
+  dataFi : Date
+  estat : EstatTemporada
+}
+
+enum EstatTemporada {
+  PENDENT
+  ACTIVA
+  TANCADA
+}
+
+' =====================
+' LEAGUES
+' =====================
+
+class Lliga {
+  nom : String
+  categoria : CategoriaRanking
+  divisio : DivisioLliga
+}
+
+enum CategoriaRanking {
+  EFICIENCIA
+  RESILIENCIA
+  PROGRES
+}
+
+enum DivisioLliga {
+  BRONZE
+  SILVER
+  GOLD
+}
+
+class Participacio {
+  puntuacio : float
+  posicio : int
+  divisio : String
+}
+
+class RankingHistorico {
+  categoria : CategoriaRanking
+  puntuacio : float
+  posicio : int
+  divisio : String
+  dataCalcul : Date
+}
+
+' =====================
+' RELACIONS
+' =====================
+
+Temporada "1" -- "*" Lliga
+
+Lliga "1" -- "*" Participacio
+Edifici "1" -- "*" Participacio
+
+Edifici "1" -- "*" RankingHistorico
+Temporada "1" -- "*" RankingHistorico
+
+' =====================
+' RELACIONS REALS (Django FK / O2O / M2M)
+' =====================
+
+' --- EDIFICI ---
+Edifici "1" -- "1" Localitzacio
+Edifici "1" -- "0..*" Habitatge
+Edifici "1" -- "0..1" GrupComparable
+Edifici "1" -- "0..1" DadesEnergetiquesOpenData
+Edifici "1" -- "*" EdificiAuditLog
+
+' --- USUARI ---
+Usuari "1" -- "0..*" Habitatge : resideix >
+AdministradorFinca "1" -- "0..*" Edifici : gestiona >
+
+' --- HABITATGE ---
+Habitatge "1" -- "0..1" DadesEnergetiques
+
+' --- SIMULACIONS ---
+Edifici "1" -- "*" SimulacioMillora
+SimulacioMillora "1" -- "*" SimulacioMilloraItem
+SimulacioMilloraItem "*" -- "1" CatalegMillora
+
+' --- IMPLEMENTACIONS ---
+Edifici "1" -- "*" MilloraImplementada
+MilloraImplementada "*" -- "1" CatalegMillora
+MilloraImplementada "0..1" -- "1" AdministradorFinca : valida >
+
+' --- IMPORTACIÓ ---
+ImportacioLog "1" -- "*" ImportacioIncidencia
+
+' =====================
+' RELACIONS AUTH
+' =====================
+
+User "1" -- "1" Profile
+User "1" -- "*" TokenLoginLog
+User "1" -- "*" AccessDenialLog
+
+Profile .. RoleChoices
+
+' =====================
+' INTEGRACIÓ AMB EDIFICIS (IMPORTANT)
+' =====================
+
+User "1" -- "0..*" Habitatge : resideix >
+User "1" -- "0..*" Edifici : administra >
+
+@enduml

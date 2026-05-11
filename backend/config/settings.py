@@ -47,9 +47,9 @@ load_dotenv(BASE_DIR / ".env")
 SECRET_KEY = 'django-insecure-fvw+7u7o-m!1$r0hy6=7q#xb*l-#f9#ink&hk4153utnf^$3w)'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").lower()
 
-DEBUG = env_bool("DEBUG", default=ENVIRONMENT != "production")
+DEBUG = env_bool("DEBUG", default=ENVIRONMENT == "development")
 ENABLE_DEBUG_TOOLBAR = os.getenv("ENABLE_DEBUG_TOOLBAR", "False").lower() == "true"
 
 ALLOWED_HOSTS = env_list(

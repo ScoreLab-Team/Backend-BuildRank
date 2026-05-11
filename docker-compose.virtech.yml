@@ -17,7 +17,7 @@ services:
     restart: unless-stopped
     env_file:
       - /opt/buildrank/env/backend.env
-    command: gunicorn --config gunicorn.staging.conf.py config.wsgi:application
+    command: sh -c "python manage.py collectstatic --noinput && gunicorn --config gunicorn.staging.conf.py config.wsgi:application"
     volumes:
       - static_volume:/app/staticfiles
     depends_on:

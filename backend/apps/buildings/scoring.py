@@ -1,5 +1,7 @@
 # apps/buildings/scoring.py
-from .models import DadesEnergetiques, LletraEnergetica, FontClassificacio
+
+
+from .models import DadesEnergetiques, LletraEnergetica, FontClassificacio, Edifici
 from .versions import BHS_VERSIONS
 
 
@@ -48,24 +50,28 @@ def _te_dades_suficients(dades: DadesEnergetiques) -> bool:
 
 def calcular_classificacio_estimada(edifici):
     """
-    Calcula la classificació energètica estimada d'un edifici a partir dels
-    seus habitatges i les seves dades energètiques.
+    Calcula la classificació energètica estimada d'un edifici.
 
     Prioritat:
-      1. Si TOTS els habitatges tenen qualificacioGlobal oficial → font='oficial',
-         s'usa la lletra més desfavorable (cas conservador).
-      2. Si hi ha dades energètiques suficients → font='estimada',
-         lletra derivada del BHS mitjà.
-      3. Si no hi ha dades suficients → font='insuficient', classificacio=None.
-
-    Retorna un dict:
-      {
-        "classificacio": "B" | None,
-        "font": "oficial" | "estimada" | "insuficient",
-        "detall": "Missatge explicatiu per mostrar a la fitxa",
-        "dades_insuficients": ["camp1", ...],  # només si font='insuficient'
-      }
+      0. Si l'edifici té DadesEnergetiquesOpenData amb qualificacioGlobal → font='oficial'.
+         Les dades CEE oficials tenen precedència absoluta.
+      1. Si TOTS els habitatges tenen qualificacioGlobal oficial → font='oficial'.
+      2. Si hi ha dades energètiques suficients → font='estimada'.
+      3. Si no hi ha dades suficients → font='insuficient'.
     """
+
+    # --- Pas 0: Dades open data (CEE oficial) ---
+    od = getattr(edifici, 'dades_energetiques_opendata', None)
+    if od is not None and od.qualificacioGlobal:
+        return {
+            "classificacio": od.qualificacioGlobal,
+            "font": FontClassificacio.OFICIAL,
+            "detall": (
+                f"Classificació obtinguda del certificat energètic oficial (open data CEE). "
+                f"Lletra: {od.qualificacioGlobal}."
+            ),
+        }
+
     habitatges = edifici.habitatges.select_related('dadesEnergetiques').all()
 
     if not habitatges.exists():
@@ -188,3 +194,29 @@ def calcular_building_health_score(dades: DadesEnergetiques, version: str = "1.0
         "version": version,
         "pesos":   pesos,
     }
+
+# ---------------------------------------------------------------------------
+# Càlcul del BHS a partir de les dades open data (DadesEnergetiquesOpenData)
+# ---------------------------------------------------------------------------
+
+def calcular_bhs_opendata(edifici, version: str = "1.0"):
+    """
+    Calcula el Building Health Score (BHS) d'un edifici usant les seves
+    dades open data (DadesEnergetiquesOpenData), si existeixen.
+
+    Utilitza exactament la mateixa fórmula que calcular_building_health_score,
+    però prenent com a font les dades CEE en comptes de les dades d'habitatge.
+
+    Retorna un dict:
+      {
+        "score":   float,        # BHS calculat (0–100)
+        "version": str,
+        "pesos":   dict,
+      }
+    O None si l'edifici no té dades open data associades.
+    """
+    od = getattr(edifici, 'dades_energetiques_opendata', None)
+    if od is None:
+        return None
+
+    return calcular_building_health_score(od, version=version)

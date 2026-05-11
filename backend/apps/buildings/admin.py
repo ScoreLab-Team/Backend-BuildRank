@@ -3,8 +3,7 @@
 from django.utils import timezone
 
 from django.contrib import admin
-from .models import Edifici, EdificiAuditLog, Habitatge, DadesEnergetiques, Localitzacio
-
+from .models import Edifici, EdificiAuditLog, Habitatge, DadesEnergetiques, Localitzacio, GrupComparable
 
 # ---------------------------------------------------------------------------
 # Edifici
@@ -14,12 +13,12 @@ from .models import Edifici, EdificiAuditLog, Habitatge, DadesEnergetiques, Loca
 class EdificiAdmin(admin.ModelAdmin):
     list_display  = [
         'idEdifici', 'tipologia', 'anyConstruccio',
-        'superficieTotal', 'puntuacioBase', 'actiu', 'dataDesactivacio',
+        'superficieTotal', 'puntuacioBase', 'actiu', 'dataDesactivacio','puntuacioBaseOpenData', 'classificacioEstimada', 'classificacioFont',
     ]
     list_filter   = ['actiu', 'tipologia', 'orientacioPrincipal']
     search_fields = ['idEdifici', 'localitzacio__carrer', 'localitzacio__codiPostal']
     # dataDesactivacio és readonly perquè la gestiona save_model automàticament
-    readonly_fields = ['puntuacioBase', 'dataDesactivacio']
+    readonly_fields = ['puntuacioBase', 'dataDesactivacio', 'puntuacioBaseOpenData', 'classificacioEstimada', 'classificacioFont']
     actions = ['desactivar_edificis', 'reactivar_edificis']
 
     def save_model(self, request, obj, form, change):
@@ -164,3 +163,26 @@ class EdificiAuditLogAdmin(admin.ModelAdmin):
 admin.site.register(Habitatge)
 admin.site.register(DadesEnergetiques)
 admin.site.register(Localitzacio)
+
+# ---------------------------------------------------------------------------
+# GrupComparable
+# ---------------------------------------------------------------------------
+
+@admin.register(GrupComparable)
+class GrupComparableAdmin(admin.ModelAdmin):
+    list_display = (
+        "idGrup",
+        "zonaClimatica",
+        "tipologia",
+        "rangSuperficie",
+    )
+
+    list_filter = (
+        "zonaClimatica",
+        "tipologia",
+    )
+
+    search_fields = (
+        "zonaClimatica",
+        "tipologia",
+    )

@@ -1082,18 +1082,18 @@ class StrictConcurrencyRegistrationTests(TransactionTestCase):
 
 class RateLimitingTestCase(APITestCase):
     """Tests para validar rate limiting en endpoints de autenticación."""
-    
+
     def setUp(self):
         # Cada test de throttle empieza con cuota limpia.
         cache.clear()
         self.client = APIClient()
-        
+
         # Crear usuario de prueba para refresh
         self.user = User.objects.create_user(
             email='throttle-test@example.com',
             password='TestPassword123!'
         )
-    
+
     def test_login_throttle_3_per_minute(self):
         """
         Verificar que /login permite 3 solicitudes por minuto,
@@ -1104,31 +1104,31 @@ class RateLimitingTestCase(APITestCase):
             'email': 'throttle-test@example.com',
             'password': 'TestPassword123!'
         }
-        
+
         # Primer intento: OK
         response1 = self.client.post(login_url, payload, format='json')
         self.assertIn(response1.status_code, [status.HTTP_200_OK, status.HTTP_401_UNAUTHORIZED])
-        
+
         # Segundo intento: OK
         response2 = self.client.post(login_url, payload, format='json')
         self.assertIn(response2.status_code, [status.HTTP_200_OK, status.HTTP_401_UNAUTHORIZED])
-        
+
         # Tercer intento: OK
         response3 = self.client.post(login_url, payload, format='json')
         self.assertIn(response3.status_code, [status.HTTP_200_OK, status.HTTP_401_UNAUTHORIZED])
-        
+
         # Cuarto intento: THROTTLED (429)
         response4 = self.client.post(login_url, payload, format='json')
         self.assertEqual(response4.status_code, status.HTTP_429_TOO_MANY_REQUESTS,
                         msg="Esperado HTTP 429 al exceder límite de 3 login/min")
-    
+
     def test_register_throttle_5_per_hour(self):
         """
         Verificar que /register permite 5 solicitudes por hora,
         y rechaza la 6ª con HTTP 429.
         """
         register_url = reverse('register')
-        
+
         for i in range(5):
             payload = {
                 'email': f'throttle-user{i}@example.com',
@@ -1141,7 +1141,7 @@ class RateLimitingTestCase(APITestCase):
             self.assertIn(response.status_code,
                          [status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST],
                          msg=f"Intento {i+1} debería ser válido")
-        
+
         # Sexto intento: THROTTLED
         payload = {
             'email': 'throttle-user99@example.com',
@@ -1153,7 +1153,7 @@ class RateLimitingTestCase(APITestCase):
         response6 = self.client.post(register_url, payload, format='json')
         self.assertEqual(response6.status_code, status.HTTP_429_TOO_MANY_REQUESTS,
                         msg="Esperado HTTP 429 al exceder límite de 5 register/hora")
-    
+
     def test_refresh_throttle_20_per_minute(self):
         """
         Verificar que /refresh permite ~20 solicitudes por minuto.
@@ -1165,13 +1165,13 @@ class RateLimitingTestCase(APITestCase):
             'email': 'throttle-test@example.com',
             'password': 'TestPassword123!'
         }
-        
+
         login_response = self.client.post(login_url, login_payload, format='json')
-        
+
         if login_response.status_code == status.HTTP_200_OK:
             refresh_token = login_response.data.get('refresh')
             refresh_url = reverse('token_refresh')
-            
+
             # Intentar 20 refreshes
             for i in range(20):
                 response = self.client.post(
@@ -1185,7 +1185,7 @@ class RateLimitingTestCase(APITestCase):
                              [status.HTTP_200_OK, status.HTTP_401_UNAUTHORIZED,
                               status.HTTP_400_BAD_REQUEST],
                              msg=f"Refresh {i+1} no debería estar throttled")
-            
+
             # Intento 21: podría estar throttled (dependiendo de timing)
             response21 = self.client.post(
                 refresh_url,
@@ -1194,7 +1194,7 @@ class RateLimitingTestCase(APITestCase):
             )
             # Simplemente verificar que responde (puede ser 429 o no según timing)
             self.assertIsNotNone(response21.status_code)
-    
+
     def test_throttle_response_format(self):
         """
         Verificar que la respuesta HTTP 429 incluye retry information.
@@ -1204,14 +1204,14 @@ class RateLimitingTestCase(APITestCase):
             'email': 'noexit@example.com',
             'password': 'WrongPassword123!'
         }
-        
+
         # Exceder límite
         for _ in range(4):  # 4 intentos rápidos
             self.client.post(login_url, payload, format='json')
-        
+
         # Cuarto intento debe retornar 429
         response = self.client.post(login_url, payload, format='json')
-        
+
         if response.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
             # Verificar que incluye información útil
             self.assertIn('detail', response.data,
@@ -1234,7 +1234,7 @@ class ThrottleByIPTestCase(APITestCase):
         Nota: En tests, todos son de 127.0.0.1 por defecto.
         """
         login_url = reverse('login')
-        
+
         # Mismo cliente = misma IP
         for i in range(4):
             response = self.client.post(
@@ -1350,3 +1350,101 @@ class SystemAdminMeEndpointTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("access", response.data)
         self.assertIn("refresh", response.data)
+
+@override_settings(REST_FRAMEWORK=NO_THROTTLE_REST_FRAMEWORK)
+class PasswordResetTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(
+            email="reset@example.com",
+            password="OldPassword123",
+        )
+
+    def test_password_reset_request_existing_email_returns_uid_and_token(self):
+        response = self.client.post(
+            reverse("password-reset"),
+            {"email": "reset@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("detail", response.data)
+        self.assertIn("uid", response.data)
+        self.assertIn("token", response.data)
+
+    def test_password_reset_request_unknown_email_does_not_enumerate_accounts(self):
+        response = self.client.post(
+            reverse("password-reset"),
+            {"email": "unknown@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("detail", response.data)
+        self.assertNotIn("uid", response.data)
+        self.assertNotIn("token", response.data)
+
+    def test_password_reset_confirm_valid_token_changes_password(self):
+        request_response = self.client.post(
+            reverse("password-reset"),
+            {"email": "reset@example.com"},
+            format="json",
+        )
+
+        response = self.client.post(
+            reverse("password-reset-confirm"),
+            {
+                "uid": request_response.data["uid"],
+                "token": request_response.data["token"],
+                "password": "NewPassword123",
+                "password_confirm": "NewPassword123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("NewPassword123"))
+
+    def test_password_reset_confirm_invalid_token_fails(self):
+        request_response = self.client.post(
+            reverse("password-reset"),
+            {"email": "reset@example.com"},
+            format="json",
+        )
+
+        response = self.client.post(
+            reverse("password-reset-confirm"),
+            {
+                "uid": request_response.data["uid"],
+                "token": "invalid-token",
+                "password": "NewPassword123",
+                "password_confirm": "NewPassword123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("token", response.data)
+
+    def test_password_reset_confirm_password_mismatch_fails(self):
+        request_response = self.client.post(
+            reverse("password-reset"),
+            {"email": "reset@example.com"},
+            format="json",
+        )
+
+        response = self.client.post(
+            reverse("password-reset-confirm"),
+            {
+                "uid": request_response.data["uid"],
+                "token": request_response.data["token"],
+                "password": "NewPassword123",
+                "password_confirm": "DifferentPassword123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password_confirm", response.data)

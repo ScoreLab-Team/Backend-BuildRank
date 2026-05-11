@@ -140,7 +140,14 @@ class Edifici(models.Model):
     reglament = models.CharField(max_length=100)
     orientacioPrincipal = models.CharField(max_length=50, choices=TipusOrientacio.choices)
     puntuacioBase = models.FloatField(editable=False, null=True)
-
+    # --- BHS calculat a partir de les dades open data CEE ---
+    puntuacioBaseOpenData = models.FloatField(
+        editable=False,
+        null=True,
+        blank=True,
+        help_text="Building Health Score calculat a partir de les dades open data (CEE). "
+                "Null si no hi ha dades open data associades."
+    )
     # --- US15: Classificació energètica estimada ---
     # Lletra A–G calculada a partir del BHS. Null si no hi ha dades suficients.
     classificacioEstimada = models.CharField(
@@ -364,6 +371,12 @@ class DadesEnergetiquesOpenData(models.Model):
     teBiomassa              = models.BooleanField(default=False)
     teGeotermia             = models.BooleanField(default=False)
 
+    metodeAgregacio = models.CharField(
+        max_length=50,
+        blank=True,
+        default='',
+        help_text="Mètode d'agregació de les dades (p.ex. 'primera_fila', 'mitjana')."
+    )
     class Meta:
         verbose_name = 'Dades energètiques open data'
 
@@ -385,6 +398,7 @@ class Habitatge(models.Model):
     )
 
     ''' # relacio 0..1 a * '''
+    # usuari vinculat i validat (viu a l'habitatge oficialment)
     usuari = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -400,6 +414,22 @@ class Habitatge(models.Model):
         related_name='dades_energetiques', 
         null=True, 
         blank=True
+    )
+
+    # US-H2 -- Sol·licitud d'unió a edifici mitjançant habitatge pendent de validació
+    estatValidacio = models.CharField(
+        max_length=25,
+        choices=EstatValidacio.choices,
+        default=EstatValidacio.EN_REVISIO
+    )
+
+    # Usuari que demana vincular-se a aquest pis
+    solicitant = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="solicituds_habitatge"
     )
 
     def __str__(self):

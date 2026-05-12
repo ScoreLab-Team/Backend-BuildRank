@@ -79,6 +79,7 @@ INSTALLED_APPS = [
     'apps.seasons',
     'apps.leagues',
     'apps.participations',
+    "apps.chat",
 ]
 
 MIDDLEWARE = [
@@ -262,3 +263,9 @@ CSRF_TRUSTED_ORIGINS = env_list(
 )
 
 CORS_ALLOW_CREDENTIALS = env_bool("CORS_ALLOW_CREDENTIALS", default=True)
+
+
+# GetStream Chat
+STREAM_API_KEY = os.getenv("STREAM_API_KEY", "")
+STREAM_API_SECRET = os.getenv("STREAM_API_SECRET", "")
+STREAM_TOKEN_EXPIRATION_SECONDS = int(os.getenv("STREAM_TOKEN_EXPIRATION_SECONDS", "3600"))

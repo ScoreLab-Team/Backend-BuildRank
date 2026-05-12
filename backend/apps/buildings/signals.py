@@ -15,6 +15,7 @@ def _recalcular_edifici(edifici):
 
     # --- BHS d'habitatges (usuaris) ---
     scores = []
+    score_data_referencia = None
     habitatges = edifici.habitatges.select_related("dadesEnergetiques").all()
 
     for habitatge in habitatges:
@@ -23,10 +24,15 @@ def _recalcular_edifici(edifici):
             continue
         score_data = calcular_building_health_score(dades)
         scores.append(score_data["score"])
+        score_data_referencia = score_data
 
     if scores:
         puntuacio = sum(scores) / len(scores)
-        edifici.bhs_history.create(score=puntuacio, version="1.0", pesos={})
+        edifici.bhs_history.create(
+            score=puntuacio,
+            version=score_data_referencia.get("version", "1.0") if score_data_referencia else "1.0",
+            pesos=score_data_referencia.get("pesos", {}) if score_data_referencia else {},
+        )
         edifici.puntuacioBase = puntuacio
         update_fields.append("puntuacioBase")
 

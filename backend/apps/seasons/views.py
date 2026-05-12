@@ -10,6 +10,7 @@ from rest_framework.exceptions import NotFound
 from apps.accounts.permissions import IsAdminSistema
 from .models import Temporada
 from .serializers import TemporadaSerializer
+from .services import actualitzar_puntuacions_base_inici_temporada
 from apps.participations.models import Participacio
 from apps.participations.serializers import RankingSerializer
 from apps.leagues.models import Lliga
@@ -32,9 +33,14 @@ class TemporadaViewSet(viewsets.ModelViewSet):
         temporada = self.get_object()
         try:
             Temporada.objects.iniciar(temporada)
+            resum_puntuacions = actualitzar_puntuacions_base_inici_temporada(temporada)
+            temporada.refresh_from_db()
         except ValueError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(TemporadaSerializer(temporada).data)
+
+        data = TemporadaSerializer(temporada).data
+        data["resum_puntuacions_base"] = resum_puntuacions
+        return Response(data)
 
     @action(detail=True, methods=['post'], url_path='tancar')
     def tancar(self, request, pk=None):

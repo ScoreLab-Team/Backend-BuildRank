@@ -941,7 +941,10 @@ class ThirdPartyServiceView(APIView):
                 continue
 
             address = reverse_geocode(lat, lng, rate_limiter)
+            print(f"[DEBUG] Nominatim address per ({lat}, {lng}): {address}")
+
             if address is None or not es_barcelona(address, lat, lng):
+                print(f"[DEBUG] No és Barcelona o address None. address={address}")
                 results.append({
                     "lat": lat,
                     "lng": lng,
@@ -951,6 +954,8 @@ class ThirdPartyServiceView(APIView):
                 continue
 
             carrer, numero = parse_carrer_numero(address)
+            print(f"[DEBUG] parse_carrer_numero → carrer='{carrer}', numero='{numero}'")
+
             if not carrer:
                 results.append({
                     "lat": lat,
@@ -961,9 +966,14 @@ class ThirdPartyServiceView(APIView):
                 continue
 
             edifici, match_type = buscar_edifici(carrer, numero)
+            print(f"[DEBUG] buscar_edifici → edifici={edifici}, match_type='{match_type}'")
+            if edifici:
+                print(f"[DEBUG] edifici.puntuacioBase={edifici.puntuacioBase}")
 
-            if edifici and edifici.puntuacioBase:
-                score = round(edifici.puntuacioBase, 2)
+            puntuacio = edifici.puntuacioBase or edifici.puntuacioBaseOpenData if edifici else None
+
+            if puntuacio:
+                score = round(puntuacio, 2)
             else:
                 score = round(random.uniform(0, 100), 2)
                 match_type = "cap"

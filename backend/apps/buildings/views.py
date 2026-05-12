@@ -1,5 +1,5 @@
 # apps/buildings/views.py
-from random import random
+import random
 
 from rest_framework.views import APIView
 from rest_framework.response import Response

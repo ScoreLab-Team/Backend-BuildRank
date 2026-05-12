@@ -14,6 +14,7 @@ from apps.accounts.serializers import (
     AccountUpdateSerializer, RoleUpdateSerializer,
     EdificiResumSerializer, HabitatgeResumSerializer,
     AssignarResidentSerializer, AssignarAdminSerializer,
+    GoogleOAuthSerializer,
 )
 
 class RegisterView(generics.CreateAPIView):
@@ -62,6 +63,33 @@ class LoginView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class GoogleOAuthView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [LoginThrottle]
+
+    def post(self, request):
+        serializer = GoogleOAuthSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.save()
+        user = data["user"]
+
+        return Response(
+            {
+                "access": data["access"],
+                "refresh": data["refresh"],
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
+                    "role": user.profile.role,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
 class TokenRefreshView(SimpleJWTTokenRefreshView):
     throttle_classes = [RefreshThrottle]

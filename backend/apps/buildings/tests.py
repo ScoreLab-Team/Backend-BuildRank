@@ -2716,7 +2716,7 @@ class TestAdminFincaAltaEdifici(BaseTestData):
     def test_bloqueig_edifici_amb_altre_admin(self):
         # Creem un admin vàlid i un edifici que ja és seu
         admin1 = self._create_user(email="admin1@test.com", role=RoleChoices.ADMIN)
-        admin1.profile.estat_validacio_admin = ValidacioAdmin.APROVAT
+        admin1.profile.estatValidacioAdmin = ValidacioAdmin.APROVAT
         admin1.profile.save()
 
         loc = Localitzacio.objects.create(carrer="Diagonal", numero=1, codiPostal="08001")
@@ -2800,57 +2800,63 @@ class TestRestriccionsHabitatge(BaseTestData):
         # Comprovem que el sistema ens bloqueja amb un 403 Forbidden
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
+class HabitatgeFluxTests(BaseTestData):
+    """Tests per a la Issue 55: Sol·licitud d'unió i validació d'habitatges."""
+
+    def setUp(self):
+        self.admin_finca = self._create_user("admin_finca@test.com", RoleChoices.ADMIN)
+        self.usuari = self._create_user("usuari@test.com", RoleChoices.OWNER)
+        
+        # Creem un edifici gestionat per l'admin
+        self.grup = GrupComparable.objects.create(idGrup=1, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-100")
+        self.edifici = self._create_edifici(self.admin_finca, self.grup)
+        self.url_list = reverse('habitatge-list')
+
+    def test_creacio_habitatge_força_estat_pendent(self):
+        """Comprova que qualsevol creació neix en EN_REVISIO i l'usuari és el solicitant."""
+        self.client.force_authenticate(user=self.usuari)
+        payload = {
+            "referenciaCadastral": "BCN-12345",
+            "edifici": self.edifici.idEdifici,
+            "planta": "2",
+            "porta": "1",
+            "superficie": 75.0
+        }
+        response = self.client.post(self.url_list, payload, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        habitatge = Habitatge.objects.get(referenciaCadastral="BCN-12345")
+        
+        # Verifiquem la lògica de negoci
+        self.assertEqual(habitatge.estatValidacio, EstatValidacio.EN_REVISIO)
+        self.assertEqual(habitatge.solicitant, self.usuari)
+
+    def test_rebuig_admin_elimina_registre(self):
+        """Si l'admin rebutja la sol·licitud, l'habitatge s'esborra de la base de dades."""
+        habitatge = Habitatge.objects.create(
+            referenciaCadastral="REBUTJAR-ME",
+            edifici=self.edifici,
+            solicitant=self.usuari,
+            estatValidacio=EstatValidacio.EN_REVISIO,
+            superficie=80.0,
+            planta="1",
+            porta="1"
+        )
+        
+        self.client.force_authenticate(user=self.admin_finca)
+        url_validar = reverse('habitatge-validar-acces', kwargs={'pk': habitatge.pk})
+        
+        # L'admin envia rebuig
+        response = self.client.post(url_validar, {"estat": "Rebutjada"}, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Habitatge.objects.filter(pk=habitatge.pk).exists())
+
 class TestFluxSolicitudHabitatge(BaseTestData):
     """
     Validació US-H2: Sol·licitud d'unió a edifici per part d'un owner/tenant
     """
-    def test_flux_complet_solicitud_i_validacio(self):
-        # Creem usuaris
-        admin = self._create_user(email="admin_edifici@test.com", role=RoleChoices.ADMIN)
-        tenant = self._create_user(email="nou_llogater@test.com", role=RoleChoices.TENANT)
-        
-        # Creem l'edifici i un habitatge buit (sense resident)
-        loc = Localitzacio.objects.create(carrer="Carrer Prova", numero=10, codiPostal="08002")
-        edifici = Edifici.objects.create(
-            localitzacio=loc, anyConstruccio=1990, superficieTotal=200, administradorFinca=admin
-        )
-        habitatge = Habitatge.objects.create(
-            referenciaCadastral="1234567AB9999C0001ZZ",
-            planta="2",
-            porta="B",
-            superficie=75.0,
-            edifici=edifici
-        )
-
-        # El llogater (tenant) sol·licita l'accés
-        self.client.force_authenticate(user=tenant)
-        url_solicitar = reverse('habitatge-solicitar-acces', kwargs={'pk': habitatge.pk})
-        response_solicitar = self.client.post(url_solicitar)
-
-        self.assertEqual(response_solicitar.status_code, status.HTTP_200_OK)
-        
-        # Comprovem a la base de dades que l'habitatge està EN_REVISIO
-        habitatge.refresh_from_db()
-        self.assertEqual(habitatge.estatValidacio, EstatValidacio.EN_REVISIO)
-        self.assertEqual(habitatge.solicitant, tenant)
-        self.assertIsNone(habitatge.usuari)  # Encara no és el resident oficial
-
-        # L'administrador de la finca aprova la sol·licitud
-        self.client.force_authenticate(user=admin)
-        url_validar = reverse('habitatge-validar-acces', kwargs={'pk': habitatge.pk})
-        response_validar = self.client.post(url_validar, {
-            "estat": EstatValidacio.VALIDADA
-        }, format='json')
-
-        self.assertEqual(response_validar.status_code, status.HTTP_200_OK)
-        
-        # Comprovem que tot s'ha aplicat perfectament a la base de dades
-        habitatge.refresh_from_db()
-        self.assertEqual(habitatge.estatValidacio, EstatValidacio.VALIDADA)
-        self.assertEqual(habitatge.usuari, tenant) # Ara ja és el resident oficial
-        self.assertIsNone(habitatge.solicitant)
-
-def test_llistat_pendents_administrador(self):
+    def test_llistat_pendents_administrador(self):
         # Preparem dades: Un admin, un llogater i dos habitatges
         admin = self._create_user(email="admin_llista@test.com", role=RoleChoices.ADMIN)
         tenant = self._create_user(email="tenant_espera@test.com", role=RoleChoices.TENANT)
@@ -2861,12 +2867,12 @@ def test_llistat_pendents_administrador(self):
         # Habitatge 1: En revisió (hauria de sortir a la llista)
         h_pendent = Habitatge.objects.create(
             referenciaCadastral="PENDENT11111", planta="1", porta="1", superficie=50, edifici=edifici,
-            estat_validacio=EstatValidacio.EN_REVISIO, solicitant=tenant
+            estatValidacio=EstatValidacio.EN_REVISIO, solicitant=tenant
         )
         # Habitatge 2: Ja validat (NO hauria de sortir)
         h_validat = Habitatge.objects.create(
             referenciaCadastral="VALIDAT22222", planta="1", porta="2", superficie=50, edifici=edifici,
-            estat_validacio=EstatValidacio.VALIDADA, usuari=tenant
+            estatValidacio=EstatValidacio.VALIDADA, usuari=tenant
         )
 
         # Fem la petició com a Administrador

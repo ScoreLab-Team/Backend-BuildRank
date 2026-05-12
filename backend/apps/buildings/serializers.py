@@ -138,6 +138,8 @@ class HabitatgeDetailSerializer(serializers.ModelSerializer):
         model = Habitatge
         unique_together = ('edifici', 'planta', 'porta')
         fields = '__all__'
+        # bloquegem aquests camps perquè l'usuari no els pugui manipular durant el POST
+        read_only_fields = ['estatValidacio', 'solicitant']
 
 
 # Edifici 1. Llistat lleuger

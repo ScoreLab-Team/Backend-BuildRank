@@ -272,7 +272,7 @@ def _cost_millora(
 
 def _aplicar_millora(
     *,
-    edifici: Edifici,
+    edifici: Edifici,   
     estat: Dict[str, float],
     millora: CatalegMillora,
     quantitat: float | None,

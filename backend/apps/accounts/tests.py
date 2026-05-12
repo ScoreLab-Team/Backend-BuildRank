@@ -1448,3 +1448,99 @@ class PasswordResetTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("password_confirm", response.data)
+
+@override_settings(
+    GOOGLE_OAUTH_CLIENT_ID="test-google-client-id.apps.googleusercontent.com",
+    REST_FRAMEWORK=NO_THROTTLE_REST_FRAMEWORK,
+)
+class GoogleOAuthTests(APITestCase):
+    def setUp(self):
+        self.url = reverse("google-oauth")
+        cache.clear()
+
+    @patch("apps.accounts.serializers.google_id_token.verify_oauth2_token")
+    def test_google_oauth_creates_user_and_returns_jwt_tokens(self, mock_verify):
+        mock_verify.return_value = {
+            "email": "marti@example.com",
+            "email_verified": True,
+            "given_name": "Martí",
+            "family_name": "Borràs",
+        }
+
+        response = self.client.post(
+            self.url,
+            {"id_token": "valid-google-id-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.assertEqual(response.data["user"]["email"], "marti@example.com")
+        self.assertEqual(response.data["user"]["first_name"], "Martí")
+        self.assertEqual(response.data["user"]["last_name"], "Borràs")
+        self.assertEqual(response.data["user"]["role"], RoleChoices.OWNER)
+
+        user = User.objects.get(email="marti@example.com")
+        self.assertEqual(user.first_name, "Martí")
+        self.assertEqual(user.last_name, "Borràs")
+        self.assertEqual(user.profile.role, RoleChoices.OWNER)
+        self.assertEqual(TokenLoginLog.objects.filter(user=user).count(), 1)
+
+    @patch("apps.accounts.serializers.google_id_token.verify_oauth2_token")
+    def test_google_oauth_existing_user_is_not_duplicated(self, mock_verify):
+        existing_user = User.objects.create_user(
+            email="existing@example.com",
+            password="Password123",
+            first_name="Existing",
+            last_name="User",
+        )
+
+        mock_verify.return_value = {
+            "email": "existing@example.com",
+            "email_verified": True,
+            "given_name": "GoogleName",
+            "family_name": "GoogleSurname",
+        }
+
+        response = self.client.post(
+            self.url,
+            {"id_token": "valid-google-id-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(User.objects.filter(email="existing@example.com").count(), 1)
+
+        existing_user.refresh_from_db()
+        self.assertEqual(existing_user.first_name, "Existing")
+        self.assertEqual(existing_user.last_name, "User")
+
+    @patch("apps.accounts.serializers.google_id_token.verify_oauth2_token")
+    def test_google_oauth_rejects_unverified_email(self, mock_verify):
+        mock_verify.return_value = {
+            "email": "notverified@example.com",
+            "email_verified": False,
+            "given_name": "No",
+            "family_name": "Verified",
+        }
+
+        response = self.client.post(
+            self.url,
+            {"id_token": "valid-google-id-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(User.objects.filter(email="notverified@example.com").exists())
+
+    @override_settings(GOOGLE_OAUTH_CLIENT_ID="")
+    def test_google_oauth_requires_client_id_configuration(self):
+        response = self.client.post(
+            self.url,
+            {"id_token": "any-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("detail", response.data)

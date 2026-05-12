@@ -361,6 +361,11 @@ class RankingSerializer(serializers.ModelSerializer):
         fields = ['idEdifici','puntuacioBase'] #Afegir posició
 
 class CatalegMilloraSerializer(serializers.ModelSerializer):
+    costOrientatiuUnitari = serializers.FloatField(
+        source="cost_orientatiu_unitari",
+        read_only=True,
+    )
+
     class Meta:
         model = CatalegMillora
         fields = [
@@ -372,6 +377,7 @@ class CatalegMilloraSerializer(serializers.ModelSerializer):
             'activa',
             'unitatBase',
             'costEstimatBase',
+            'costOrientatiuUnitari',
             'mantenimentAnual',
             'vidaUtil',
             'estalviEnergeticEstimat',
@@ -400,9 +406,15 @@ class SimulacioMilloraPreviewSerializer(serializers.Serializer):
 
     def validate_millores(self, value):
         if not value:
-            raise serializers.ValidationError("Cal seleccionar com a mínim una millora.")
+            raise serializers.ValidationError("Cal seleccionar com a m?nim una millora.")
 
         ids = [item["milloraId"] for item in value]
+
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError(
+                "No es pot seleccionar la mateixa millora m?s d'una vegada en una simulaci?."
+            )
+
         existing_ids = set(
             CatalegMillora.objects
             .filter(idMillora__in=ids, activa=True)
@@ -412,7 +424,7 @@ class SimulacioMilloraPreviewSerializer(serializers.Serializer):
         missing = sorted(set(ids) - existing_ids)
         if missing:
             raise serializers.ValidationError(
-                f"Les millores següents no existeixen o no estan actives: {missing}"
+                f"Les millores seg?ents no existeixen o no estan actives: {missing}"
             )
 
         return value

@@ -1,4 +1,6 @@
 # apps/buildings/views.py
+import random
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, viewsets
@@ -19,7 +21,7 @@ from .models import (
 )
 from .serializers import (
     EdificiDetailSerializer, EdificiListSerializer,
-    HabitatgeDetailSerializer, HabitatgeResumSerializer,
+    HabitatgeDetailSerializer, HabitatgeMeUpdateSerializer, HabitatgeResumSerializer,
     LocalitzacioSerializer, DadesEnergetiquesSerializer,
     RankingSerializer,
     CatalegMilloraSerializer,
@@ -364,7 +366,33 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return Response({"detail": "No hi ha dades energètiques disponibles."}, status=404)
 
         return Response(dades)
+    @action(
+        detail=True,
+        methods=['patch'],
+        url_path='me/habitatge/(?P<referenciaCadastral>[A-Za-z0-9]+)',
+        permission_classes=[IsAuthenticated],
+    )
+    def me_habitatge(self, request, pk=None, referenciaCadastral=None):
+        edifici = get_object_or_404(Edifici, pk=pk)
 
+        habitatge = get_object_or_404(
+            Habitatge.objects.select_related('dadesEnergetiques', 'edifici'),
+            edifici=edifici,
+            usuari=request.user,
+            referenciaCadastral=referenciaCadastral,
+        )
+
+        serializer = HabitatgeMeUpdateSerializer(
+            habitatge,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        output = HabitatgeDetailSerializer(habitatge, context={'request': request})
+        return Response(output.data, status=status.HTTP_200_OK)
+    
     def _preparar_items_simulacio(self, millores_validated):
         """
         Converteix l'entrada validada del serializer en objectes reals del catàleg.
@@ -877,62 +905,74 @@ class RankingViewSet(viewsets.ReadOnlyModelViewSet):
 class ThirdPartyServiceView(APIView):
     """
     POST /api/third-party/score/
- 
+
     Body:
         { "points": [{"lat": 41.38, "lng": 2.17}, ...] }
- 
+
     Resposta per punt:
-        { "lat": 41.38, "lng": 2.17, "score": 73.4 }
-        { "lat": 41.38, "lng": 2.17, "score": null }   # edifici sense puntuació
-        { "lat": 41.38, "lng": 2.17, "error": "..." }  # fora de BCN, error geocodificació, etc.
+        { "lat": 41.38, "lng": 2.17, "score": 73.4, "match_type": "exacta" }
+        { "lat": 41.38, "lng": 2.17, "score": 42.0, "match_type": "cap" }   # Score random si no trobat
     """
- 
+
     permission_classes = [HasAPIKey]
- 
+
     def post(self, request):
         points = request.data.get("points", [])
- 
+
         if not isinstance(points, list):
             return Response(
                 {"error": "'points' ha de ser una llista."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
- 
+
         rate_limiter = NominatimRateLimiter()
         results = []
- 
+
         for point in points:
             lat = point.get("lat")
             lng = point.get("lng")
- 
+
             if lat is None or lng is None:
-                results.append({"lat": lat, "lng": lng, "error": "Coordenades incompletes."})
+                results.append({
+                    "score": round(random.uniform(0, 100), 2),
+                    "match_type": "cap",
+                })
                 continue
- 
+
             address = reverse_geocode(lat, lng, rate_limiter)
-            if address is None:
-                results.append({"lat": lat, "lng": lng, "error": "Error de geocodificació."})
+            if address is None or not es_barcelona(address, lat, lng):
+                results.append({
+                    "lat": lat,
+                    "lng": lng,
+                    "score": round(random.uniform(0, 100), 2),
+                    "match_type": "cap",
+                })
                 continue
- 
-            if not es_barcelona(address, lat, lng):
-                results.append({"lat": lat, "lng": lng, "error": "Coordenades fora de Barcelona."})
-                continue
- 
+
             carrer, numero = parse_carrer_numero(address)
             if not carrer:
-                results.append({"lat": lat, "lng": lng, "error": "No s'ha pogut determinar el carrer."})
+                results.append({
+                    "lat": lat,
+                    "lng": lng,
+                    "score": round(random.uniform(0, 100), 2),
+                    "match_type": "cap",
+                })
                 continue
- 
-            edifici, _ = buscar_edifici(carrer, numero)
- 
-            results.append({
-                "lat": lat,
-                "lng": lng,
-                "score": round(edifici.puntuacioBase, 2) if edifici and edifici.puntuacioBase else None,
-            })
- 
-        return Response({"results": results})
 
+            edifici, match_type = buscar_edifici(carrer, numero)
+
+            if edifici and edifici.puntuacioBase:
+                score = round(edifici.puntuacioBase, 2)
+            else:
+                score = round(random.uniform(0, 100), 2)
+                match_type = "cap"
+
+            results.append({
+                "score": score,
+                "match_type": match_type,
+            })
+
+        return Response({"results": results})
 
 # US-AF1: Alta i assignació d'edificis per a Administradors de Finca
 class AdminFincaEdificiAltaView(APIView):

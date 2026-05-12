@@ -18,6 +18,7 @@ from datetime import date
 
 from apps.accounts.models import RoleChoices
 from .scoring import calcular_classificacio_estimada
+from django.db import transaction
 
 class LocalitzacioSerializer(serializers.ModelSerializer):
     class Meta:
@@ -141,7 +142,78 @@ class HabitatgeDetailSerializer(serializers.ModelSerializer):
         # bloquegem aquests camps perquè l'usuari no els pugui manipular durant el POST
         read_only_fields = ['estatValidacio', 'solicitant']
 
+class DadesEnergetiquesUpdateSerializer(serializers.ModelSerializer):
+    """Per crear o actualitzar DadesEnergetiques des de l'endpoint de l'habitatge."""
+    class Meta:
+        model = DadesEnergetiques
+        fields = "__all__"
+        # id és read_only per evitar que el frontend intenti forçar un id
+        read_only_fields = ['id']
 
+
+class HabitatgeMeUpdateSerializer(serializers.ModelSerializer):
+    """PATCH /edificis/<id>/me/habitatge/ — camps editables per l'owner/tenant."""
+    dadesEnergetiques = DadesEnergetiquesUpdateSerializer(required=False)
+
+    class Meta:
+        model = Habitatge
+        fields = ['planta', 'porta', 'superficie', 'anyReforma', 'dadesEnergetiques']
+
+    def validate_superficie(self, value):
+        if value <= 0:
+            raise serializers.ValidationError(
+                "La superfície de l'habitatge ha de ser més gran que 0."
+            )
+        return value
+
+    def validate_anyReforma(self, value):
+        if value is not None:
+            any_actual = date.today().year
+            if value > any_actual:
+                raise serializers.ValidationError(
+                    f"L'any de reforma no pot ser del futur (màxim {any_actual})."
+                )
+        return value
+
+    def validate(self, data):
+        any_reforma = data.get('anyReforma')
+        # self.instance és l'habitatge existent (estem sempre en update)
+        if any_reforma is not None and self.instance:
+            any_construccio = self.instance.edifici.anyConstruccio
+            if any_reforma < any_construccio:
+                raise serializers.ValidationError({
+                    "anyReforma": (
+                        f"L'any de reforma ({any_reforma}) no pot ser anterior "
+                        f"a l'any de construcció de l'edifici ({any_construccio})."
+                    )
+                })
+        return data
+
+    def update(self, instance, validated_data):
+        dades_data = validated_data.pop('dadesEnergetiques', None)
+
+        # Actualitzar camps bàsics de l'habitatge
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        # Gestionar dadesEnergetiques només si venen al payload
+        if dades_data is not None:
+            with transaction.atomic():
+                if instance.dadesEnergetiques:
+                    # Actualitzar les existents
+                    de = instance.dadesEnergetiques
+                    for attr, value in dades_data.items():
+                        setattr(de, attr, value)
+                    de.save()
+                else:
+                    # Crear i vincular
+                    de = DadesEnergetiques.objects.create(**dades_data)
+                    instance.dadesEnergetiques = de
+                    instance.save(update_fields=["dadesEnergetiques"])
+
+        return instance
+    
 # Edifici 1. Llistat lleuger
 class EdificiListSerializer(serializers.ModelSerializer):
     class Meta:
@@ -291,6 +363,11 @@ class RankingSerializer(serializers.ModelSerializer):
         fields = ['idEdifici','puntuacioBase'] #Afegir posició
 
 class CatalegMilloraSerializer(serializers.ModelSerializer):
+    costOrientatiuUnitari = serializers.FloatField(
+        source="cost_orientatiu_unitari",
+        read_only=True,
+    )
+
     class Meta:
         model = CatalegMillora
         fields = [
@@ -302,6 +379,7 @@ class CatalegMilloraSerializer(serializers.ModelSerializer):
             'activa',
             'unitatBase',
             'costEstimatBase',
+            'costOrientatiuUnitari',
             'mantenimentAnual',
             'vidaUtil',
             'estalviEnergeticEstimat',
@@ -330,9 +408,15 @@ class SimulacioMilloraPreviewSerializer(serializers.Serializer):
 
     def validate_millores(self, value):
         if not value:
-            raise serializers.ValidationError("Cal seleccionar com a mínim una millora.")
+            raise serializers.ValidationError("Cal seleccionar com a m?nim una millora.")
 
         ids = [item["milloraId"] for item in value]
+
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError(
+                "No es pot seleccionar la mateixa millora m?s d'una vegada en una simulaci?."
+            )
+
         existing_ids = set(
             CatalegMillora.objects
             .filter(idMillora__in=ids, activa=True)
@@ -342,7 +426,7 @@ class SimulacioMilloraPreviewSerializer(serializers.Serializer):
         missing = sorted(set(ids) - existing_ids)
         if missing:
             raise serializers.ValidationError(
-                f"Les millores següents no existeixen o no estan actives: {missing}"
+                f"Les millores seg?ents no existeixen o no estan actives: {missing}"
             )
 
         return value

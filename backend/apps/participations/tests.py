@@ -145,3 +145,57 @@ class ParticipationAPITest(APITestCase):
 
         self.participation.refresh_from_db()
         self.assertEqual(self.participation.puntuacio, 50)
+
+
+
+    def test_current_participation_success(self):
+
+        url = "/api/participations/current/?edifici={}".format(
+            self.building.idEdifici
+        )
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["edifici"], self.building.idEdifici)
+        self.assertEqual(response.data["lliga"], self.league.id)
+        self.assertEqual(response.data["puntuacio"], 10)
+        self.assertEqual(response.data["divisio"], "Bronze")
+
+    def test_current_participation_building_not_found(self):
+
+        url = "/api/participations/current/?edifici=99999"
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_current_participation_not_found(self):
+
+        empty_building = Edifici.objects.create(
+            anyConstruccio=2010,
+            tipologia="Residencial",
+            superficieTotal=100,
+            nombrePlantes=1,
+            reglament="test2",
+            orientacioPrincipal="Sud",
+            grupComparable=self.group
+        )
+
+        url = "/api/participations/current/?edifici={}".format(
+            empty_building.idEdifici
+        )
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.data["error"], "Participacio not found")
+
+    def test_current_participation_missing_edifici(self):
+
+        url = "/api/participations/current/"
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["error"], "edifici is required")

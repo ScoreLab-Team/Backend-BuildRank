@@ -31,7 +31,8 @@ urlpatterns = [
     path('api/seasons/', include('apps.seasons.urls')),
     path('api/leagues/', include('apps.leagues.urls')),
     path('api/participations/', include('apps.participations.urls')),
-    path('api/third-party-service/', ThirdPartyServiceView.as_view())
+    path('api/third-party-service/', ThirdPartyServiceView.as_view(), name='third-party-service'),
+    path("api/chat/", include("apps.chat.urls")),
 ]
 
 if settings.DEBUG and "debug_toolbar" in settings.INSTALLED_APPS:

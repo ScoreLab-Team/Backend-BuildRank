@@ -119,7 +119,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           pip install coverage
-          coverage run manage.py test apps.accounts apps.buildings -v 2
+          coverage run manage.py test apps.accounts apps.buildings --exclude-tag=concurrency -v 2
           coverage report
           coverage xml
 

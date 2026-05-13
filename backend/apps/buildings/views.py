@@ -3,11 +3,12 @@ from random import random
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, viewsets
+from rest_framework import serializers, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, action, permission_classes
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.db import IntegrityError
 from django.db.models import Q
 from rest_framework.exceptions import PermissionDenied
 
@@ -584,8 +585,15 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         if self.request.user.profile.role == RoleChoices.ADMIN:
             raise PermissionDenied("Els administradors de finca no poden crear habitatges.")
-        serializer.save()
-    
+        try:
+            serializer.save()
+        except IntegrityError:
+            # Race condition: dos requests pasaron el UniqueValidator de la PK
+            # simultáneamente; solo una ganó el INSERT. Constraint PRIMARY KEY → 400, no 500.
+            raise serializers.ValidationError(
+                {"referenciaCadastral": "Ja existeix un habitatge amb aquesta referència cadastral."}
+            )
+
     @action(detail=True, methods=['post'], url_path='solicitar-acces')
     def solicitar_acces(self, request, pk=None):
         # Sol·licitud de vincular-se a aquest habitatge

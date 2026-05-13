@@ -1,5 +1,5 @@
 # apps/buildings/views.py
-from random import random
+import random
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -588,8 +588,6 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         try:
             serializer.save()
         except IntegrityError:
-            # Race condition: dos requests pasaron el UniqueValidator de la PK
-            # simultáneamente; solo una ganó el INSERT. Constraint PRIMARY KEY → 400, no 500.
             raise serializers.ValidationError(
                 {"referenciaCadastral": "Ja existeix un habitatge amb aquesta referència cadastral."}
             )
@@ -624,14 +622,14 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         # Només l'admin d'aquest edifici pot validar-ho
         if habitatge.edifici.administradorFinca != request.user:
             return Response(
-                {"detail": "No tens permisos per validar accessos en aquest edifici."},
+                {"error": "No tens permisos per validar accessos en aquest edifici."},
                 status=status.HTTP_403_FORBIDDEN
             )
         
         # Comprovem que realment hi hagi algú pendent
         if habitatge.estatValidacio != EstatValidacio.EN_REVISIO or not habitatge.solicitant:
             return Response(
-                {"detail": "Aquest habitatge no té cap sol·licitud pendent de revisió."},
+                {"error": "Aquest habitatge no té cap sol·licitud pendent de revisió."},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -644,25 +642,20 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
             habitatge.save(update_fields=['usuari', 'estatValidacio', 'solicitant'])
 
             return Response(
-                {"detail": "Sol·licitud aprovada. Resident assignat."},
+                {"message": "Sol·licitud aprovada. Resident assignat."},
                 status=status.HTTP_200_OK
             )
         
         elif nouEstat == EstatValidacio.REBUTJADA:
-            habitatge.estatValidacio = EstatValidacio.REBUTJADA
-            habitatge.solicitant = None
-            habitatge.save(update_fields=['estatValidacio', 'solicitant'])
+            # habitatge.estatValidacio = EstatValidacio.REBUTJADA
+            # habitatge.solicitant = None
+            # habitatge.save(update_fields=['estatValidacio', 'solicitant'])
 
-            return Response(
-                {"detail": "Sol·licitud rebutjada."},
-                status=status.HTTP_200_OK
-            )
+            # decidim eliminar l'habitatge, si la sol·licitud queda rebutjada per l'admin de finca
+            habitatge.delete()
+            return Response({"message": "Sol·licitud rebutjada i habitatge eliminat."}, status=status.HTTP_204_NO_CONTENT)
         
-        else:
-            return Response(
-                {"detail": "Cal enviar un estat vàlid ('Validada' o 'Rebutjada)"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        return Response({"error": "Estat no vàlid."}, status=status.HTTP_400_BAD_REQUEST)
         
     @action(detail=False, methods=['get'])
     def pendents(self, request):

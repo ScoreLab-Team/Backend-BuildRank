@@ -194,7 +194,7 @@ Ficheros de referencia:
 
 Todos los tests usan `TransactionTestCase` + `threading.Barrier` para forzar solapamiento real de requests simultáneas. Validan que los endpoints responden con códigos controlados (`201`/`200`/`400`) y nunca con `500`.
 
-Todos los casos están parametrizados con `subTest()` para cubrir diferentes volúmenes de carga sin duplicar código. Todas las clases llevan `@tag('concurrency')` y quedan **excluidas del CI normal** (`--exclude-tag=concurrency`); se ejecutan explícitamente cuando se requiere.
+Todas las clases llevan `@tag('concurrency')` — útil para ejecutarlos en aislamiento localmente. Se incluyen en el CI normal junto con el resto del suite. El número de workers es fijo por test (sin subTest de carga), excepto en el test de sesiones donde la variación de `pre_sessions` representa estados funcionales distintos.
 
 ### Fix de producción incluido
 
@@ -203,59 +203,53 @@ Todos los casos están parametrizados con `subTest()` para cubrir diferentes vol
 ### `accounts/tests_concurrency.py`
 
 - **`StrictConcurrencyRegistrationTests`**
-  Registro simultáneo con el mismo email. Garantiza exactamente 1 × `201` + (N-1) × `400`, nunca `500`.
-  Parametrizado: `workers ∈ [4, 8, 16]`.
+  6 workers intentan registrar el mismo email simultáneamente. Garantiza exactamente 1 × `201` + 5 × `400`, nunca `500`.
 
 - **`StrictConcurrencyLoginSessionLimitTests`**
-  Logins simultáneos del mismo usuario. Verifica que el límite de sesiones activas (`max_sessions=5`) no se supera bajo concurrencia.
-  Parametrizado por `(sesiones_previas, workers)`: `(0,6)`, `(3,6)`, `(4,8)`, `(5,8)`.
+  6 logins simultáneos del mismo usuario. Verifica que el límite de sesiones activas (`max_sessions=5`) no se supera. Parametrizado por `pre_sessions ∈ [0, 4, 5]` para cubrir los estados de frontera: arranque en blanco, un paso antes del límite y ya al límite.
 
 - **`StrictConcurrencyAccountEmailUpdateTests`**
-  N usuarios cambian su email al mismo valor objetivo simultáneamente. Garantiza exactamente 1 × `200` + (N-1) × `400`, nunca `500`.
-  Parametrizado: `workers ∈ [4, 6]`.
+  4 usuarios cambian su email al mismo valor objetivo simultáneamente. Garantiza exactamente 1 × `200` + 3 × `400`, nunca `500`.
 
 ### `buildings/tests_concurrency.py`
 
 - **`StrictConcurrencyHabitatgeCreateTests`**
-  Creación simultánea de un `Habitatge` con la misma `referenciaCadastral` (PK). El `UniqueValidator` de DRF introduce un TOCTOU SELECT→INSERT; el handler de `IntegrityError` en `perform_create` garantiza `400` en lugar de `500`.
-  Parametrizado: `workers ∈ [4, 8, 16]`.
+  6 requests crean un `Habitatge` con la misma `referenciaCadastral` (PK) simultáneamente. El `UniqueValidator` de DRF introduce un TOCTOU SELECT→INSERT; el handler de `IntegrityError` en `perform_create` garantiza `400` en lugar de `500`.
 
 - **`StrictConcurrencySolicitarAccesTests`**
-  N usuarios solicitan acceso al mismo habitatge simultáneamente. La view comprueba `if habitatge.usuari:` y luego guarda `solicitant` (last-writer-wins). Verifica que ninguno recibe `500` y que exactamente un `solicitant` queda registrado en BD.
-  Parametrizado: `concurrent_users ∈ [2, 4, 6]`.
+  4 usuarios solicitan acceso al mismo habitatge simultáneamente. La view comprueba `if habitatge.usuari:` y luego guarda `solicitant` (last-writer-wins). Verifica que ninguno recibe `500` y que exactamente un `solicitant` queda registrado en BD.
 
 - **`StrictConcurrencyResidentAssignmentTests`**
-  Un admin asigna N residentes distintos al mismo habitatge simultáneamente. Sin constraints UNIQUE implicadas: se verifica que todas las respuestas son `200` y que exactamente un residente queda asignado (last-writer-wins).
-  Parametrizado: `workers ∈ [2, 4]`.
+  Un admin asigna 4 residentes distintos al mismo habitatge simultáneamente. Sin constraints UNIQUE implicadas: se verifica que todas las respuestas son `200` y que exactamente un residente queda asignado (last-writer-wins).
 
 ---
 
 ## Comandos útiles
 
-### Suite rápida (excluye concurrencia) — usar en desarrollo y CI
+### Suite completa — desarrollo y CI
 
 ```powershell
 # Solo accounts
-python manage.py test apps.accounts.tests --exclude-tag=concurrency -v 2 --noinput
+python manage.py test apps.accounts -v 2 --noinput
 
 # Solo buildings
-python manage.py test apps.buildings.tests --exclude-tag=concurrency -v 2 --noinput
+python manage.py test apps.buildings -v 2 --noinput
 
-# Suite completa sin concurrencia
-python manage.py test apps.accounts apps.buildings --exclude-tag=concurrency -v 2 --noinput
+# Suite completa
+python manage.py test apps.accounts apps.buildings -v 2 --noinput
 ```
 
-### Suite de concurrencia — ejecutar explícitamente
+### Solo tests de concurrencia (filtro local)
 
 ```powershell
-# Requiere BD real (PostgreSQL). En local, levantar docker compose primero.
+# Útil para depurar o ejecutar únicamente los tests de concurrencia
 docker compose exec web python manage.py test apps.accounts apps.buildings --tag=concurrency -v 2 --noinput
 ```
 
 ### Con cobertura (formato CI)
 
 ```powershell
-coverage run manage.py test apps.accounts apps.buildings --exclude-tag=concurrency -v 2
+coverage run manage.py test apps.accounts apps.buildings -v 2
 coverage report
 coverage xml
 ```

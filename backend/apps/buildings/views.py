@@ -586,7 +586,7 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         if self.request.user.profile.role == RoleChoices.ADMIN:
             raise PermissionDenied("Els administradors de finca no poden crear habitatges.")
         try:
-            serializer.save()
+            serializer.save(solicitant=self.request.user)
         except IntegrityError:
             raise serializers.ValidationError(
                 {"referenciaCadastral": "Ja existeix un habitatge amb aquesta referència cadastral."}

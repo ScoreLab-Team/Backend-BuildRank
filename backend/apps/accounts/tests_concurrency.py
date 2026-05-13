@@ -7,7 +7,7 @@ i han de quedar resoltes amb respostes controlades (201/200/400), mai amb 500.
 Convencions:
 - TransactionTestCase: els workers de cada fil veuen els commits reals a BD.
 - threading.Barrier: sincronitza l'inici exacte de totes les requests.
-- subTest(): parametritza casos (workers, sessions prèvies) sense repetir codi.
+- subTest(): s'usa NOMÉS on hi ha variació funcional real (pre_sessions).
 - @tag('concurrency'): exclou d'un CI ràpid amb --exclude-tag=concurrency.
 """
 
@@ -38,59 +38,55 @@ User = get_user_model()
 @tag('concurrency')
 class StrictConcurrencyRegistrationTests(TransactionTestCase):
     """
-    El endpoint de registre mai ha de retornar 500 sota concurrència.
-    Parametritzat per nombre de workers: [4, 8, 16].
+    6 workers intenten registrar el mateix email simultàniament.
+    Exactament 1 × 201, 5 × 400, mai 500.
     """
 
     def setUp(self):
         cache.clear()
 
     def test_parallel_register_same_email_never_returns_500(self):
+        workers = 6
+        email = "strict-reg-concurrent@example.com"
         password = "Gihistzzz_2026"
+        url = reverse("register")
+        payload = {
+            "email": email,
+            "first_name": "Strict",
+            "last_name": "Concurrency",
+            "password": password,
+            "password_confirm": password,
+        }
 
-        for workers in [4, 8, 16]:
-            with self.subTest(workers=workers):
-                # Email únic per iteració → no cal neteja entre subtests
-                email = f"strict-reg-{workers}w@example.com"
-                url = reverse("register")
-                payload = {
-                    "email": email,
-                    "first_name": "Strict",
-                    "last_name": "Concurrency",
-                    "password": password,
-                    "password_confirm": password,
-                }
+        statuses, errors = [], []
 
-                statuses, errors = [], []
+        def worker(barrier, lock, _):
+            client = APIClient()
+            client.raise_request_exception = False
+            try:
+                barrier.wait(timeout=5)
+                r = client.post(url, payload, format="json")
+                with lock:
+                    statuses.append(r.status_code)
+            except Exception as exc:
+                with lock:
+                    errors.append(str(exc))
+            finally:
+                connections.close_all()
 
-                def worker(barrier, lock, _):
-                    client = APIClient()
-                    client.raise_request_exception = False
-                    try:
-                        barrier.wait(timeout=5)
-                        r = client.post(url, payload, format="json")
-                        with lock:
-                            statuses.append(r.status_code)
-                    except Exception as exc:
-                        with lock:
-                            errors.append(str(exc))
-                    finally:
-                        connections.close_all()
+        with patch.object(RegisterView, 'throttle_classes', []):
+            threads = _run_workers(worker, workers)
 
-                with patch.object(RegisterView, 'throttle_classes', []):
-                    threads = _run_workers(worker, workers)
+        self.assertFalse(any(t.is_alive() for t in threads), "Threads did not finish")
+        self.assertEqual(errors, [], "Unexpected errors")
+        self.assertEqual(len(statuses), workers)
 
-                self.assertFalse(any(t.is_alive() for t in threads),
-                                 f"[workers={workers}] Threads did not finish")
-                self.assertEqual(errors, [], f"[workers={workers}] Unexpected errors")
-                self.assertEqual(len(statuses), workers)
-
-                self.assertEqual(statuses.count(status.HTTP_201_CREATED), 1,
-                                 f"[workers={workers}] Expected exactly 1 registration, got: {statuses}")
-                self.assertEqual(statuses.count(status.HTTP_500_INTERNAL_SERVER_ERROR), 0,
-                                 f"[workers={workers}] 500 detected: {statuses}")
-                self.assertEqual(User.objects.filter(email=email).count(), 1)
-                self.assertEqual(Profile.objects.filter(user__email=email).count(), 1)
+        self.assertEqual(statuses.count(status.HTTP_201_CREATED), 1,
+                         f"Expected exactly 1 registration, got: {statuses}")
+        self.assertEqual(statuses.count(status.HTTP_500_INTERNAL_SERVER_ERROR), 0,
+                         f"500 detected: {statuses}")
+        self.assertEqual(User.objects.filter(email=email).count(), 1)
+        self.assertEqual(Profile.objects.filter(user__email=email).count(), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -100,22 +96,17 @@ class StrictConcurrencyRegistrationTests(TransactionTestCase):
 @tag('concurrency')
 class StrictConcurrencyLoginSessionLimitTests(TransactionTestCase):
     """
-    Logins simultanis del mateix usuari mai han de superar max_sessions=5.
+    6 logins simultanis del mateix usuari mai han de superar max_sessions=5.
 
-    Parametritzat per (pre_sessions, workers):
-    - (0, 6)  → arrencada en net, càrrega mitjana
-    - (3, 6)  → a meitat del límit, càrrega mitjana
-    - (4, 8)  → un pas abans del límit, càrrega alta
-    - (5, 8)  → ja al límit, tots han de revocar una sessió prèvia
+    Parametritzat per pre_sessions per cobrir els estats de frontera:
+    - 0: arrencada en net (tots creen, cap revoca)
+    - 4: un pas abans del límit (alguns han de revocar)
+    - 5: ja al límit (tots han de revocar una sessió prèvia)
     """
 
     MAX_SESSIONS = 5
-    CASES = [
-        (0, 6),
-        (3, 6),
-        (4, 8),
-        (5, 8),
-    ]
+    WORKERS = 6
+    CASES = [0, 4, 5]
 
     def setUp(self):
         cache.clear()
@@ -130,9 +121,8 @@ class StrictConcurrencyLoginSessionLimitTests(TransactionTestCase):
         url = reverse("login")
         payload = {"email": "concurrent-login@example.com", "password": "Gihistzzz_2026"}
 
-        for pre_sessions, workers in self.CASES:
-            with self.subTest(pre_sessions=pre_sessions, workers=workers):
-                # Reinicia els logs entre subtests
+        for pre_sessions in self.CASES:
+            with self.subTest(pre_sessions=pre_sessions):
                 TokenLoginLog.objects.filter(user=self.user).delete()
                 for _ in range(pre_sessions):
                     TokenLoginLog.objects.create(
@@ -159,18 +149,18 @@ class StrictConcurrencyLoginSessionLimitTests(TransactionTestCase):
                         connections.close_all()
 
                 with patch.object(LoginView, 'throttle_classes', []):
-                    threads = _run_workers(worker, workers)
+                    threads = _run_workers(worker, self.WORKERS)
 
                 self.assertFalse(any(t.is_alive() for t in threads),
-                                 f"[pre={pre_sessions}, w={workers}] Threads did not finish")
+                                 f"[pre={pre_sessions}] Threads did not finish")
                 self.assertEqual(errors, [],
-                                 f"[pre={pre_sessions}, w={workers}] Unexpected errors")
-                self.assertEqual(len(statuses), workers)
+                                 f"[pre={pre_sessions}] Unexpected errors")
+                self.assertEqual(len(statuses), self.WORKERS)
 
                 self.assertEqual(statuses.count(status.HTTP_500_INTERNAL_SERVER_ERROR), 0,
-                                 f"[pre={pre_sessions}, w={workers}] 500 detected: {statuses}")
+                                 f"[pre={pre_sessions}] 500 detected: {statuses}")
                 self.assertTrue(all(s == status.HTTP_200_OK for s in statuses),
-                                f"[pre={pre_sessions}, w={workers}] Expected all 200, got: {statuses}")
+                                f"[pre={pre_sessions}] Expected all 200, got: {statuses}")
 
                 active_count = TokenLoginLog.objects.filter(
                     user=self.user,
@@ -180,7 +170,7 @@ class StrictConcurrencyLoginSessionLimitTests(TransactionTestCase):
                 self.assertLessEqual(
                     active_count,
                     self.MAX_SESSIONS,
-                    f"[pre={pre_sessions}, w={workers}] Limit exceeded: "
+                    f"[pre={pre_sessions}] Limit exceeded: "
                     f"{active_count} active sessions (max {self.MAX_SESSIONS})",
                 )
 
@@ -192,61 +182,55 @@ class StrictConcurrencyLoginSessionLimitTests(TransactionTestCase):
 @tag('concurrency')
 class StrictConcurrencyAccountEmailUpdateTests(TransactionTestCase):
     """
-    Diversos usuaris intenten canviar el seu email al mateix valor a la vegada.
-    Parametritzat per nombre de workers: [4, 6].
+    4 usuaris intenten canviar el seu email al mateix valor simultàniament.
+    Exactament 1 × 200, 3 × 400, mai 500.
     """
 
     def setUp(self):
         cache.clear()
 
     def test_parallel_account_email_update_never_returns_500(self):
-        for workers in [4, 6]:
-            with self.subTest(workers=workers):
-                target_email = f"shared-target-{workers}w@example.com"
+        workers = 4
+        target_email = "shared-target-concurrent@example.com"
 
-                # Crea usuaris frescos per a cada iteració
-                users = [
-                    User.objects.create_user(
-                        email=f"origin-upd-{i}-{workers}w@example.com",
-                        password="Gihistzzz_2026",
-                        first_name=f"User{i}",
-                        last_name="Concurrency",
-                    )
-                    for i in range(workers)
-                ]
+        users = [
+            User.objects.create_user(
+                email=f"origin-upd-{i}@example.com",
+                password="Gihistzzz_2026",
+                first_name=f"User{i}",
+                last_name="Concurrency",
+            )
+            for i in range(workers)
+        ]
 
-                statuses, errors = [], []
+        statuses, errors = [], []
 
-                def worker(barrier, lock, idx):
-                    client = APIClient()
-                    client.raise_request_exception = False
-                    client.force_authenticate(user=users[idx])
-                    try:
-                        barrier.wait(timeout=5)
-                        r = client.patch(reverse("me"), {"email": target_email}, format="json")
-                        with lock:
-                            statuses.append(r.status_code)
-                    except Exception as exc:
-                        with lock:
-                            errors.append(str(exc))
-                    finally:
-                        connections.close_all()
+        def worker(barrier, lock, idx):
+            client = APIClient()
+            client.raise_request_exception = False
+            client.force_authenticate(user=users[idx])
+            try:
+                barrier.wait(timeout=5)
+                r = client.patch(reverse("me"), {"email": target_email}, format="json")
+                with lock:
+                    statuses.append(r.status_code)
+            except Exception as exc:
+                with lock:
+                    errors.append(str(exc))
+            finally:
+                connections.close_all()
 
-                with patch.object(MeView, 'throttle_classes', []):
-                    threads = _run_workers(worker, workers)
+        with patch.object(MeView, 'throttle_classes', []):
+            threads = _run_workers(worker, workers)
 
-                self.assertFalse(any(t.is_alive() for t in threads),
-                                 f"[workers={workers}] Threads did not finish")
-                self.assertEqual(errors, [], f"[workers={workers}] Unexpected errors")
-                self.assertEqual(len(statuses), workers)
+        self.assertFalse(any(t.is_alive() for t in threads), "Threads did not finish")
+        self.assertEqual(errors, [], "Unexpected errors")
+        self.assertEqual(len(statuses), workers)
 
-                self.assertEqual(statuses.count(status.HTTP_500_INTERNAL_SERVER_ERROR), 0,
-                                 f"[workers={workers}] 500 detected: {statuses}")
-                self.assertEqual(statuses.count(status.HTTP_200_OK), 1,
-                                 f"[workers={workers}] Expected exactly 1 success: {statuses}")
-                self.assertEqual(statuses.count(status.HTTP_400_BAD_REQUEST), workers - 1,
-                                 f"[workers={workers}] Expected {workers-1} conflicts: {statuses}")
-                self.assertEqual(User.objects.filter(email=target_email).count(), 1)
-
-                # Neteja: elimina els usuaris d'aquesta iteració
-                User.objects.filter(pk__in=[u.pk for u in users]).delete()
+        self.assertEqual(statuses.count(status.HTTP_500_INTERNAL_SERVER_ERROR), 0,
+                         f"500 detected: {statuses}")
+        self.assertEqual(statuses.count(status.HTTP_200_OK), 1,
+                         f"Expected exactly 1 success: {statuses}")
+        self.assertEqual(statuses.count(status.HTTP_400_BAD_REQUEST), workers - 1,
+                         f"Expected {workers - 1} conflicts: {statuses}")
+        self.assertEqual(User.objects.filter(email=target_email).count(), 1)

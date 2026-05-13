@@ -7,7 +7,6 @@ i han de quedar resoltes amb respostes controlades (201/200/400), mai amb 500.
 Convencions:
 - TransactionTestCase: els workers de cada fil veuen els commits reals a BD.
 - threading.Barrier: sincronitza l'inici exacte de totes les requests.
-- subTest(): parametritza casos (workers, usuaris concurrents) sense repetir codi.
 - @tag('concurrency'): exclou d'un CI ràpid amb --exclude-tag=concurrency.
 """
 
@@ -70,9 +69,8 @@ def _make_edifici():
 @tag('concurrency')
 class StrictConcurrencyHabitatgeCreateTests(TransactionTestCase):
     """
-    Diverses requests intenten crear un Habitatge amb la mateixa referenciaCadastral
-    simultàniament. Mai ha de retornar 500.
-    Parametritzat per nombre de workers: [4, 8, 16].
+    6 requests intenten crear un Habitatge amb la mateixa referenciaCadastral
+    simultàniament: exactament 1 × 201, 5 × 400, mai 500.
     """
 
     def setUp(self):
@@ -88,52 +86,47 @@ class StrictConcurrencyHabitatgeCreateTests(TransactionTestCase):
         self.edifici = _make_edifici()
 
     def test_parallel_habitatge_create_same_ref_cadastral_never_returns_500(self):
-        for workers in [4, 8, 16]:
-            with self.subTest(workers=workers):
-                # Referència única per iteració → no cal neteja entre subtests
-                ref = f"REF{workers:04d}ABCDE0001"
+        workers = 6
+        ref = "REF0006ABCDE0001"
 
-                statuses, errors = [], []
+        statuses, errors = [], []
 
-                def worker(barrier, lock, _):
-                    client = APIClient()
-                    client.raise_request_exception = False
-                    client.force_authenticate(user=self.owner)
-                    payload = {
-                        "referenciaCadastral": ref,
-                        "planta": "1",
-                        "porta": "A",
-                        "superficie": 75.0,
-                        "edifici": self.edifici.idEdifici,
-                    }
-                    try:
-                        barrier.wait(timeout=5)
-                        r = client.post(HABITATGES_URL, payload, format="json")
-                        with lock:
-                            statuses.append(r.status_code)
-                    except Exception as exc:
-                        with lock:
-                            errors.append(str(exc))
-                    finally:
-                        connections.close_all()
+        def worker(barrier, lock, _):
+            client = APIClient()
+            client.raise_request_exception = False
+            client.force_authenticate(user=self.owner)
+            payload = {
+                "referenciaCadastral": ref,
+                "planta": "1",
+                "porta": "A",
+                "superficie": 75.0,
+                "edifici": self.edifici.idEdifici,
+            }
+            try:
+                barrier.wait(timeout=5)
+                r = client.post(HABITATGES_URL, payload, format="json")
+                with lock:
+                    statuses.append(r.status_code)
+            except Exception as exc:
+                with lock:
+                    errors.append(str(exc))
+            finally:
+                connections.close_all()
 
-                threads = _run_workers(worker, workers)
+        threads = _run_workers(worker, workers)
 
-                self.assertFalse(any(t.is_alive() for t in threads),
-                                 f"[workers={workers}] Threads did not finish")
-                self.assertEqual(errors, [], f"[workers={workers}] Unexpected errors")
-                self.assertEqual(len(statuses), workers)
+        self.assertFalse(any(t.is_alive() for t in threads), "Threads did not finish")
+        self.assertEqual(errors, [], "Unexpected errors")
+        self.assertEqual(len(statuses), workers)
 
-                self.assertEqual(statuses.count(status.HTTP_500_INTERNAL_SERVER_ERROR), 0,
-                                 f"[workers={workers}] 500 detected: {statuses}")
-                self.assertEqual(statuses.count(status.HTTP_201_CREATED), 1,
-                                 f"[workers={workers}] Expected exactly 1 creation: {statuses}")
-                self.assertEqual(statuses.count(status.HTTP_400_BAD_REQUEST), workers - 1,
-                                 f"[workers={workers}] Expected {workers-1} conflicts: {statuses}")
-                self.assertEqual(
-                    Habitatge.objects.filter(referenciaCadastral=ref).count(), 1,
-                    f"[workers={workers}] Expected 1 row in DB",
-                )
+        self.assertEqual(statuses.count(status.HTTP_500_INTERNAL_SERVER_ERROR), 0,
+                         f"500 detected: {statuses}")
+        self.assertEqual(statuses.count(status.HTTP_201_CREATED), 1,
+                         f"Expected exactly 1 creation: {statuses}")
+        self.assertEqual(statuses.count(status.HTTP_400_BAD_REQUEST), workers - 1,
+                         f"Expected {workers - 1} conflicts: {statuses}")
+        self.assertEqual(Habitatge.objects.filter(referenciaCadastral=ref).count(), 1,
+                         "Expected 1 row in DB")
 
 
 # ---------------------------------------------------------------------------
@@ -143,11 +136,8 @@ class StrictConcurrencyHabitatgeCreateTests(TransactionTestCase):
 @tag('concurrency')
 class StrictConcurrencySolicitarAccesTests(TransactionTestCase):
     """
-    N usuaris sol·liciten accés al mateix habitatge simultàniament.
-    La view comprova `if habitatge.usuari:` i després guarda `solicitant`.
-    Sota concurrència, tots passen la comprovació (usuari=None).
+    4 usuaris sol·liciten accés al mateix habitatge simultàniament.
     Cap ha de retornar 500; last-writer-wins en solicitant és comportament esperat.
-    Parametritzat per nombre d'usuaris concurrents: [2, 4, 6].
     """
 
     def setUp(self):
@@ -163,57 +153,48 @@ class StrictConcurrencySolicitarAccesTests(TransactionTestCase):
         )
 
     def test_parallel_solicitar_acces_never_returns_500(self):
+        concurrent_users = 4
         url = f"{HABITATGES_URL}{self.habitatge.referenciaCadastral}/solicitar-acces/"
 
-        for concurrent_users in [2, 4, 6]:
-            with self.subTest(concurrent_users=concurrent_users):
-                # Usuaris frescos per a cada iteració
-                users = [
-                    User.objects.create_user(
-                        email=f"sol-{concurrent_users}u-{i}@example.com",
-                        password="Gihistzzz_2026",
-                        first_name=f"Sol{i}",
-                        last_name="Concurrency",
-                    )
-                    for i in range(concurrent_users)
-                ]
+        users = [
+            User.objects.create_user(
+                email=f"sol-{i}@example.com",
+                password="Gihistzzz_2026",
+                first_name=f"Sol{i}",
+                last_name="Concurrency",
+            )
+            for i in range(concurrent_users)
+        ]
 
-                statuses, errors = [], []
+        statuses, errors = [], []
 
-                def worker(barrier, lock, idx):
-                    client = APIClient()
-                    client.raise_request_exception = False
-                    client.force_authenticate(user=users[idx])
-                    try:
-                        barrier.wait(timeout=5)
-                        r = client.post(url, format="json")
-                        with lock:
-                            statuses.append(r.status_code)
-                    except Exception as exc:
-                        with lock:
-                            errors.append(str(exc))
-                    finally:
-                        connections.close_all()
+        def worker(barrier, lock, idx):
+            client = APIClient()
+            client.raise_request_exception = False
+            client.force_authenticate(user=users[idx])
+            try:
+                barrier.wait(timeout=5)
+                r = client.post(url, format="json")
+                with lock:
+                    statuses.append(r.status_code)
+            except Exception as exc:
+                with lock:
+                    errors.append(str(exc))
+            finally:
+                connections.close_all()
 
-                threads = _run_workers(worker, concurrent_users)
+        threads = _run_workers(worker, concurrent_users)
 
-                self.assertFalse(any(t.is_alive() for t in threads),
-                                 f"[users={concurrent_users}] Threads did not finish")
-                self.assertEqual(errors, [], f"[users={concurrent_users}] Unexpected errors")
-                self.assertEqual(len(statuses), concurrent_users)
+        self.assertFalse(any(t.is_alive() for t in threads), "Threads did not finish")
+        self.assertEqual(errors, [], "Unexpected errors")
+        self.assertEqual(len(statuses), concurrent_users)
 
-                self.assertEqual(statuses.count(status.HTTP_500_INTERNAL_SERVER_ERROR), 0,
-                                 f"[users={concurrent_users}] 500 detected: {statuses}")
+        self.assertEqual(statuses.count(status.HTTP_500_INTERNAL_SERVER_ERROR), 0,
+                         f"500 detected: {statuses}")
 
-                self.habitatge.refresh_from_db()
-                self.assertIn(self.habitatge.solicitant, users,
-                              f"[users={concurrent_users}] solicitant not in the expected set")
-
-                # Neteja entre iteracions
-                self.habitatge.solicitant = None
-                self.habitatge.estatValidacio = EstatValidacio.PENDENT_DOCUMENTACIO
-                self.habitatge.save(update_fields=["solicitant", "estatValidacio"])
-                User.objects.filter(pk__in=[u.pk for u in users]).delete()
+        self.habitatge.refresh_from_db()
+        self.assertIn(self.habitatge.solicitant, users,
+                      "solicitant not in the expected set")
 
 
 # ---------------------------------------------------------------------------
@@ -223,9 +204,8 @@ class StrictConcurrencySolicitarAccesTests(TransactionTestCase):
 @tag('concurrency')
 class StrictConcurrencyResidentAssignmentTests(TransactionTestCase):
     """
-    Un administrador assigna N residents diferents al mateix habitatge simultàniament.
+    Un administrador assigna 4 residents diferents al mateix habitatge simultàniament.
     Cap ha de retornar 500; exactament un resident queda assignat (last-writer-wins).
-    Parametritzat per nombre de workers: [2, 4].
     """
 
     def setUp(self):
@@ -252,7 +232,6 @@ class StrictConcurrencyResidentAssignmentTests(TransactionTestCase):
             estatValidacio=EstatValidacio.PENDENT_DOCUMENTACIO,
         )
 
-        # Crea el màxim de residents que necessitarem (workers=4)
         self.residents = [
             User.objects.create_user(
                 email=f"resident-{i}@example.com",
@@ -264,46 +243,39 @@ class StrictConcurrencyResidentAssignmentTests(TransactionTestCase):
         ]
 
     def test_parallel_resident_assignment_never_returns_500(self):
+        workers = 4
         url = reverse("assignar-resident",
                       kwargs={"ref_cadastral": self.habitatge.referenciaCadastral})
 
-        for workers in [2, 4]:
-            with self.subTest(workers=workers):
-                residents = self.residents[:workers]
-                statuses, errors = [], []
+        statuses, errors = [], []
 
-                def worker(barrier, lock, idx):
-                    client = APIClient()
-                    client.raise_request_exception = False
-                    client.force_authenticate(user=self.admin)
-                    payload = {"user_id": residents[idx].pk}
-                    try:
-                        barrier.wait(timeout=5)
-                        r = client.patch(url, payload, format="json")
-                        with lock:
-                            statuses.append(r.status_code)
-                    except Exception as exc:
-                        with lock:
-                            errors.append(str(exc))
-                    finally:
-                        connections.close_all()
+        def worker(barrier, lock, idx):
+            client = APIClient()
+            client.raise_request_exception = False
+            client.force_authenticate(user=self.admin)
+            payload = {"user_id": self.residents[idx].pk}
+            try:
+                barrier.wait(timeout=5)
+                r = client.patch(url, payload, format="json")
+                with lock:
+                    statuses.append(r.status_code)
+            except Exception as exc:
+                with lock:
+                    errors.append(str(exc))
+            finally:
+                connections.close_all()
 
-                threads = _run_workers(worker, workers)
+        threads = _run_workers(worker, workers)
 
-                self.assertFalse(any(t.is_alive() for t in threads),
-                                 f"[workers={workers}] Threads did not finish")
-                self.assertEqual(errors, [], f"[workers={workers}] Unexpected errors")
-                self.assertEqual(len(statuses), workers)
+        self.assertFalse(any(t.is_alive() for t in threads), "Threads did not finish")
+        self.assertEqual(errors, [], "Unexpected errors")
+        self.assertEqual(len(statuses), workers)
 
-                self.assertEqual(statuses.count(status.HTTP_500_INTERNAL_SERVER_ERROR), 0,
-                                 f"[workers={workers}] 500 detected: {statuses}")
-                self.assertTrue(all(s == status.HTTP_200_OK for s in statuses),
-                                f"[workers={workers}] Expected all 200, got: {statuses}")
+        self.assertEqual(statuses.count(status.HTTP_500_INTERNAL_SERVER_ERROR), 0,
+                         f"500 detected: {statuses}")
+        self.assertTrue(all(s == status.HTTP_200_OK for s in statuses),
+                        f"Expected all 200, got: {statuses}")
 
-                self.habitatge.refresh_from_db()
-                self.assertIn(self.habitatge.usuari, residents,
-                              f"[workers={workers}] Final resident not in expected set")
-
-                # Neteja entre iteracions: desassigna el resident
-                self.habitatge.usuari = None
-                self.habitatge.save(update_fields=["usuari"])
+        self.habitatge.refresh_from_db()
+        self.assertIn(self.habitatge.usuari, self.residents,
+                      "Final resident not in expected set")

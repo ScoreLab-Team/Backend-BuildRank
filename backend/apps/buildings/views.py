@@ -3,11 +3,12 @@ import random
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, viewsets
+from rest_framework import serializers, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, action, permission_classes
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.db import IntegrityError
 from django.db.models import Q
 from rest_framework.exceptions import PermissionDenied
 
@@ -581,35 +582,36 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), EsAdminOPropietariHabitatge()]
         return [IsAuthenticated()]
     
-    def create(self, request, *args, **kwargs):
-        refCadastral = request.data.get('referenciaCadastral')
-        edificiID = request.data.get('edifici')
-
-        if not refCadastral:
-            return Response({"error": "La referència cadastral és obligatòria."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        habitatge = Habitatge.objects.filter(referenciaCadastral=refCadastral).first()
-
-        if habitatge:
-            if habitatge.estatValidacio == EstatValidacio.VALIDADA:
-                return Response({"error": "Aquest habitatge ja està validat per un altre usuari."}, status=status.HTTP_400_BAD_REQUEST)
-            
-            habitatge.solicitant = request.user
-            habitatge.estatValidacio = EstatValidacio.EN_REVISIO
-            habitatge.idEdifici = edificiID
-            habitatge.save()
-            
-            serializer = self.get_serializer(habitatge)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        
-        return super().create(request, *args, **kwargs)
-
     def perform_create(self, serializer):
         if self.request.user.profile.role == RoleChoices.ADMIN:
             raise PermissionDenied("Els administradors de finca no poden crear habitatges.")
-        serializer.save(
-            solicitant=self.request.user,
-            estatValidacio=EstatValidacio.EN_REVISIO
+        try:
+            serializer.save(solicitant=self.request.user)
+        except IntegrityError:
+            raise serializers.ValidationError(
+                {"referenciaCadastral": "Ja existeix un habitatge amb aquesta referència cadastral."}
+            )
+
+    @action(detail=True, methods=['post'], url_path='solicitar-acces')
+    def solicitar_acces(self, request, pk=None):
+        # Sol·licitud de vincular-se a aquest habitatge
+        habitatge = self.get_object()
+
+        # Comprovar si l'habitatge ja està ocupat per un usuari validat
+        if habitatge.usuari:
+            return Response(
+                {"detail": "Aquest habitatge ja té un resident assignat."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Posem l'estat en revisió i guardem qui és l'usuari que ho demana
+        habitatge.estatValidacio = EstatValidacio.EN_REVISIO
+        habitatge.solicitant = request.user
+        habitatge.save(update_fields=['estatValidacio', 'solicitant'])
+
+        return Response(
+            {"detail": "Sol·licitud enviada correctament. Pendent de l'aprovació de l'Administrador."},
+            status=status.HTTP_200_OK
         )
     
     @action(detail=True, methods=['post'], url_path='validar-acces')

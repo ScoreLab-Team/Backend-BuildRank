@@ -1,5 +1,5 @@
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from rest_framework import serializers
 
 from apps.accounts.models import Profile, RoleChoices, TokenLoginLog
@@ -16,6 +16,11 @@ from rest_framework_simplejwt.settings import api_settings
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes
+
+from django.conf import settings
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
+from google.auth.exceptions import GoogleAuthError
 
 User = get_user_model()
 
@@ -72,10 +77,15 @@ class RegisterSerializer(serializers.ModelSerializer):
 
         password = validated_data.pop("password")
 
-        user = User.objects.create_user(
-            password=password,
-            **validated_data,
-        )
+        try:
+            user = User.objects.create_user(
+                password=password,
+                **validated_data,
+            )
+        except IntegrityError:
+            raise serializers.ValidationError(
+                {"email": "Ja existeix un usuari amb aquest email."}
+            )
 
         profile, _ = Profile.objects.get_or_create(user=user)
         profile.role = role
@@ -102,45 +112,61 @@ class LoginSerializer(serializers.Serializer):
 
         refresh = RefreshToken.for_user(user)
         jti = str(refresh.get('jti'))
-        
-        # Limpieza: máx 5 sesiones activas por usuario
-        # Si hay 5 o más, revoca la más antigua
-        self._enforce_session_limit(user)
-        
 
-        # Registrar login en TokenLoginLog
-        TokenLoginLog.objects.create(
-            user=user,
-            status=TokenLoginLog.LOGIN,
-            expires_at=timezone.now() + api_settings.REFRESH_TOKEN_LIFETIME,
-            jti=jti,
-        )
+        # Atomic: check limit, maybe revoke oldest, and log the new session in
+        # one serializable block so concurrent logins can't all slip past the
+        # count check before any of them inserts their log row.
+        self._enforce_session_limit(user, jti)
 
         return {
             "user": user,
             "access": str(refresh.access_token),
             "refresh": str(refresh),
         }
-    
-    def _enforce_session_limit(self, user, max_sessions=5):
+
+    @transaction.atomic
+    def _enforce_session_limit(self, user, new_jti, max_sessions=5):
         """
-        Revoca la sesión más antigua si el usuario ya tiene max_sessions activas.
+        Within a single atomic transaction:
+          1. Lock the user row (SELECT FOR UPDATE) to serialize concurrent logins.
+          2. Revoke the oldest session if the limit is already reached.
+          3. Insert the new session log row.
         """
-        active_sessions = TokenLoginLog.objects.filter(
+        # Lock the user's own row for the duration of this transaction.
+        #
+        # Why not SELECT FOR UPDATE on TokenLoginLog rows directly?
+        # Phantom-read problem at READ COMMITTED: all N concurrent threads start
+        # scanning the same existing rows simultaneously, each sees count < limit,
+        # and all insert without revoking — even with FOR UPDATE.
+        #
+        # Locking the User row (which always exists) serializes threads properly:
+        # thread 2 blocks on the User row lock while thread 1 holds it; by the
+        # time thread 2 is unblocked, thread 1's entire transaction has committed,
+        # and the subsequent TokenLoginLog SELECT runs as a fresh READ COMMITTED
+        # statement that sees thread 1's new row.
+        User.objects.select_for_update().get(pk=user.pk)
+
+        active_sessions = list(
+            TokenLoginLog.objects
+            .filter(user=user, status=TokenLoginLog.LOGIN, logout_at__isnull=True)
+            .order_by('login_at')
+        )
+
+        if len(active_sessions) >= max_sessions:
+            oldest = active_sessions[0]
+            outstanding = OutstandingToken.objects.filter(jti=oldest.jti).first()
+            if outstanding:
+                BlacklistedToken.objects.get_or_create(token=outstanding)
+            oldest.status = TokenLoginLog.REVOKED
+            oldest.logout_at = timezone.now()
+            oldest.save(update_fields=['status', 'logout_at'])
+
+        TokenLoginLog.objects.create(
             user=user,
             status=TokenLoginLog.LOGIN,
-            logout_at__isnull=True
-        ).order_by('login_at')
-        
-        if active_sessions.count() >= max_sessions:
-            oldest = active_sessions.first()
-            if oldest:
-                outstanding = OutstandingToken.objects.filter(jti=oldest.jti).first()
-                if outstanding:
-                    BlacklistedToken.objects.get_or_create(token=outstanding)
-                oldest.status = TokenLoginLog.REVOKED
-                oldest.logout_at = timezone.now()
-                oldest.save(update_fields=['status', 'logout_at'])
+            expires_at=timezone.now() + api_settings.REFRESH_TOKEN_LIFETIME,
+            jti=new_jti,
+        )
 
 
 class LogoutSerializer(serializers.Serializer):
@@ -276,7 +302,14 @@ class AccountUpdateSerializer(serializers.ModelSerializer):
             update_fields.append("last_name")
 
         if update_fields:
-            instance.save(update_fields=update_fields)
+            try:
+                instance.save(update_fields=update_fields)
+            except IntegrityError:
+                # Race condition: otro hilo grabó el mismo email entre el
+                # validate_email y este save. Constraint UNIQUE → 400, no 500.
+                raise serializers.ValidationError(
+                    {"email": "Ja existeix un usuari amb aquest correu electrònic."}
+                )
 
         return instance
 
@@ -347,3 +380,86 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         user.set_password(self.validated_data["password"])
         user.save(update_fields=["password"])
         return user
+
+
+class GoogleOAuthSerializer(serializers.Serializer):
+    id_token = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        token = attrs["id_token"]
+
+        if not settings.GOOGLE_OAUTH_CLIENT_ID:
+            raise serializers.ValidationError(
+                {"detail": "GOOGLE_OAUTH_CLIENT_ID no està configurat."}
+            )
+
+        try:
+            idinfo = google_id_token.verify_oauth2_token(
+                token,
+                google_requests.Request(),
+                settings.GOOGLE_OAUTH_CLIENT_ID,
+            )
+        except ValueError:
+            raise serializers.ValidationError({"id_token": "Token de Google invàlid."})
+        except GoogleAuthError:
+            raise serializers.ValidationError(
+                {"id_token": "No s'ha pogut verificar el token de Google."}
+            )
+
+        email = (idinfo.get("email") or "").strip().lower()
+        if not email:
+            raise serializers.ValidationError({"email": "Google no ha retornat cap email."})
+
+        if not idinfo.get("email_verified", False):
+            raise serializers.ValidationError({"email": "L'email de Google no està verificat."})
+
+        attrs["google_user_info"] = {
+            "email": email,
+            "first_name": idinfo.get("given_name", "") or "",
+            "last_name": idinfo.get("family_name", "") or "",
+        }
+        return attrs
+
+    @transaction.atomic
+    def save(self, **kwargs):
+        info = self.validated_data["google_user_info"]
+
+        user, created = User.objects.get_or_create(
+            email=info["email"],
+            defaults={
+                "first_name": info["first_name"],
+                "last_name": info["last_name"],
+                "is_active": True,
+            },
+        )
+
+        updated_fields = []
+        if info["first_name"] and not user.first_name:
+            user.first_name = info["first_name"]
+            updated_fields.append("first_name")
+        if info["last_name"] and not user.last_name:
+            user.last_name = info["last_name"]
+            updated_fields.append("last_name")
+        if updated_fields:
+            user.save(update_fields=updated_fields)
+
+        profile, _ = Profile.objects.get_or_create(user=user)
+        if created:
+            profile.role = RoleChoices.OWNER
+            profile.save(update_fields=["role"])
+
+        refresh = RefreshToken.for_user(user)
+        jti = str(refresh.get("jti"))
+
+        TokenLoginLog.objects.create(
+            user=user,
+            status=TokenLoginLog.LOGIN,
+            expires_at=timezone.now() + api_settings.REFRESH_TOKEN_LIFETIME,
+            jti=jti,
+        )
+
+        return {
+            "user": user,
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+        }

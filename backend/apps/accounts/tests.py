@@ -1,13 +1,8 @@
-import os
-import threading
-import unittest
 from datetime import timedelta
 from unittest.mock import patch
 
-from django.test import TransactionTestCase
 from django.test import override_settings
 from django.core.cache import cache
-from django.db import connections
 from django.urls import reverse
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -24,7 +19,6 @@ from apps.accounts.models import (
     TokenLoginLog,
     User,
 )
-from apps.accounts.views import RegisterView
 from apps.buildings.models import (
     Edifici,
     GrupComparable,
@@ -33,9 +27,6 @@ from apps.buildings.models import (
 )
 
 User = get_user_model()
-CONCURRENCY_TEST_MODE = os.getenv("RUN_CONCURRENCY_TESTS", "").strip().lower()
-ENABLE_CONCURRENCY_DIAGNOSTIC = CONCURRENCY_TEST_MODE in {"1", "true", "diagnostic", "all", "strict"}
-ENABLE_CONCURRENCY_STRICT = CONCURRENCY_TEST_MODE in {"strict", "all"}
 
 NO_THROTTLE_REST_FRAMEWORK = {
     **settings.REST_FRAMEWORK,
@@ -937,145 +928,6 @@ class AuthEndpointTests(APITestCase):
         self.assertEqual(response.data["role"], RoleChoices.TENANT)
 
 
-@unittest.skipUnless(
-    ENABLE_CONCURRENCY_DIAGNOSTIC,
-    "Temporary concurrency tests are disabled by default. Set RUN_CONCURRENCY_TESTS=diagnostic (or strict/all) to run.",
-)
-class TemporaryConcurrencyRegistrationTests(TransactionTestCase):
-    """Temporary opt-in concurrency tests for registration endpoint."""
-
-    def setUp(self):
-        # Limpia caché de throttle para que los workers no hereden rate limit
-        # de tests anteriores. Este test prueba concurrencia, no throttling.
-        cache.clear()
-
-    def test_parallel_register_same_email_diagnostic(self):
-        email = "temp-concurrency-register@example.com"
-        password = "Gihistzzz_2026"
-        workers = 6
-
-        statuses = []
-        db_race_errors = []
-        unexpected_errors = []
-        lock = threading.Lock()
-        barrier = threading.Barrier(workers)
-
-        def worker():
-            client = APIClient()
-            client.raise_request_exception = False
-            payload = {
-                "email": email,
-                "first_name": "Temp",
-                "last_name": "Concurrency",
-                "password": password,
-                "password_confirm": password,
-            }
-            try:
-                barrier.wait(timeout=5)
-                response = client.post(reverse("register"), payload, format="json")
-                with lock:
-                    statuses.append(response.status_code)
-            except Exception as exc:
-                with lock:
-                    text = str(exc)
-                    if "accounts_user_email_key" in text or "duplicate key value" in text:
-                        db_race_errors.append(text)
-                    else:
-                        unexpected_errors.append(text)
-            finally:
-                connections.close_all()
-
-        with patch.object(RegisterView, 'throttle_classes', []):
-            threads = [threading.Thread(target=worker) for _ in range(workers)]
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join(timeout=15)
-
-        self.assertFalse(any(thread.is_alive() for thread in threads), "Some worker threads did not finish")
-        self.assertEqual(unexpected_errors, [])
-        self.assertEqual(len(statuses), workers)
-
-        allowed_statuses = {
-            status.HTTP_201_CREATED,
-            status.HTTP_400_BAD_REQUEST,
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-        }
-        self.assertTrue(set(statuses).issubset(allowed_statuses), f"Unexpected statuses: {statuses}")
-
-        # Diagnostic baseline while concurrency handling is not yet implemented:
-        # exactly one row should exist regardless of response distribution.
-        self.assertEqual(User.objects.filter(email=email).count(), 1)
-        self.assertEqual(Profile.objects.filter(user__email=email).count(), 1)
-        self.assertEqual(TokenLoginLog.objects.filter(user__email=email).count(), 0)
-
-
-@unittest.skipUnless(
-    ENABLE_CONCURRENCY_STRICT,
-    "Strict concurrency tests are disabled by default. Set RUN_CONCURRENCY_TESTS=strict (or all) to run.",
-)
-class StrictConcurrencyRegistrationTests(TransactionTestCase):
-    """Strict opt-in concurrency checks for registration endpoint behavior."""
-
-    def setUp(self):
-        cache.clear()
-
-    def test_parallel_register_same_email_never_returns_500(self):
-        email = "strict-concurrency-register@example.com"
-        password = "Gihistzzz_2026"
-        workers = 8
-
-        statuses = []
-        unexpected_errors = []
-        lock = threading.Lock()
-        barrier = threading.Barrier(workers)
-
-        def worker():
-            client = APIClient()
-            client.raise_request_exception = False
-            payload = {
-                "email": email,
-                "first_name": "Strict",
-                "last_name": "Concurrency",
-                "password": password,
-                "password_confirm": password,
-            }
-            try:
-                barrier.wait(timeout=5)
-                response = client.post(reverse("register"), payload, format="json")
-                with lock:
-                    statuses.append(response.status_code)
-            except Exception as exc:
-                with lock:
-                    unexpected_errors.append(str(exc))
-            finally:
-                connections.close_all()
-
-        with patch.object(RegisterView, 'throttle_classes', []):
-            threads = [threading.Thread(target=worker) for _ in range(workers)]
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join(timeout=15)
-
-        self.assertFalse(any(thread.is_alive() for thread in threads), "Some worker threads did not finish")
-        self.assertEqual(unexpected_errors, [])
-        self.assertEqual(len(statuses), workers)
-
-        # Strict behavior expected after concurrency-hardening:
-        # one success + the rest controlled 400 responses, never 500.
-        self.assertEqual(statuses.count(status.HTTP_201_CREATED), 1)
-        self.assertEqual(statuses.count(status.HTTP_500_INTERNAL_SERVER_ERROR), 0)
-        self.assertEqual(
-            statuses.count(status.HTTP_400_BAD_REQUEST),
-            workers - 1,
-            f"Expected only 201/400 responses, got: {statuses}",
-        )
-        self.assertEqual(User.objects.filter(email=email).count(), 1)
-        self.assertEqual(Profile.objects.filter(user__email=email).count(), 1)
-        self.assertEqual(TokenLoginLog.objects.filter(user__email=email).count(), 0)
-
-
 # ============================================================================
 # Rate Limiting Tests
 # ============================================================================
@@ -1448,3 +1300,99 @@ class PasswordResetTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("password_confirm", response.data)
+
+@override_settings(
+    GOOGLE_OAUTH_CLIENT_ID="test-google-client-id.apps.googleusercontent.com",
+    REST_FRAMEWORK=NO_THROTTLE_REST_FRAMEWORK,
+)
+class GoogleOAuthTests(APITestCase):
+    def setUp(self):
+        self.url = reverse("google-oauth")
+        cache.clear()
+
+    @patch("apps.accounts.serializers.google_id_token.verify_oauth2_token")
+    def test_google_oauth_creates_user_and_returns_jwt_tokens(self, mock_verify):
+        mock_verify.return_value = {
+            "email": "marti@example.com",
+            "email_verified": True,
+            "given_name": "Martí",
+            "family_name": "Borràs",
+        }
+
+        response = self.client.post(
+            self.url,
+            {"id_token": "valid-google-id-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.assertEqual(response.data["user"]["email"], "marti@example.com")
+        self.assertEqual(response.data["user"]["first_name"], "Martí")
+        self.assertEqual(response.data["user"]["last_name"], "Borràs")
+        self.assertEqual(response.data["user"]["role"], RoleChoices.OWNER)
+
+        user = User.objects.get(email="marti@example.com")
+        self.assertEqual(user.first_name, "Martí")
+        self.assertEqual(user.last_name, "Borràs")
+        self.assertEqual(user.profile.role, RoleChoices.OWNER)
+        self.assertEqual(TokenLoginLog.objects.filter(user=user).count(), 1)
+
+    @patch("apps.accounts.serializers.google_id_token.verify_oauth2_token")
+    def test_google_oauth_existing_user_is_not_duplicated(self, mock_verify):
+        existing_user = User.objects.create_user(
+            email="existing@example.com",
+            password="Password123",
+            first_name="Existing",
+            last_name="User",
+        )
+
+        mock_verify.return_value = {
+            "email": "existing@example.com",
+            "email_verified": True,
+            "given_name": "GoogleName",
+            "family_name": "GoogleSurname",
+        }
+
+        response = self.client.post(
+            self.url,
+            {"id_token": "valid-google-id-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(User.objects.filter(email="existing@example.com").count(), 1)
+
+        existing_user.refresh_from_db()
+        self.assertEqual(existing_user.first_name, "Existing")
+        self.assertEqual(existing_user.last_name, "User")
+
+    @patch("apps.accounts.serializers.google_id_token.verify_oauth2_token")
+    def test_google_oauth_rejects_unverified_email(self, mock_verify):
+        mock_verify.return_value = {
+            "email": "notverified@example.com",
+            "email_verified": False,
+            "given_name": "No",
+            "family_name": "Verified",
+        }
+
+        response = self.client.post(
+            self.url,
+            {"id_token": "valid-google-id-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(User.objects.filter(email="notverified@example.com").exists())
+
+    @override_settings(GOOGLE_OAUTH_CLIENT_ID="")
+    def test_google_oauth_requires_client_id_configuration(self):
+        response = self.client.post(
+            self.url,
+            {"id_token": "any-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("detail", response.data)

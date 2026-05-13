@@ -1,13 +1,14 @@
 # apps/buildings/views.py
-from random import random
+import random
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, viewsets
+from rest_framework import serializers, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, action, permission_classes
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.db import IntegrityError
 from django.db.models import Q
 from rest_framework.exceptions import PermissionDenied
 
@@ -584,8 +585,13 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         if self.request.user.profile.role == RoleChoices.ADMIN:
             raise PermissionDenied("Els administradors de finca no poden crear habitatges.")
-        serializer.save()
-    
+        try:
+            serializer.save(solicitant=self.request.user)
+        except IntegrityError:
+            raise serializers.ValidationError(
+                {"referenciaCadastral": "Ja existeix un habitatge amb aquesta referència cadastral."}
+            )
+
     @action(detail=True, methods=['post'], url_path='solicitar-acces')
     def solicitar_acces(self, request, pk=None):
         # Sol·licitud de vincular-se a aquest habitatge
@@ -616,14 +622,14 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         # Només l'admin d'aquest edifici pot validar-ho
         if habitatge.edifici.administradorFinca != request.user:
             return Response(
-                {"detail": "No tens permisos per validar accessos en aquest edifici."},
+                {"error": "No tens permisos per validar accessos en aquest edifici."},
                 status=status.HTTP_403_FORBIDDEN
             )
         
         # Comprovem que realment hi hagi algú pendent
         if habitatge.estatValidacio != EstatValidacio.EN_REVISIO or not habitatge.solicitant:
             return Response(
-                {"detail": "Aquest habitatge no té cap sol·licitud pendent de revisió."},
+                {"error": "Aquest habitatge no té cap sol·licitud pendent de revisió."},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -636,25 +642,20 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
             habitatge.save(update_fields=['usuari', 'estatValidacio', 'solicitant'])
 
             return Response(
-                {"detail": "Sol·licitud aprovada. Resident assignat."},
+                {"message": "Sol·licitud aprovada. Resident assignat."},
                 status=status.HTTP_200_OK
             )
         
         elif nouEstat == EstatValidacio.REBUTJADA:
-            habitatge.estatValidacio = EstatValidacio.REBUTJADA
-            habitatge.solicitant = None
-            habitatge.save(update_fields=['estatValidacio', 'solicitant'])
+            # habitatge.estatValidacio = EstatValidacio.REBUTJADA
+            # habitatge.solicitant = None
+            # habitatge.save(update_fields=['estatValidacio', 'solicitant'])
 
-            return Response(
-                {"detail": "Sol·licitud rebutjada."},
-                status=status.HTTP_200_OK
-            )
+            # decidim eliminar l'habitatge, si la sol·licitud queda rebutjada per l'admin de finca
+            habitatge.delete()
+            return Response({"message": "Sol·licitud rebutjada i habitatge eliminat."}, status=status.HTTP_204_NO_CONTENT)
         
-        else:
-            return Response(
-                {"detail": "Cal enviar un estat vàlid ('Validada' o 'Rebutjada)"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        return Response({"error": "Estat no vàlid."}, status=status.HTTP_400_BAD_REQUEST)
         
     @action(detail=False, methods=['get'])
     def pendents(self, request):

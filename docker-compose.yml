@@ -20,6 +20,8 @@ services:
   # Django con Gunicorn
   web:
     build: ./backend
+    env_file:
+      - ./backend/.env
     volumes:
       - ./backend:/app   # monta el código para que --reload funcione en desarrollo
       - static_volume:/app/staticfiles

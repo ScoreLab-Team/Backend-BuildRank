@@ -17,6 +17,11 @@ from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes
 
+from django.conf import settings
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
+from google.auth.exceptions import GoogleAuthError
+
 User = get_user_model()
 
 
@@ -347,3 +352,86 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         user.set_password(self.validated_data["password"])
         user.save(update_fields=["password"])
         return user
+
+
+class GoogleOAuthSerializer(serializers.Serializer):
+    id_token = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        token = attrs["id_token"]
+
+        if not settings.GOOGLE_OAUTH_CLIENT_ID:
+            raise serializers.ValidationError(
+                {"detail": "GOOGLE_OAUTH_CLIENT_ID no està configurat."}
+            )
+
+        try:
+            idinfo = google_id_token.verify_oauth2_token(
+                token,
+                google_requests.Request(),
+                settings.GOOGLE_OAUTH_CLIENT_ID,
+            )
+        except ValueError:
+            raise serializers.ValidationError({"id_token": "Token de Google invàlid."})
+        except GoogleAuthError:
+            raise serializers.ValidationError(
+                {"id_token": "No s'ha pogut verificar el token de Google."}
+            )
+
+        email = (idinfo.get("email") or "").strip().lower()
+        if not email:
+            raise serializers.ValidationError({"email": "Google no ha retornat cap email."})
+
+        if not idinfo.get("email_verified", False):
+            raise serializers.ValidationError({"email": "L'email de Google no està verificat."})
+
+        attrs["google_user_info"] = {
+            "email": email,
+            "first_name": idinfo.get("given_name", "") or "",
+            "last_name": idinfo.get("family_name", "") or "",
+        }
+        return attrs
+
+    @transaction.atomic
+    def save(self, **kwargs):
+        info = self.validated_data["google_user_info"]
+
+        user, created = User.objects.get_or_create(
+            email=info["email"],
+            defaults={
+                "first_name": info["first_name"],
+                "last_name": info["last_name"],
+                "is_active": True,
+            },
+        )
+
+        updated_fields = []
+        if info["first_name"] and not user.first_name:
+            user.first_name = info["first_name"]
+            updated_fields.append("first_name")
+        if info["last_name"] and not user.last_name:
+            user.last_name = info["last_name"]
+            updated_fields.append("last_name")
+        if updated_fields:
+            user.save(update_fields=updated_fields)
+
+        profile, _ = Profile.objects.get_or_create(user=user)
+        if created:
+            profile.role = RoleChoices.OWNER
+            profile.save(update_fields=["role"])
+
+        refresh = RefreshToken.for_user(user)
+        jti = str(refresh.get("jti"))
+
+        TokenLoginLog.objects.create(
+            user=user,
+            status=TokenLoginLog.LOGIN,
+            expires_at=timezone.now() + api_settings.REFRESH_TOKEN_LIFETIME,
+            jti=jti,
+        )
+
+        return {
+            "user": user,
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+        }

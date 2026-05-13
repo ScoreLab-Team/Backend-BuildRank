@@ -3161,6 +3161,105 @@ class HabitatgeMeUpdateTests(BaseTestData):
         )
 
 
+class EdificiMapaEndpointTests(BaseTestData):
+    """Tests de l'endpoint GeoJSON per al mapa d'edificis."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = cls._create_user("map-admin@example.com", RoleChoices.ADMIN)
+
+        cls.grup = GrupComparable.objects.create(
+            idGrup=99,
+            zonaClimatica="C2",
+            tipologia="Residencial",
+            rangSuperficie="100-200",
+        )
+
+        cls.edifici_visible = cls._create_edifici(
+            administrador=cls.admin,
+            grup=cls.grup,
+            carrer="Carrer Mallorca",
+            numero=120,
+        )
+        cls.edifici_visible.puntuacioBase = 72.5
+        cls.edifici_visible.classificacioEstimada = "C"
+        cls.edifici_visible.classificacioFont = "estimada"
+        cls.edifici_visible.save(
+            update_fields=[
+                "puntuacioBase",
+                "classificacioEstimada",
+                "classificacioFont",
+            ]
+        )
+
+        cls.edifici_sense_coords = cls._create_edifici(
+            administrador=cls.admin,
+            grup=cls.grup,
+            carrer="Carrer Sense Coordenades",
+            numero=1,
+        )
+        cls.edifici_sense_coords.localitzacio.latitud = 0.0
+        cls.edifici_sense_coords.localitzacio.longitud = 0.0
+        cls.edifici_sense_coords.localitzacio.save(
+            update_fields=["latitud", "longitud"]
+        )
+
+    def test_mapa_requires_authentication(self):
+        response = self.client.get("/api/buildings/edificis/mapa/")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_mapa_returns_geojson_feature_collection(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get("/api/buildings/edificis/mapa/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["type"], "FeatureCollection")
+        self.assertIn("features", response.data)
+        self.assertGreaterEqual(len(response.data["features"]), 1)
+
+        feature = response.data["features"][0]
+        self.assertEqual(feature["type"], "Feature")
+        self.assertEqual(feature["geometry"]["type"], "Point")
+        self.assertIn("coordinates", feature["geometry"])
+        self.assertIn("properties", feature)
+
+    def test_mapa_excludes_buildings_without_valid_coordinates(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get("/api/buildings/edificis/mapa/")
+
+        ids = [
+            feature["properties"]["idEdifici"]
+            for feature in response.data["features"]
+        ]
+
+        self.assertIn(self.edifici_visible.idEdifici, ids)
+        self.assertNotIn(self.edifici_sense_coords.idEdifici, ids)
+
+    def test_mapa_does_not_expose_private_user_or_habitatge_data(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get("/api/buildings/edificis/mapa/")
+
+        feature = response.data["features"][0]
+        properties = feature["properties"]
+
+        self.assertNotIn("habitatges", properties)
+        self.assertNotIn("usuari", properties)
+        self.assertNotIn("administradorFinca", properties)
+        self.assertNotIn("email", properties)
+
+    def test_mapa_bbox_filter(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get(
+            "/api/buildings/edificis/mapa/?bbox=1.9,40.9,2.1,41.1"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
 # ============================================================================
 # THIRD PARTY SERVICE — POST /api/third-party/score/
 # ============================================================================

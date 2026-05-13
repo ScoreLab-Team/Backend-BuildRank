@@ -1,5 +1,5 @@
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from rest_framework import serializers
 
 from apps.accounts.models import Profile, RoleChoices, TokenLoginLog
@@ -77,10 +77,15 @@ class RegisterSerializer(serializers.ModelSerializer):
 
         password = validated_data.pop("password")
 
-        user = User.objects.create_user(
-            password=password,
-            **validated_data,
-        )
+        try:
+            user = User.objects.create_user(
+                password=password,
+                **validated_data,
+            )
+        except IntegrityError:
+            raise serializers.ValidationError(
+                {"email": "Ja existeix un usuari amb aquest email."}
+            )
 
         profile, _ = Profile.objects.get_or_create(user=user)
         profile.role = role
@@ -107,45 +112,61 @@ class LoginSerializer(serializers.Serializer):
 
         refresh = RefreshToken.for_user(user)
         jti = str(refresh.get('jti'))
-        
-        # Limpieza: máx 5 sesiones activas por usuario
-        # Si hay 5 o más, revoca la más antigua
-        self._enforce_session_limit(user)
-        
 
-        # Registrar login en TokenLoginLog
-        TokenLoginLog.objects.create(
-            user=user,
-            status=TokenLoginLog.LOGIN,
-            expires_at=timezone.now() + api_settings.REFRESH_TOKEN_LIFETIME,
-            jti=jti,
-        )
+        # Atomic: check limit, maybe revoke oldest, and log the new session in
+        # one serializable block so concurrent logins can't all slip past the
+        # count check before any of them inserts their log row.
+        self._enforce_session_limit(user, jti)
 
         return {
             "user": user,
             "access": str(refresh.access_token),
             "refresh": str(refresh),
         }
-    
-    def _enforce_session_limit(self, user, max_sessions=5):
+
+    @transaction.atomic
+    def _enforce_session_limit(self, user, new_jti, max_sessions=5):
         """
-        Revoca la sesión más antigua si el usuario ya tiene max_sessions activas.
+        Within a single atomic transaction:
+          1. Lock the user row (SELECT FOR UPDATE) to serialize concurrent logins.
+          2. Revoke the oldest session if the limit is already reached.
+          3. Insert the new session log row.
         """
-        active_sessions = TokenLoginLog.objects.filter(
+        # Lock the user's own row for the duration of this transaction.
+        #
+        # Why not SELECT FOR UPDATE on TokenLoginLog rows directly?
+        # Phantom-read problem at READ COMMITTED: all N concurrent threads start
+        # scanning the same existing rows simultaneously, each sees count < limit,
+        # and all insert without revoking — even with FOR UPDATE.
+        #
+        # Locking the User row (which always exists) serializes threads properly:
+        # thread 2 blocks on the User row lock while thread 1 holds it; by the
+        # time thread 2 is unblocked, thread 1's entire transaction has committed,
+        # and the subsequent TokenLoginLog SELECT runs as a fresh READ COMMITTED
+        # statement that sees thread 1's new row.
+        User.objects.select_for_update().get(pk=user.pk)
+
+        active_sessions = list(
+            TokenLoginLog.objects
+            .filter(user=user, status=TokenLoginLog.LOGIN, logout_at__isnull=True)
+            .order_by('login_at')
+        )
+
+        if len(active_sessions) >= max_sessions:
+            oldest = active_sessions[0]
+            outstanding = OutstandingToken.objects.filter(jti=oldest.jti).first()
+            if outstanding:
+                BlacklistedToken.objects.get_or_create(token=outstanding)
+            oldest.status = TokenLoginLog.REVOKED
+            oldest.logout_at = timezone.now()
+            oldest.save(update_fields=['status', 'logout_at'])
+
+        TokenLoginLog.objects.create(
             user=user,
             status=TokenLoginLog.LOGIN,
-            logout_at__isnull=True
-        ).order_by('login_at')
-        
-        if active_sessions.count() >= max_sessions:
-            oldest = active_sessions.first()
-            if oldest:
-                outstanding = OutstandingToken.objects.filter(jti=oldest.jti).first()
-                if outstanding:
-                    BlacklistedToken.objects.get_or_create(token=outstanding)
-                oldest.status = TokenLoginLog.REVOKED
-                oldest.logout_at = timezone.now()
-                oldest.save(update_fields=['status', 'logout_at'])
+            expires_at=timezone.now() + api_settings.REFRESH_TOKEN_LIFETIME,
+            jti=new_jti,
+        )
 
 
 class LogoutSerializer(serializers.Serializer):
@@ -281,7 +302,14 @@ class AccountUpdateSerializer(serializers.ModelSerializer):
             update_fields.append("last_name")
 
         if update_fields:
-            instance.save(update_fields=update_fields)
+            try:
+                instance.save(update_fields=update_fields)
+            except IntegrityError:
+                # Race condition: otro hilo grabó el mismo email entre el
+                # validate_email y este save. Constraint UNIQUE → 400, no 500.
+                raise serializers.ValidationError(
+                    {"email": "Ja existeix un usuari amb aquest correu electrònic."}
+                )
 
         return instance
 

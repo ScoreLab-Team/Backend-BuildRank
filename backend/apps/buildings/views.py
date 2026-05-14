@@ -655,7 +655,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
             localitzacio__carrer__icontains=query
         ).select_related('localitzacio').distinct()
 
-        serializer = EdificiCercaSerializer(edificis, many=True)
+        serializer = EdificiCercaSerializer(edificis[:15], many=True)
         return Response(serializer.data)
 
 class MilloraImplementadaViewSet(viewsets.GenericViewSet):

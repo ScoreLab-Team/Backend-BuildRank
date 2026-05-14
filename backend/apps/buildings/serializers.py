@@ -220,7 +220,7 @@ class EdificiCercaSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Edifici
-        fields = ['idEdifici', 'localitzacio', 'anyConstruccio', 'tipologia']
+        fields = ['idEdifici', 'localitzacio', 'anyConstruccio']
 
 # Edifici 1. Llistat lleuger
 class EdificiListSerializer(serializers.ModelSerializer):

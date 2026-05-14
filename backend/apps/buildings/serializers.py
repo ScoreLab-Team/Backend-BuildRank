@@ -214,10 +214,16 @@ class HabitatgeMeUpdateSerializer(serializers.ModelSerializer):
 
         return instance
     
+class EdificiCercaSerializer(serializers.ModelSerializer):
+    # Això és el que fa que el JSON inclogui l'objecte localització sencer
+    localitzacio = LocalitzacioSerializer(read_only=True)
+
+    class Meta:
+        model = Edifici
+        fields = ['idEdifici', 'localitzacio', 'anyConstruccio', 'tipologia']
+
 # Edifici 1. Llistat lleuger
 class EdificiListSerializer(serializers.ModelSerializer):
-    localitzacio = LocalitzacioSerializer(read_only=True)
-    
     class Meta:
         model = Edifici
         fields = ['idEdifici', 'localitzacio', 'tipologia', 'anyConstruccio', 'superficieTotal', 'puntuacioBase']

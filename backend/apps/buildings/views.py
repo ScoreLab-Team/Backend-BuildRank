@@ -22,6 +22,7 @@ from .models import (
 )
 from .serializers import (
     EdificiDetailSerializer, EdificiListSerializer, EdificiMapSerializer,
+    EdificiCercaSerializer,
     HabitatgeDetailSerializer, HabitatgeMeUpdateSerializer, HabitatgeResumSerializer,
     LocalitzacioSerializer, DadesEnergetiquesSerializer,
     RankingSerializer,
@@ -648,15 +649,14 @@ class EdificiViewSet(viewsets.ModelViewSet):
         query = request.query_params.get('q', '')
 
         if not query or len(query) < 3:
-            return Response([], status=status.HTTP_200_OK)
+            return Response([])
         
         edificis = Edifici.objects.filter(
             localitzacio__carrer__icontains=query
         ).select_related('localitzacio').distinct()
 
-        edificis = edificis[:15]
-        serializer = EdificiListSerializer(edificis, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        serializer = EdificiCercaSerializer(edificis, many=True)
+        return Response(serializer.data)
 
 class MilloraImplementadaViewSet(viewsets.GenericViewSet):
     queryset = MilloraImplementada.objects.select_related("millora", "edifici")

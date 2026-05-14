@@ -7,7 +7,7 @@ from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
-from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora
+from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora, TipusEdifici
 from apps.buildings.serializers import EdificiDetailSerializer, LocalitzacioSerializer
 from apps.accounts.models import RoleChoices, ValidacioAdmin
 from .simulation.engine import simular_millores, clamp, UnitatBaseMillora
@@ -3259,6 +3259,42 @@ class EdificiMapaEndpointTests(BaseTestData):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+class EdificiCercaTests(BaseTestData):
+    def setUp(self):
+        super().setUp()
+        self.user = self._create_user("cercador@test.com", RoleChoices.OWNER)
+
+        loc1 = Localitzacio.objects.create(carrer="Carrer de Mallorca", numero=10, codiPostal="08001")
+        Edifici.objects.create(
+            localitzacio=loc1,
+            anyConstruccio=1990,
+            tipologia=TipusEdifici.RESIDENCIAL,
+            superficieTotal=500.0
+        )
+
+        loc2 = Localitzacio.objects.create(carrer="Carrer de València", numero=20, codiPostal="08002")
+        Edifici.objects.create(
+            localitzacio=loc2,
+            anyConstruccio=1985,
+            tipologia=TipusEdifici.RESIDENCIAL,
+            superficieTotal=450.0
+        )
+
+    def test_cerca_retorna_edificis_correctes(self):
+        self.client.force_authenticate(user=self.user)
+        url = reverse('edifici-cerca-per-carrer')
+        response = self.client.get(url, {'q': 'Mallorca'})
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['localitzacio']['carrer'], "Carrer de Mallorca")
+
+    def test_cerca_buida_no_retorna_res(self):
+        self.client.force_authenticate(user=self.user)
+        url = reverse('edifici-cerca-per-carrer')
+        response = self.client.get(url, {'q': 'Ma'})
+        self.assertEqual(len(response.data), 0)
 
 # ============================================================================
 # THIRD PARTY SERVICE — POST /api/third-party/score/

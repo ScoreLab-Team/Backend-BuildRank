@@ -28,32 +28,37 @@ services:
       timeout: 3s
       retries: 5
 
+  # Ollama — LLM local
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    expose:
+      - "11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   # Django amb Gunicorn
   web:
     build: ./backend
-    env_file:
-      - ./backend/.env
     volumes:
       - ./backend:/app
       - static_volume:/app/staticfiles
       - media_volume:/app/verifications
     command: sh -c "python manage.py collectstatic --noinput && gunicorn --config gunicorn.conf.py config.wsgi:application"
     environment:
-      DEBUG:       "True"
-      ENVIRONMENT: "development"
-      ALLOWED_HOSTS: "${ALLOWED_HOSTS:-*}"
-      CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080}"
-      CSRF_TRUSTED_ORIGINS: "${CSRF_TRUSTED_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080}"
-      CORS_ALLOW_ALL_ORIGINS: "${CORS_ALLOW_ALL_ORIGINS:-True}"
-      CORS_ALLOW_CREDENTIALS: "${CORS_ALLOW_CREDENTIALS:-True}"
-      STREAM_TOKEN_EXPIRATION_SECONDS: "${STREAM_TOKEN_EXPIRATION_SECONDS:-3600}"
-      GOOGLE_OAUTH_CLIENT_ID: "${GOOGLE_OAUTH_CLIENT_ID:-}"
-      DB_HOST:     db
-      DB_PORT:     "5432"
-      DB_NAME:     buildrank
-      DB_USER:     buildrank_user
-      DB_PASSWORD: buildrank_pass
+      DEBUG:              "True"
+      DB_HOST:            db
+      DB_PORT:            "5432"
+      DB_NAME:            buildrank
+      DB_USER:            buildrank_user
+      DB_PASSWORD:        buildrank_pass
       CELERY_BROKER_URL:  redis://redis:6379/0
+      OLLAMA_BASE_URL:    http://ollama:11434
     depends_on:
       db:
         condition: service_healthy
@@ -62,12 +67,12 @@ services:
     expose:
       - "8000"
 
-  # Celery worker — processa el pipeline OCR + LLM
+  # Celery worker — pipeline OCR + LLM
   celery_worker:
     build: ./backend
     volumes:
       - ./backend:/app
-      - media_volume:/app/verifications   # mateix volum que web per accedir als fitxers
+      - media_volume:/app/verifications
     command: celery -A config worker --loglevel=info --concurrency=2
     environment:
       DEBUG:              "True"
@@ -77,10 +82,13 @@ services:
       DB_USER:            buildrank_user
       DB_PASSWORD:        buildrank_pass
       CELERY_BROKER_URL:  redis://redis:6379/0
+      OLLAMA_BASE_URL:    http://ollama:11434
     depends_on:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      ollama:
         condition: service_healthy
 
   # Nginx com a reverse proxy
@@ -98,3 +106,4 @@ volumes:
   postgres_data:
   static_volume:
   media_volume:
+  ollama_data:

@@ -1,4 +1,7 @@
 from django.db.models import Q
+from django.db.models import F
+from django.db.models.functions import Rank
+from django.db.models.expressions import Window
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -70,35 +73,32 @@ class TemporadaViewSet(viewsets.ModelViewSet):
             lliga__temporada=temporada
         )
 
-        # Filtre per grup comparable, si no existeix retorna error
         if group_id:
-
             if not GrupComparable.objects.filter(idGrup=group_id).exists():
                 raise NotFound("Invalid group")
-
             qs = qs.filter(
                 edifici__grupComparable__idGrup=group_id
             )
 
-        # Filtre per lliga, si no existeix retorna error
         if league_id:
-
             if not Lliga.objects.filter(
                     id=league_id,
                     temporada=temporada
             ).exists():
                 raise NotFound("Invalid league")
-
             qs = qs.filter(lliga_id=league_id)
 
-        # Cerca per carrer, si es demana
         if search:
-
             qs = qs.filter(
                 edifici__localitzacio__carrer__icontains=search
             )
 
-        qs = qs.order_by("-puntuacio")
+        qs = qs.annotate(
+            posicio_calculada=Window(
+                expression=Rank(),
+                order_by=F("puntuacio").desc()
+            )
+        ).order_by("-puntuacio")
 
         paginator = RankingPagination()
 
@@ -106,7 +106,12 @@ class TemporadaViewSet(viewsets.ModelViewSet):
 
         serializer = RankingSerializer(page, many=True)
 
-        return paginator.get_paginated_response(serializer.data)
+        data = serializer.data
+
+        for item, participacio in zip(data, page):
+            item["posicio"] = participacio.posicio_calculada
+
+        return paginator.get_paginated_response(data)
 
     @action(detail=True, methods=["get"])
     def posicio_edifici(self, request, pk=None):

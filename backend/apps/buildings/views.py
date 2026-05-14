@@ -639,7 +639,24 @@ class EdificiViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
+    
+    @action(detail=False, methods=['get'], url_path='cerca')
+    def cerca_per_carrer(self, request):
+        """
+        Endpoint per buscar edificis pel nom del carrer.
+        """
+        query = request.query_params.get('q', '')
 
+        if not query or len(query) < 3:
+            return Response([], status=status.HTTP_200_OK)
+        
+        edificis = Edifici.objects.filter(
+            localitzacio__carrer__icontains=query
+        ).select_related('localitzacio').distinct()
+
+        edificis = edificis[:15]
+        serializer = EdificiListSerializer(edificis, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 class MilloraImplementadaViewSet(viewsets.GenericViewSet):
     queryset = MilloraImplementada.objects.select_related("millora", "edifici")

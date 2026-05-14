@@ -216,9 +216,11 @@ class HabitatgeMeUpdateSerializer(serializers.ModelSerializer):
     
 # Edifici 1. Llistat lleuger
 class EdificiListSerializer(serializers.ModelSerializer):
+    localitzacio = LocalitzacioSerializer(read_only=True)
+    
     class Meta:
         model = Edifici
-        fields = ['idEdifici', 'tipologia', 'anyConstruccio', 'superficieTotal', 'puntuacioBase']
+        fields = ['idEdifici', 'localitzacio', 'tipologia', 'anyConstruccio', 'superficieTotal', 'puntuacioBase']
 
 class EdificiMapSerializer(serializers.ModelSerializer):
     """

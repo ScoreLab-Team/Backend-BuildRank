@@ -20,6 +20,8 @@ services:
   # Django con Gunicorn
   web:
     build: ./backend
+    env_file:
+      - ./backend/.env
     volumes:
       - ./backend:/app   # monta el código para que --reload funcione en desarrollo
       - static_volume:/app/staticfiles
@@ -32,8 +34,6 @@ services:
       CSRF_TRUSTED_ORIGINS: "${CSRF_TRUSTED_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080}"
       CORS_ALLOW_ALL_ORIGINS: "${CORS_ALLOW_ALL_ORIGINS:-True}"
       CORS_ALLOW_CREDENTIALS: "${CORS_ALLOW_CREDENTIALS:-True}"
-      STREAM_API_KEY: "${STREAM_API_KEY:-}"
-      STREAM_API_SECRET: "${STREAM_API_SECRET:-}"
       STREAM_TOKEN_EXPIRATION_SECONDS: "${STREAM_TOKEN_EXPIRATION_SECONDS:-3600}"
       GOOGLE_OAUTH_CLIENT_ID: "${GOOGLE_OAUTH_CLIENT_ID:-}"
       DB_HOST:     db

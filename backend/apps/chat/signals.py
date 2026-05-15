@@ -47,10 +47,16 @@ def add_tenant_to_building_channel(sender, instance, **kwargs):
     if not instance.usuari_id or not _stream_is_configured():
         return
 
-    from .services import _ensure_building_channel, get_stream_client, get_stream_user_id
+    from .services import (
+        _ensure_building_channel,
+        get_stream_client,
+        get_stream_user_id,
+        sync_user_to_stream,
+    )
 
     try:
         client = get_stream_client()
+        sync_user_to_stream(client, instance.usuari)
         stream_uid = get_stream_user_id(instance.usuari)
         _ensure_building_channel(client, instance.edifici, stream_uid)
     except Exception:

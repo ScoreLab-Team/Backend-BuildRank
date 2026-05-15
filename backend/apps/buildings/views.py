@@ -769,13 +769,27 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Posem l'estat en revisió i guardem qui és l'usuari que ho demana
+        # Bloquejar si l'estat ja és 'Validada'
+        if habitatge.estatValidacio == EstatValidacio.VALIDADA:
+            return Response(
+                {"error": "Aquest habitatge ja ha estat validat prèviament."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Evitar trepitjar una sol·licitud pendent d'un altre usuari
+        if habitatge.solicitant and habitatge.solicitant != request.user:
+            return Response(
+                {"error": "Ja hi ha una sol·licitud pendent per aquest habitatge."},
+                status=status.HTTP_409_CONFLICT
+            )
+        
+        # Guardem la sol·licitud, posem l'estat en revisió i guardem qui és l'usuari que ho demana
         habitatge.estatValidacio = EstatValidacio.EN_REVISIO
         habitatge.solicitant = request.user
         habitatge.save(update_fields=['estatValidacio', 'solicitant'])
 
         return Response(
-            {"detail": "Sol·licitud enviada correctament. Pendent de l'aprovació de l'Administrador."},
+            {"detail": "Sol·licitud enviada correctament."},
             status=status.HTTP_200_OK
         )
     
@@ -783,6 +797,13 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
     def validar_acces(self, request, pk=None):
         # L'Administrador de finca aprova o rebutja la sol·licitud
         habitatge = self.get_object()
+
+        if habitatge.usuari is not None:
+            return Response(
+                {"error": "Aquest habitatge ja té un resident vinculat."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
 
         # Només l'admin d'aquest edifici pot validar-ho
         if habitatge.edifici.administradorFinca != request.user:
@@ -812,13 +833,9 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
             )
         
         elif nouEstat == EstatValidacio.REBUTJADA:
-            # habitatge.estatValidacio = EstatValidacio.REBUTJADA
-            # habitatge.solicitant = None
-            # habitatge.save(update_fields=['estatValidacio', 'solicitant'])
-
-            # decidim eliminar l'habitatge, si la sol·licitud queda rebutjada per l'admin de finca
-            habitatge.delete()
-            return Response({"message": "Sol·licitud rebutjada i habitatge eliminat."}, status=status.HTTP_204_NO_CONTENT)
+            habitatge.estatValidacio = EstatValidacio.REBUTJADA
+            habitatge.solicitant = None
+            habitatge.save()
         
         return Response({"error": "Estat no vàlid."}, status=status.HTTP_400_BAD_REQUEST)
         

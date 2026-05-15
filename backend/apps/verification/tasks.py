@@ -19,9 +19,9 @@ def process_verification(self, verification_id: int) -> dict:
     """
     Pipeline principal de verificació documental.
 
-    Pas 1 (Sprint 2): OCR de cada document          ✅
-    Pas 2 (Sprint 3): Extracció estructurada Ollama  ✅
-    Pas 3 (Sprint 4): Scoring i validació            ← pendent
+    Pas 1 (Part 2): OCR de cada document          
+    Pas 2 (Part 3): Extracció estructurada Ollama  
+    Pas 3 (Part 4): Scoring i validació            ← pendent
     """
     logger.info("Iniciant pipeline verificació #%s", verification_id)
 

@@ -10,6 +10,7 @@ from .models import (
 )
 from .services.ocr import extract_text
 from .services.extractor import extract_structured_data, check_ollama_available
+from .services.scorer import compute_score
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +20,9 @@ def process_verification(self, verification_id: int) -> dict:
     """
     Pipeline principal de verificació documental.
 
-    Pas 1 (Part 2): OCR de cada document          
-    Pas 2 (Part 3): Extracció estructurada Ollama  
-    Pas 3 (Part 4): Scoring i validació            ← pendent
+    Pas 1 (Part 2): OCR de cada document
+    Pas 2 (Part 3): Extracció estructurada Ollama
+    Pas 3 (Part 4): Scoring i validació            ← implementat
     """
     logger.info("Iniciant pipeline verificació #%s", verification_id)
 
@@ -43,21 +44,23 @@ def process_verification(self, verification_id: int) -> dict:
         # ── Pas 2: Extracció LLM ────────────────────────────────────────────
         resultats_extraccio = _run_extraction_pipeline(verification)
 
-        # ── Pas 3: Scoring (Sprint 4) ────────────────────────────────────────
-        # _run_scoring_pipeline(verification, resultats_extraccio)
+        # ── Pas 3: Scoring ───────────────────────────────────────────────────
+        resultat_scoring = _run_scoring_pipeline(verification, resultats_extraccio)
 
         verification.status = AdminFincaDocumentVerification.Status.REVIEW
         verification.save(update_fields=['status', 'updated_at'])
 
         logger.info(
-            "Pipeline verificació #%s completat. OCR: %d docs, Extracció: %d docs",
-            verification_id, len(resultats_ocr), len(resultats_extraccio)
+            "Pipeline verificació #%s completat. OCR: %d docs, Extracció: %d docs, Score: %.4f",
+            verification_id, len(resultats_ocr), len(resultats_extraccio),
+            resultat_scoring.get('score_final', 0),
         )
         return {
-            'verification_id': verification_id,
-            'documents_processats': len(resultats_ocr),
-            'resultats_ocr': resultats_ocr,
-            'resultats_extraccio': resultats_extraccio,
+            'verification_id':       verification_id,
+            'documents_processats':  len(resultats_ocr),
+            'resultats_ocr':         resultats_ocr,
+            'resultats_extraccio':   resultats_extraccio,
+            'scoring':               resultat_scoring,
         }
 
     except Exception as exc:
@@ -95,7 +98,7 @@ def _run_ocr_pipeline(verification: AdminFincaDocumentVerification) -> list[dict
                 'ok': True,
             })
             logger.info(
-                "  ✓ Document #%s: %d caràcters, confiança %.2f",
+                "  Document #%s: %d caràcters, confiança %.2f",
                 doc.pk, len(text), confidence
             )
 
@@ -161,6 +164,105 @@ def _run_extraction_pipeline(verification: AdminFincaDocumentVerification) -> li
             })
 
     return resultats
+
+
+def _run_scoring_pipeline(
+    verification: AdminFincaDocumentVerification,
+    resultats_extraccio: list[dict],
+) -> dict:
+    """
+    Calcula el score de confiança per a cada document amb extracció OK
+    i després agrega un score final per a tota la verificació.
+
+    Estratègia d'agregació: màxim dels scores individuals.
+    Raó: en una verificació multi-document, n'hi ha prou que UN document
+    sigui de bona qualitat per considerar la verificació vàlida.
+    Si la verificació té un sol document, és el seu propi màxim.
+
+    Desa a la verificació:
+      - score          → float 0-1
+      - score_flags    → llista de problemes (JSONField)
+      - suggeriment    → text per a l'operador
+    """
+    if not resultats_extraccio:
+        logger.warning("  Scoring: cap resultat d'extracció disponible.")
+        verification.score       = 0.0
+        verification.score_flags = ["Sense dades extretes per calcular score"]
+        verification.suggeriment = "Rebuig recomanat — sense dades extretes."
+        verification.save(update_fields=['score', 'score_flags', 'suggeriment'])
+        return {'score_final': 0.0, 'scores_per_document': []}
+
+    scores_per_doc = []
+
+    for doc in verification.documents.filter(extracted_data__isnull=False):
+        extracted = doc.extracted_data
+        if not extracted:
+            continue
+
+        logger.info("  Scoring document #%s [%s]...", doc.pk, doc.doc_type)
+        result = compute_score(extracted)
+
+        # Guarda score i flags al document individual
+        with transaction.atomic():
+            doc.score       = result.score
+            doc.score_flags = result.flags
+            doc.save(update_fields=['score', 'score_flags'])
+
+        scores_per_doc.append({
+            'document_id': doc.pk,
+            'doc_type':    doc.doc_type,
+            'score':       result.score,
+            'flags':       result.flags,
+            'detall':      result.detall,
+        })
+        logger.info(
+            "  ✓ Document #%s: score=%.4f | %s",
+            doc.pk, result.score, result.suggeriment,
+        )
+
+    if not scores_per_doc:
+        score_final     = 0.0
+        flags_agregats  = ["Cap document amb dades extretes vàlides"]
+        suggeriment     = "Rebuig recomanat — cap document puntuable."
+    else:
+        # El document millor representa la verificació
+        millor = max(scores_per_doc, key=lambda d: d['score'])
+        score_final    = millor['score']
+        flags_agregats = millor['flags']
+
+        # Recalcula suggeriment a nivell de verificació
+        from .services.scorer import LLINDAR_APROVAT, LLINDAR_REVISAR
+        n_docs = len(scores_per_doc)
+        if score_final >= LLINDAR_APROVAT:
+            suggeriment = (
+                f"Acceptable (score {score_final:.2f}, {n_docs} doc(s)) — "
+                "revisió superficial suficient."
+            )
+        elif score_final >= LLINDAR_REVISAR:
+            suggeriment = (
+                f"Revisió detallada recomanada (score {score_final:.2f}, {n_docs} doc(s)) — "
+                f"{len(flags_agregats)} incidència(es)."
+            )
+        else:
+            suggeriment = (
+                f"Rebuig recomanat (score {score_final:.2f}, {n_docs} doc(s)) — "
+                "qualitat insuficient."
+            )
+
+    with transaction.atomic():
+        verification.score       = score_final
+        verification.score_flags = flags_agregats
+        verification.suggeriment = suggeriment
+        verification.save(update_fields=['score', 'score_flags', 'suggeriment'])
+
+    logger.info(
+        "  Score final verificació #%s: %.4f — %s",
+        verification.pk, score_final, suggeriment,
+    )
+    return {
+        'score_final':        score_final,
+        'scores_per_document': scores_per_doc,
+    }
 
 
 def _calcular_ocr_confidence(text: str) -> float:

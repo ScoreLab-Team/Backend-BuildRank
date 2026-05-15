@@ -25,6 +25,10 @@ class AdminFincaDocumentVerification(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     celery_task_id = models.CharField(max_length=255, blank=True)
 
+    score       = models.FloatField(null=True, blank=True)
+    score_flags = models.JSONField(default=list, blank=True)
+    suggeriment = models.TextField(blank=True, default='')
+
 
 class AdminFincaVerificationDocument(models.Model):
     """Cada fitxer individual dins d'una verificació."""
@@ -49,6 +53,9 @@ class AdminFincaVerificationDocument(models.Model):
     extracted_data = models.JSONField(null=True, blank=True)
     confidence    = models.FloatField(null=True, blank=True)
     created_at    = models.DateTimeField(auto_now_add=True)
+
+    score       = models.FloatField(null=True, blank=True)
+    score_flags = models.JSONField(default=list, blank=True)
 
 
 class AdminFincaVerificationResult(models.Model):

@@ -9,6 +9,11 @@ class RoleChoices(models.TextChoices):
     OWNER = "owner", "Propietari"
     TENANT = "tenant", "Llogater"
 
+class ValidacioAdmin(models.TextChoices):
+    PENDENT = "pendent", "Pendent de validació"
+    APROVAT = "aprovat", "Aprovat"
+    REBUTJAT = "rebutjat", "Rebutjat"
+
 class User(AbstractUser):
     username = None
     email = models.EmailField(unique=True)
@@ -31,11 +36,65 @@ class Profile(models.Model):
         choices=RoleChoices.choices,
         default=RoleChoices.OWNER,
     )
+
+    # Validació Admin de Finca
+    estatValidacioAdmin = models.CharField(
+        max_length=50,
+        choices=ValidacioAdmin.choices,
+        default=ValidacioAdmin.PENDENT,
+    )
+
+    documentPadro = models.FileField(
+        upload_to='documents_admin/',
+        null = True,
+        blank=True,
+        help_text="Document acreditatiu de l'administrador de finca."
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.user.email} - {self.role}"
+        return f"{self.user.email} - {self.role} ({self.estatValidacioAdmin})"
+
+
+class TokenLoginLog(models.Model):
+    """
+    Registro de auditoría de logins/logouts para análisis de patrones de acceso.
+    Se mantiene separado de los tokens activos (OutstandingToken/BlacklistedToken) 
+    para evitar impacto en performance y tener histórico limpio.
+    """
+    LOGIN = 'login'
+    LOGOUT = 'logout'
+    EXPIRED = 'expired'
+    REVOKED = 'revoked'
+    
+    STATUS_CHOICES = [
+        (LOGIN, 'Login'),
+        (LOGOUT, 'Logout'),
+        (EXPIRED, 'Expirado'),
+        (REVOKED, 'Revocado'),
+    ]
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='token_login_logs')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    login_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    logout_at = models.DateTimeField(null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True)
+    jti = models.CharField(max_length=255, unique=True, db_index=True)
+    
+    class Meta:
+        ordering = ['-login_at']
+        verbose_name_plural = 'Token Login Logs'
+        indexes = [
+            models.Index(fields=['user', '-login_at']),
+            models.Index(fields=['status', '-login_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.email} – {self.status} @ {self.login_at}"
 
 
 class AccessDenialLog(models.Model):

@@ -190,6 +190,8 @@ enum LletraEnergetica {
 enum TipusEdifici {
   Residencial
   Comercial
+  Sanitari
+  Educatiu
   Mixt
 }
 

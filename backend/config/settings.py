@@ -15,6 +15,25 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+
+    if value is None:
+        return default
+
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_list(name: str, default: str = "") -> list[str]:
+    value = os.environ.get(name, default)
+
+    return [
+        item.strip()
+        for item in value.split(",")
+        if item.strip()
+    ]
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -28,10 +47,15 @@ load_dotenv(BASE_DIR / ".env")
 SECRET_KEY = 'django-insecure-fvw+7u7o-m!1$r0hy6=7q#xb*l-#f9#ink&hk4153utnf^$3w)'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv("DEBUG", "True").lower() == "true"
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
+
+DEBUG = env_bool("DEBUG", default=ENVIRONMENT != "production")
 ENABLE_DEBUG_TOOLBAR = os.getenv("ENABLE_DEBUG_TOOLBAR", "False").lower() == "true"
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = env_list(
+    "ALLOWED_HOSTS",
+    default="localhost,127.0.0.1,0.0.0.0",
+)
 
 
 # Application definition
@@ -51,6 +75,11 @@ INSTALLED_APPS = [
     'apps.accounts',
 
     'apps.buildings',
+
+    'apps.seasons',
+    'apps.leagues',
+    'apps.participations',
+    "apps.chat",
 ]
 
 MIDDLEWARE = [
@@ -137,14 +166,13 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
-CORS_ALLOW_ALL_ORIGINS = True
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -155,6 +183,19 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    # Rate limiting: protegir contra brute force, token abuse, DoS
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '5/min',           # Muy restrictivo: previne brute force desde IPs desconocidas
+        'user': '100/min',         # Usuario típico: ~5-10 requests/min
+        'auth': '3/min',           # Auth endpoints general: 3 req/min (brute force)
+        'login': '3/min',          # Login: 3 intentos/min por IP → previene credential stuffing
+        'register': '5/hour',      # Register: 5 registros/hora por IP → evita account enumeration
+        'refresh': '20/min',       # Refresh: 20 req/min → uso normal sin abuse
+    }
 }
 
 AUTH_USER_MODEL = 'accounts.User'
@@ -162,9 +203,13 @@ AUTH_USER_MODEL = 'accounts.User'
 from datetime import timedelta
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    # Access token corto (30 min) → equilibrio entre UX y seguridad
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
+    # Refresh token más largo (7 días) → permite sesión prolongada
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    # Rotación: cada refresh genera nuevo token (más seguro ante reuse robado)
     'ROTATE_REFRESH_TOKENS': True,
+    # Blacklist: marca como revocado el refresh anterior al rotar
     'BLACKLIST_AFTER_ROTATION': True,
 }
 
@@ -175,3 +220,55 @@ if DEBUG:
         INTERNAL_IPS = [ip[:-1] + '1' for ip in ips] + ['127.0.0.1', '10.0.2.2']
     except Exception:
         INTERNAL_IPS = ['127.0.0.1']
+
+
+# Third-party API key 
+THIRD_PARTY_API_KEY = os.getenv("THIRD_PARTY_API_KEY")
+
+# -----------------------------------------------------------------------------
+# Entorns / CORS / CSRF
+# -----------------------------------------------------------------------------
+# Les variables següents permeten separar comportament de desenvolupament,
+# test i producció sense modificar el codi. En producció NO s'hauria d'usar
+# CORS_ALLOW_ALL_ORIGINS=True.
+
+CORS_ALLOW_ALL_ORIGINS = env_bool("CORS_ALLOW_ALL_ORIGINS", default=False)
+
+CORS_ALLOWED_ORIGINS = env_list(
+    "CORS_ALLOWED_ORIGINS",
+    default=(
+        "http://localhost,"
+        "http://127.0.0.1,"
+        "http://localhost:3000,"
+        "http://127.0.0.1:3000,"
+        "http://localhost:5173,"
+        "http://127.0.0.1:5173,"
+        "http://localhost:8080,"
+        "http://127.0.0.1:8080"
+    ),
+)
+
+CSRF_TRUSTED_ORIGINS = env_list(
+    "CSRF_TRUSTED_ORIGINS",
+    default=(
+        "http://localhost,"
+        "http://127.0.0.1,"
+        "http://localhost:3000,"
+        "http://127.0.0.1:3000,"
+        "http://localhost:5173,"
+        "http://127.0.0.1:5173,"
+        "http://localhost:8080,"
+        "http://127.0.0.1:8080"
+    ),
+)
+
+CORS_ALLOW_CREDENTIALS = env_bool("CORS_ALLOW_CREDENTIALS", default=True)
+
+
+# GetStream Chat
+STREAM_API_KEY = os.getenv("STREAM_API_KEY", "")
+STREAM_API_SECRET = os.getenv("STREAM_API_SECRET", "")
+STREAM_TOKEN_EXPIRATION_SECONDS = int(os.getenv("STREAM_TOKEN_EXPIRATION_SECONDS", "3600"))
+
+# Google OAuth / Sign-In
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")

@@ -2,20 +2,25 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework_simplejwt.views import TokenRefreshView as SimpleJWTTokenRefreshView
 
 from apps.accounts.models import RoleChoices
 from apps.buildings.models import Edifici, Habitatge
 from apps.accounts.permissions import IsAdminSistema, IsAdminFinca, ABACMixin
+from apps.accounts.throttles import LoginThrottle, RegisterThrottle, RefreshThrottle
 from apps.accounts.serializers import (
     RegisterSerializer, LoginSerializer, LogoutSerializer, MeSerializer,
+    PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
+    AccountUpdateSerializer, RoleUpdateSerializer,
     EdificiResumSerializer, HabitatgeResumSerializer,
     AssignarResidentSerializer, AssignarAdminSerializer,
+    GoogleOAuthSerializer,
 )
-
 
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
+    throttle_classes = [RegisterThrottle]
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -35,6 +40,7 @@ class RegisterView(generics.CreateAPIView):
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [LoginThrottle]
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -58,6 +64,37 @@ class LoginView(APIView):
             status=status.HTTP_200_OK,
         )
 
+
+class GoogleOAuthView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [LoginThrottle]
+
+    def post(self, request):
+        serializer = GoogleOAuthSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.save()
+        user = data["user"]
+
+        return Response(
+            {
+                "access": data["access"],
+                "refresh": data["refresh"],
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
+                    "role": user.profile.role,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class TokenRefreshView(SimpleJWTTokenRefreshView):
+    throttle_classes = [RefreshThrottle]
+
+
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -71,12 +108,59 @@ class LogoutView(APIView):
             status=status.HTTP_200_OK,
         )
 
+class PasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [LoginThrottle]
+
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reset_data = serializer.save()
+
+        response_data = {
+            "detail": "Si el correu existeix, s'han generat instruccions per restablir la contrasenya."
+        }
+
+        # MVP: retornem uid/token només si existeix usuari per facilitar integració frontend.
+        # En producció s'hauria d'enviar per email i no retornar el token a la resposta.
+        if reset_data:
+            response_data.update(reset_data)
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+class PasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [LoginThrottle]
+
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(
+            {"detail": "Contrasenya restablerta correctament."},
+            status=status.HTTP_200_OK,
+        )
+
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         serializer = MeSerializer(request.user)
         return Response(serializer.data)
+
+    def put(self, request):
+        serializer = AccountUpdateSerializer(request.user, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(MeSerializer(user).data, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        serializer = AccountUpdateSerializer(request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(MeSerializer(user).data, status=status.HTTP_200_OK)
 
 
 # ---------------------------------------------------------------------------
@@ -88,18 +172,20 @@ class MeEdificisView(APIView):
 
     def get(self, request):
         user = request.user
-        role = getattr(getattr(user, 'profile', None), 'role', None)
+        role = getattr(getattr(user, "profile", None), "role", None)
 
-        if role == RoleChoices.ADMIN:
-            edificis = Edifici.objects.select_related('localitzacio').all()
-        elif role == RoleChoices.OWNER:
-            # AdminFinca: edificis de la seva cartera
-            edificis = user.edificis_administrats.select_related('localitzacio').all()
+        if user.is_superuser:
+            edificis = Edifici.objects.select_related("localitzacio").all()
+        elif role == RoleChoices.ADMIN:
+            # Admin de finca: edificis de la seva cartera
+            edificis = user.edificis_administrats.select_related("localitzacio").all()
         else:
-            # Resident/Llogater: edificis on té habitatge
-            edificis = Edifici.objects.select_related('localitzacio').filter(
-                habitatges__usuari=user
-            ).distinct()
+            # Owner / Tenant: edificis on té vinculació per habitatge
+            edificis = (
+                Edifici.objects.select_related("localitzacio")
+                .filter(habitatges__usuari=user)
+                .distinct()
+            )
 
         serializer = EdificiResumSerializer(edificis, many=True)
         return Response(serializer.data)
@@ -154,3 +240,25 @@ class AssignarAdminEdificiView(APIView):
         edifici.save(update_fields=['administradorFinca_id'])
 
         return Response(EdificiResumSerializer(edifici).data)
+
+# ---------------------------------------------------------------------------
+# Canvi de rol (US5)
+# ---------------------------------------------------------------------------
+
+class MeRoleView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        serializer = RoleUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        profile = request.user.profile
+        new_role = serializer.validated_data["role"]
+
+        profile.role = new_role
+        profile.save(update_fields=["role", "updated_at"])
+
+        return Response(
+            MeSerializer(request.user).data,
+            status=status.HTTP_200_OK
+        )

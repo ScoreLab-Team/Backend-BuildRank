@@ -1,4 +1,5 @@
 import logging
+import threading
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -15,6 +16,12 @@ from .services import (
 )
 
 logger = logging.getLogger(__name__)
+
+def _provision_channels_bg(user):
+    try:
+        get_or_create_channels_for_user(user)
+    except Exception:
+        logger.warning("Background provision failed for user %s.", user.id, exc_info=True)
 
 
 class ChatTokenView(APIView):
@@ -38,6 +45,12 @@ class ChatTokenView(APIView):
                 {"detail": "Error de connexió amb el servei de xat."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
+
+        threading.Thread(
+            target=_provision_channels_bg,
+            args=(request.user,),
+            daemon=True,
+        ).start()
 
         return Response({
             "provider": "getstream",

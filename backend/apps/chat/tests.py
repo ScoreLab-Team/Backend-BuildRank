@@ -125,10 +125,11 @@ class ChatTokenTests(APITestCase):
     @override_settings(
         STREAM_API_KEY="k", STREAM_API_SECRET="s", STREAM_TOKEN_EXPIRATION_SECONDS=3600
     )
+    @patch("apps.chat.views.get_or_create_channels_for_user")
     @patch("apps.chat.services.logger")
     @patch("apps.chat.services.sync_user_to_stream", side_effect=Exception("stream down"))
     @patch("apps.chat.services.StreamChat")
-    def test_sync_failure_does_not_block_token_generation(self, mock_stream_class, _, __):
+    def test_sync_failure_does_not_block_token_generation(self, mock_stream_class, _, __, ___):
         mock_client = MagicMock()
         mock_client.create_token.return_value = "valid.token"
         mock_stream_class.return_value = mock_client

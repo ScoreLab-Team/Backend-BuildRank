@@ -694,3 +694,108 @@ class TemporadaRankingAPITest(APITestCase):
 
         self.assertTrue(response.data["grup_comparat"])
         self.assertIn("grup_utilitzat", response.data)
+
+
+    def test_ranking_global_recalcula_posicions_per_temporada(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/ranking/'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.data["results"]
+
+        self.assertEqual(results[0]["puntuacio"], 95)
+        self.assertEqual(results[0]["posicio"], 1)
+
+        self.assertEqual(results[1]["puntuacio"], 80)
+        self.assertEqual(results[1]["posicio"], 2)
+
+        self.assertEqual(results[2]["puntuacio"], 70)
+        self.assertEqual(results[2]["posicio"], 3)
+
+    def test_ranking_per_lliga_mante_posicions_correctes(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/ranking/'
+            f'?league={self.lliga_gold.pk}'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.data["results"]
+
+        self.assertEqual(len(results), 2)
+
+        self.assertEqual(results[0]["puntuacio"], 95)
+        self.assertEqual(results[0]["posicio"], 1)
+
+        self.assertEqual(results[1]["puntuacio"], 70)
+        self.assertEqual(results[1]["posicio"], 2)
+
+    def test_ranking_per_grup_recalcula_posicions(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/ranking/?group=1'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.data["results"]
+
+        self.assertEqual(len(results), 2)
+
+        self.assertEqual(results[0]["puntuacio"], 95)
+        self.assertEqual(results[0]["posicio"], 1)
+
+        self.assertEqual(results[1]["puntuacio"], 80)
+        self.assertEqual(results[1]["posicio"], 2)
+
+    def test_ranking_group_i_lliga_recalcula_posicions_correctament(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/ranking/'
+            f'?group=1&league={self.lliga_gold.pk}'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.data["results"]
+
+        self.assertEqual(len(results), 1)
+
+        self.assertEqual(results[0]["puntuacio"], 95)
+        self.assertEqual(results[0]["posicio"], 1)
+
+    def test_ranking_search_recalcula_posicio_sobre_resultat_filtrat(self):
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/ranking/?search=gran'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.data["results"]
+
+        self.assertEqual(len(results), 1)
+
+        self.assertEqual(results[0]["edifici"], self.edifici_3.idEdifici)
+        self.assertEqual(results[0]["posicio"], 1)
+
+    def test_ranking_no_utilitza_posicions_guardades_originals(self):
+
+        self.assertEqual(self.p1.posicio, 1)
+        self.assertEqual(self.p2.posicio, 1)
+
+        response = self.client.get(
+            f'/api/seasons/{self.temporada.pk}/ranking/'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.data["results"]
+
+        posicions = [r["posicio"] for r in results]
+
+        self.assertEqual(posicions, [1, 2, 3])

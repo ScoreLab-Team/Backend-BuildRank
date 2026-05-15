@@ -17,7 +17,6 @@ from .services import (
 
 logger = logging.getLogger(__name__)
 
-
 def _provision_channels_bg(user):
     try:
         get_or_create_channels_for_user(user)

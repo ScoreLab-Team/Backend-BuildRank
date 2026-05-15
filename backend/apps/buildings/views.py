@@ -21,7 +21,8 @@ from .models import (
     CatalegMillora, SimulacioMillora, SimulacioMilloraItem, MilloraImplementada,
 )
 from .serializers import (
-    EdificiDetailSerializer, EdificiListSerializer,
+    EdificiDetailSerializer, EdificiListSerializer, EdificiMapSerializer,
+    EdificiCercaSerializer,
     HabitatgeDetailSerializer, HabitatgeMeUpdateSerializer, HabitatgeResumSerializer,
     LocalitzacioSerializer, DadesEnergetiquesSerializer,
     RankingSerializer,
@@ -514,7 +515,148 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         serializer = MilloraImplementadaSerializer(implementacions, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="mapa",
+        permission_classes=[IsAuthenticated],
+    )
+    def mapa(self, request):
+        """
+        GET /api/buildings/edificis/mapa/
 
+        Retorna els edificis actius amb coordenades vàlides en format GeoJSON.
+
+        Query params opcionals:
+        - scope=public|mine
+        - bbox=minLng,minLat,maxLng,maxLat
+        - tipologia=Residencial
+        - score_min=60
+        - q=text
+        - limit=500
+        """
+        scope = request.query_params.get("scope", "public").lower().strip()
+
+        if scope == "mine":
+            queryset = self.get_queryset()
+        else:
+            queryset = Edifici.actius.all()
+
+        queryset = (
+            queryset
+            .select_related("localitzacio", "grupComparable")
+            .filter(
+                localitzacio__isnull=False,
+                localitzacio__latitud__isnull=False,
+                localitzacio__longitud__isnull=False,
+            )
+            .exclude(localitzacio__latitud=0.0)
+            .exclude(localitzacio__longitud=0.0)
+        )
+
+        tipologia = request.query_params.get("tipologia")
+        if tipologia:
+            queryset = queryset.filter(tipologia=tipologia)
+
+        search = request.query_params.get("q", "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(localitzacio__carrer__icontains=search)
+                | Q(localitzacio__barri__icontains=search)
+                | Q(localitzacio__codiPostal__icontains=search)
+            )
+
+        score_min_raw = request.query_params.get("score_min")
+        if score_min_raw:
+            try:
+                score_min = float(score_min_raw)
+            except ValueError:
+                return Response(
+                    {"detail": "El paràmetre score_min ha de ser numèric."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            queryset = queryset.filter(
+                Q(puntuacioBase__gte=score_min)
+                | Q(puntuacioBaseOpenData__gte=score_min)
+            )
+
+        bbox_raw = request.query_params.get("bbox")
+        if bbox_raw:
+            try:
+                min_lng, min_lat, max_lng, max_lat = [
+                    float(value.strip())
+                    for value in bbox_raw.split(",")
+                ]
+            except ValueError:
+                return Response(
+                    {
+                        "detail": (
+                            "El paràmetre bbox ha de tenir el format "
+                            "minLng,minLat,maxLng,maxLat."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            queryset = queryset.filter(
+                localitzacio__longitud__gte=min_lng,
+                localitzacio__longitud__lte=max_lng,
+                localitzacio__latitud__gte=min_lat,
+                localitzacio__latitud__lte=max_lat,
+            )
+
+        limit_raw = request.query_params.get("limit", "500")
+        try:
+            limit = int(limit_raw)
+        except ValueError:
+            return Response(
+                {"detail": "El paràmetre limit ha de ser un enter."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        limit = max(1, min(limit, 1000))
+
+        total = queryset.count()
+        queryset = queryset.order_by("idEdifici")[:limit]
+
+        serializer = EdificiMapSerializer(
+            queryset,
+            many=True,
+            context={"request": request},
+        )
+
+        return Response(
+            {
+                "type": "FeatureCollection",
+                "count": total,
+                "features": serializer.data,
+                "meta": {
+                    "scope": scope,
+                    "limit": limit,
+                    "truncated": total > limit,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+    
+    @action(detail=False, methods=['get'], url_path='cerca')
+    def cerca_per_carrer(self, request):
+        """
+        Endpoint per buscar edificis pel nom del carrer.
+        """
+        query = request.query_params.get('q', '')
+
+        if not query or len(query) < 3:
+            return Response([])
+        
+        edificis = Edifici.objects.filter(
+            localitzacio__carrer__icontains=query
+        ).select_related('localitzacio').distinct()
+
+        serializer = EdificiCercaSerializer(edificis[:15], many=True)
+        return Response(serializer.data)
 
 class MilloraImplementadaViewSet(viewsets.GenericViewSet):
     queryset = MilloraImplementada.objects.select_related("millora", "edifici")

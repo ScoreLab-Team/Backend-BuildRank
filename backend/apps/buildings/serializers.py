@@ -214,11 +214,99 @@ class HabitatgeMeUpdateSerializer(serializers.ModelSerializer):
 
         return instance
     
+class EdificiCercaSerializer(serializers.ModelSerializer):
+    # Això és el que fa que el JSON inclogui l'objecte localització sencer
+    localitzacio = LocalitzacioSerializer(read_only=True)
+
+    class Meta:
+        model = Edifici
+        fields = ['idEdifici', 'localitzacio', 'anyConstruccio']
+
 # Edifici 1. Llistat lleuger
 class EdificiListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Edifici
-        fields = ['idEdifici', 'tipologia', 'anyConstruccio', 'superficieTotal', 'puntuacioBase']
+        fields = ['idEdifici', 'localitzacio', 'tipologia', 'anyConstruccio', 'superficieTotal', 'puntuacioBase']
+
+class EdificiMapSerializer(serializers.ModelSerializer):
+    """
+    Serializer lleuger per representar edificis al mapa en format GeoJSON.
+
+    No exposa dades personals, habitatges ni informació sensible.
+    Només retorna dades agregades i visuals de l'edifici.
+    """
+    type = serializers.SerializerMethodField()
+    id = serializers.IntegerField(source="idEdifici", read_only=True)
+    geometry = serializers.SerializerMethodField()
+    properties = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Edifici
+        fields = ["type", "id", "geometry", "properties"]
+
+    def get_type(self, obj):
+        return "Feature"
+
+    def get_geometry(self, obj):
+        loc = obj.localitzacio
+
+        return {
+            "type": "Point",
+            "coordinates": [
+                loc.longitud,
+                loc.latitud,
+            ],
+        }
+
+    def get_properties(self, obj):
+        loc = obj.localitzacio
+
+        score = obj.puntuacioBase
+        if score is None:
+            score = obj.puntuacioBaseOpenData
+
+        score_label = self._score_label(score)
+
+        carrer = (loc.carrer or "").strip()
+        numero = loc.numero
+        barri = (loc.barri or "").strip()
+        codi_postal = (loc.codiPostal or "").strip()
+
+        titol = f"{carrer}, {numero}" if carrer else f"Edifici {obj.idEdifici}"
+
+        adreca_parts = [
+            titol,
+            barri,
+            codi_postal,
+        ]
+
+        return {
+            "idEdifici": obj.idEdifici,
+            "titol": titol,
+            "adreca": " · ".join([part for part in adreca_parts if part]),
+            "barri": barri,
+            "codiPostal": codi_postal,
+            "tipologia": obj.tipologia,
+            "anyConstruccio": obj.anyConstruccio,
+            "superficieTotal": obj.superficieTotal,
+            "puntuacioBase": round(score, 2) if score is not None else None,
+            "puntuacioLabel": score_label,
+            "classificacioEstimada": obj.classificacioEstimada,
+            "classificacioFont": obj.classificacioFont,
+            "fontOpenData": obj.font_open_data,
+            "detailEndpoint": f"/api/buildings/edificis/{obj.idEdifici}/",
+        }
+
+    def _score_label(self, score):
+        if score is None:
+            return "SENSE_DADES"
+        if score >= 80:
+            return "EXCEL·LENT"
+        if score >= 65:
+            return "BO"
+        if score >= 50:
+            return "MILLORABLE"
+        return "PRIORITARI"
 
 def _etiqueta_font(font: str | None) -> str:
     """Retorna una etiqueta llegible per a la UI segons l'origen de la classificació."""

@@ -41,10 +41,11 @@ def sync_user_to_stream(client: StreamChat, user) -> None:
     """
     profile = getattr(user, "profile", None)
     role = getattr(profile, "role", None)
+    full_name = f"{user.first_name} {user.last_name}".strip() or user.email
 
     user_data: dict[str, Any] = {
         "id": get_stream_user_id(user),
-        "name": user.email,
+        "name": full_name,
         "buildrank_role": role or "",
     }
 

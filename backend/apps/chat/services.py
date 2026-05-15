@@ -46,6 +46,7 @@ def sync_user_to_stream(client: StreamChat, user) -> None:
     user_data: dict[str, Any] = {
         "id": get_stream_user_id(user),
         "name": full_name,
+        "email": user.email,
         "buildrank_role": role or "",
     }
 

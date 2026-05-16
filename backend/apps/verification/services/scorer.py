@@ -26,9 +26,10 @@ logger = logging.getLogger(__name__)
 
 # ── Configuració de pesos ────────────────────────────────────────────────────
 
-WEIGHT_COMPLETESA   = 0.40
-WEIGHT_VALIDESA     = 0.35
-WEIGHT_CREDIBILITAT = 0.25
+WEIGHT_COMPLETESA   = 0.45
+WEIGHT_VALIDESA     = 0.40
+WEIGHT_CREDIBILITAT = 0.10  # baixat: signatura/segell poc fiables amb models petits
+WEIGHT_NOM_USUARI   = 0.05  # nou: coincidència nom document vs usuari autenticat
 
 # Camps obligatoris i el seu pes dins la dimensió de completesa
 CAMPS_CRITICS: dict[str, float] = {
@@ -209,27 +210,69 @@ def _score_credibilitat(dades: dict[str, Any]) -> tuple[float, list[str]]:
    flags = []
    score = 0.0
 
+   # Signatura i segell: pes baix perquè llama3.2:3b els detecta poc fiablement
    if dades.get('te_signatura'):
-      score += 0.35
+      score += 0.20
    else:
       flags.append("Sense signatura detectada")
 
    if dades.get('te_segell'):
-      score += 0.35
+      score += 0.20
    else:
       flags.append("Sense segell detectat")
 
    if _entitat_reconeguda(dades.get('entitat_emissora')):
-      score += 0.30
+      score += 0.60  # és el més fiable dels tres indicadors
    else:
       flags.append("Entitat emissora desconeguda o absent")
 
    return round(score, 4), flags
 
 
+# ── Comparació nom usuari ─────────────────────────────────────────────────────
+
+def _score_nom_usuari(nom_detectat: str | None, user) -> tuple[float, list[str]]:
+   """
+   Compara el nom extret del document amb el nom de l'usuari autenticat.
+   Comparació flexible: ordena tokens i ignora accents.
+   """
+   if user is None:
+      return 0.5, []  # sense usuari no penalitzem
+
+   if not nom_detectat:
+      return 0.0, ["Nom no detectat al document"]
+
+   nom_doc  = _normalitzar_nom(nom_detectat)
+   nom_user = _normalitzar_nom(f"{user.first_name} {user.last_name}")
+
+   if not nom_user.strip():
+      return 0.5, ["Usuari sense nom registrat al sistema"]
+
+   if nom_doc == nom_user:
+      return 1.0, []
+
+   tokens_user = set(nom_user.split())
+   tokens_doc  = set(nom_doc.split())
+   comuns = tokens_user & tokens_doc
+
+   if len(comuns) >= 2:
+      return round(0.6 + len(comuns) / max(len(tokens_user), 1) * 0.35, 2), []
+
+   if len(comuns) == 1:
+      return 0.3, [f"Coincidència parcial mínima amb l'usuari: \"{list(comuns)[0]}\""]
+
+   return 0.0, [f"Nom al document no coincideix amb l'usuari registrat"]
+
+
+def _normalitzar_nom(nom: str) -> str:
+   """Majúscules, sense caràcters estranys, tokens ordenats alfabèticament."""
+   net = re.sub(r'[^a-zA-ZàáèéíïóòúüçñÀÁÈÉÍÏÓÒÚÜÇÑ ]', '', nom).upper()
+   return ' '.join(sorted(net.split()))
+
+
 # ── Funció pública ────────────────────────────────────────────────────────────
 
-def compute_score(dades: dict[str, Any]) -> ScoreResult:
+def compute_score(dades: dict[str, Any], user=None) -> ScoreResult:
    """
    Calcula el score de confiança a partir del dict retornat per extract_structured_data.
 
@@ -262,19 +305,21 @@ def compute_score(dades: dict[str, Any]) -> ScoreResult:
          detall={"completesa": 0.0, "validesa": 0.0, "credibilitat": 0.0},
       )
 
-   # ── Calcula les tres dimensions ──────────────────────────────────────────
+   # ── Calcula les quatre dimensions ───────────────────────────────────────
    s_comp,  flags_comp  = _score_completesa(dades)
    s_val,   flags_val   = _score_validesa(dades)
    s_cred,  flags_cred  = _score_credibilitat(dades)
+   s_nom,   flags_nom   = _score_nom_usuari(dades.get('nom_complet'), user)
 
    score_final = round(
-      s_comp  * WEIGHT_COMPLETESA
-      + s_val   * WEIGHT_VALIDESA
-      + s_cred  * WEIGHT_CREDIBILITAT,
+      s_comp * WEIGHT_COMPLETESA
+      + s_val  * WEIGHT_VALIDESA
+      + s_cred * WEIGHT_CREDIBILITAT
+      + s_nom  * WEIGHT_NOM_USUARI,
       4,
    )
 
-   tots_flags = flags_comp + flags_val + flags_cred
+   tots_flags = flags_comp + flags_val + flags_cred + flags_nom
 
    # ── Suggeriment per a l'operador ─────────────────────────────────────────
    if score_final >= LLINDAR_APROVAT:
@@ -294,8 +339,8 @@ def compute_score(dades: dict[str, Any]) -> ScoreResult:
       )
 
    logger.info(
-      "Score final: %.4f | completesa=%.4f validesa=%.4f credibilitat=%.4f | flags=%d",
-      score_final, s_comp, s_val, s_cred, len(tots_flags),
+      "Score final: %.4f | completesa=%.4f validesa=%.4f credibilitat=%.4f nom_usuari=%.4f | flags=%d",
+      score_final, s_comp, s_val, s_cred, s_nom, len(tots_flags),
    )
 
    return ScoreResult(
@@ -306,5 +351,6 @@ def compute_score(dades: dict[str, Any]) -> ScoreResult:
          "completesa":   s_comp,
          "validesa":     s_val,
          "credibilitat": s_cred,
+         "nom_usuari":   s_nom,
       },
    )

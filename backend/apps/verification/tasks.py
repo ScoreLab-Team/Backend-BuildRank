@@ -103,7 +103,7 @@ def _run_ocr_pipeline(verification: AdminFincaDocumentVerification) -> list[dict
             )
 
         except Exception as exc:
-            logger.warning("  ✗ Error OCR document #%s: %s", doc.pk, exc)
+            logger.warning("  !!! Error OCR document #%s: %s", doc.pk, exc)
             resultats.append({
                 'document_id': doc.pk,
                 'doc_type': doc.doc_type,
@@ -200,7 +200,7 @@ def _run_scoring_pipeline(
             continue
 
         logger.info("  Scoring document #%s [%s]...", doc.pk, doc.doc_type)
-        result = compute_score(extracted)
+        result = compute_score(extracted, user=verification.user)
 
         # Guarda score i flags al document individual
         with transaction.atomic():

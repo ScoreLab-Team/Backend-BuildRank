@@ -737,6 +737,12 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
             if habitatge.estatValidacio == EstatValidacio.VALIDADA:
                 return Response({"error": "Aquest habitatge ja està validat per un altre usuari."}, status=status.HTTP_400_BAD_REQUEST)
             
+            if habitatge.solicitant and habitatge.solicitant != request.user:
+                return Response(
+                    {"error": "Aquest habitatge ja té una sol·licitud d'accés pendent de revisió per part d'un altre usuari."},
+                    status=status.HTTP_409_CONFLICT
+                )
+
             habitatge.solicitant = request.user
             habitatge.estatValidacio = EstatValidacio.EN_REVISIO
             habitatge.idEdifici = edificiID

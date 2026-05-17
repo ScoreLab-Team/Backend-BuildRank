@@ -2849,8 +2849,11 @@ class HabitatgeFluxTests(BaseTestData):
         # L'admin envia rebuig
         response = self.client.post(url_validar, {"estat": "Rebutjada"}, format='json')
         
-        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertFalse(Habitatge.objects.filter(pk=habitatge.pk).exists())
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        habitatge.refresh_from_db()
+        self.assertTrue(Habitatge.objects.filter(pk=habitatge.pk).exists())
+        self.assertEqual(habitatge.estatValidacio, EstatValidacio.REBUTJADA)
+        self.assertIsNone(habitatge.solicitant)
 
 class TestFluxSolicitudHabitatge(BaseTestData):
     """

@@ -19,6 +19,14 @@ from datetime import date
 from apps.accounts.models import RoleChoices
 from .scoring import calcular_classificacio_estimada
 from django.db import transaction
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
+
+class UsuariBasicSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'first_name', 'last_name', 'email']
 
 class LocalitzacioSerializer(serializers.ModelSerializer):
     class Meta:
@@ -105,6 +113,7 @@ class HabitatgeResumSerializer(serializers.ModelSerializer):
 # Detall habitatge complet (protegit)
 class HabitatgeDetailSerializer(serializers.ModelSerializer):
     dadesEnergetiques = DadesEnergetiquesSerializer(read_only=True)
+    solicitant = UsuariBasicSerializer(read_only=True)
 
     # validacio superficie
     def validate_superficie(self, value):

@@ -46,13 +46,26 @@ def sync_user_to_stream(client: StreamChat, user) -> None:
     user_data: dict[str, Any] = {
         "id": get_stream_user_id(user),
         "name": full_name,
+        "email": user.email,
         "buildrank_role": role or "",
     }
 
     if user.is_superuser or role == RoleChoices.ADMIN:
         user_data["role"] = "admin"
 
-    client.upsert_user(user_data)
+    stream_uid = user_data["id"]
+    try:
+        client.upsert_user(user_data)
+    except Exception as exc:
+        if "was deleted" not in str(exc):
+            raise
+        try:
+            client.reactivate_user(stream_uid)
+            client.upsert_user(user_data)
+        except Exception:
+            # User was hard-deleted in GetStream and cannot be restored.
+            # Log and continue — sync is best-effort.
+            logger.warning("No s'ha pogut restaurar l'usuari %s a GetStream (hard-deleted).", stream_uid)
 
 
 def create_stream_token_for_user(user) -> str:

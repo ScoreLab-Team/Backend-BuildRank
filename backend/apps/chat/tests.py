@@ -333,7 +333,9 @@ class ChannelProvisioningTests(APITestCase):
 
         owner_stream_id = f"user_{self.owner.id}"
         mock_channel.create.assert_called()
-        mock_channel.add_members.assert_any_call([owner_stream_id])
+        mock_channel.add_members.assert_any_call(
+            [{"user_id": owner_stream_id, "channel_role": "channel_moderator"}]
+        )
 
     @override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s")
     @patch("apps.chat.services.get_stream_client")
@@ -348,7 +350,7 @@ class ChannelProvisioningTests(APITestCase):
         mock_client.upsert_user.assert_called_once()
         call_args = mock_client.upsert_user.call_args[0][0]
         self.assertEqual(call_args["id"], f"user_{self.owner.id}")
-        self.assertEqual(call_args["buildrank_role"], RoleChoices.OWNER)
+        self.assertNotIn("buildrank_role", call_args)
 
     @override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s")
     @patch("apps.chat.services.get_stream_client")

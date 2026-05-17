@@ -1,6 +1,7 @@
 version: "2.4"
 
 services:
+
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -14,6 +15,34 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - /opt/buildrank/data/ollama:/root/.ollama
+    expose:
+      - "11434"
+    mem_limit: 1500m
+    environment:
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   web:
     build: ./backend
     restart: unless-stopped
@@ -22,11 +51,31 @@ services:
     command: sh -c "python manage.py collectstatic --noinput && gunicorn --config gunicorn.staging.conf.py config.wsgi:application"
     volumes:
       - static_volume:/app/staticfiles
+      - media_volume:/app/verifications
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     expose:
       - "8000"
+
+  celery_worker:
+    build: ./backend
+    restart: unless-stopped
+    env_file:
+      - /opt/buildrank/env/backend.env
+    command: celery -A config worker --loglevel=info --concurrency=1
+    mem_limit: 1800m
+    volumes:
+      - media_volume:/app/verifications
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
 
   nginx:
     image: nginx:1.27-alpine
@@ -41,3 +90,4 @@ services:
 
 volumes:
   static_volume:
+  media_volume:

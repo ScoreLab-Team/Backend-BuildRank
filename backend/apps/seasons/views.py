@@ -1,4 +1,7 @@
 from django.db.models import Q
+from django.db.models import F
+from django.db.models.functions import Rank
+from django.db.models.expressions import Window
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -10,6 +13,7 @@ from rest_framework.exceptions import NotFound
 from apps.accounts.permissions import IsAdminSistema
 from .models import Temporada
 from .serializers import TemporadaSerializer
+from .services import actualitzar_puntuacions_base_inici_temporada
 from apps.participations.models import Participacio
 from apps.participations.serializers import RankingSerializer
 from apps.leagues.models import Lliga
@@ -32,9 +36,14 @@ class TemporadaViewSet(viewsets.ModelViewSet):
         temporada = self.get_object()
         try:
             Temporada.objects.iniciar(temporada)
+            resum_puntuacions = actualitzar_puntuacions_base_inici_temporada(temporada)
+            temporada.refresh_from_db()
         except ValueError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(TemporadaSerializer(temporada).data)
+
+        data = TemporadaSerializer(temporada).data
+        data["resum_puntuacions_base"] = resum_puntuacions
+        return Response(data)
 
     @action(detail=True, methods=['post'], url_path='tancar')
     def tancar(self, request, pk=None):
@@ -64,35 +73,32 @@ class TemporadaViewSet(viewsets.ModelViewSet):
             lliga__temporada=temporada
         )
 
-        # Filtre per grup comparable, si no existeix retorna error
         if group_id:
-
             if not GrupComparable.objects.filter(idGrup=group_id).exists():
                 raise NotFound("Invalid group")
-
             qs = qs.filter(
                 edifici__grupComparable__idGrup=group_id
             )
 
-        # Filtre per lliga, si no existeix retorna error
         if league_id:
-
             if not Lliga.objects.filter(
                     id=league_id,
                     temporada=temporada
             ).exists():
                 raise NotFound("Invalid league")
-
             qs = qs.filter(lliga_id=league_id)
 
-        # Cerca per carrer, si es demana
         if search:
-
             qs = qs.filter(
                 edifici__localitzacio__carrer__icontains=search
             )
 
-        qs = qs.order_by("-puntuacio")
+        qs = qs.annotate(
+            posicio_calculada=Window(
+                expression=Rank(),
+                order_by=F("puntuacio").desc()
+            )
+        ).order_by("-puntuacio")
 
         paginator = RankingPagination()
 
@@ -100,7 +106,12 @@ class TemporadaViewSet(viewsets.ModelViewSet):
 
         serializer = RankingSerializer(page, many=True)
 
-        return paginator.get_paginated_response(serializer.data)
+        data = serializer.data
+
+        for item, participacio in zip(data, page):
+            item["posicio"] = participacio.posicio_calculada
+
+        return paginator.get_paginated_response(data)
 
     @action(detail=True, methods=["get"])
     def posicio_edifici(self, request, pk=None):

@@ -60,7 +60,7 @@ jobs:
       DB_PASSWORD: buildrank_pass
       DB_HOST: 127.0.0.1
       DB_PORT: 5432
-      DJANGO_SETTINGS_MODULE: config.settings
+      DJANGO_SETTINGS_MODULE: config.settings_test
       PYTHONUNBUFFERED: 1
       DEBUG: "False"
       ENVIRONMENT: test

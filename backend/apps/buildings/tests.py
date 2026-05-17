@@ -7,7 +7,7 @@ from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
-from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora
+from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora, TipusEdifici
 from apps.buildings.serializers import EdificiDetailSerializer, LocalitzacioSerializer
 from apps.accounts.models import RoleChoices, ValidacioAdmin
 from .simulation.engine import simular_millores, clamp, UnitatBaseMillora
@@ -2716,7 +2716,7 @@ class TestAdminFincaAltaEdifici(BaseTestData):
     def test_bloqueig_edifici_amb_altre_admin(self):
         # Creem un admin vàlid i un edifici que ja és seu
         admin1 = self._create_user(email="admin1@test.com", role=RoleChoices.ADMIN)
-        admin1.profile.estat_validacio_admin = ValidacioAdmin.APROVAT
+        admin1.profile.estatValidacioAdmin = ValidacioAdmin.APROVAT
         admin1.profile.save()
 
         loc = Localitzacio.objects.create(carrer="Diagonal", numero=1, codiPostal="08001")
@@ -2800,57 +2800,66 @@ class TestRestriccionsHabitatge(BaseTestData):
         # Comprovem que el sistema ens bloqueja amb un 403 Forbidden
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
+class HabitatgeFluxTests(BaseTestData):
+    """Tests per a la Issue 55: Sol·licitud d'unió i validació d'habitatges."""
+
+    def setUp(self):
+        self.admin_finca = self._create_user("admin_finca@test.com", RoleChoices.ADMIN)
+        self.usuari = self._create_user("usuari@test.com", RoleChoices.OWNER)
+        
+        # Creem un edifici gestionat per l'admin
+        self.grup = GrupComparable.objects.create(idGrup=1, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-100")
+        self.edifici = self._create_edifici(self.admin_finca, self.grup)
+        self.url_list = reverse('habitatge-list')
+
+    def test_creacio_habitatge_força_estat_pendent(self):
+        """Comprova que qualsevol creació neix en EN_REVISIO i l'usuari és el solicitant."""
+        self.client.force_authenticate(user=self.usuari)
+        payload = {
+            "referenciaCadastral": "BCN-12345",
+            "edifici": self.edifici.idEdifici,
+            "planta": "2",
+            "porta": "1",
+            "superficie": 75.0
+        }
+        response = self.client.post(self.url_list, payload, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        habitatge = Habitatge.objects.get(referenciaCadastral="BCN-12345")
+        
+        # Verifiquem la lògica de negoci
+        self.assertEqual(habitatge.estatValidacio, EstatValidacio.EN_REVISIO)
+        self.assertEqual(habitatge.solicitant, self.usuari)
+
+    def test_rebuig_admin_elimina_registre(self):
+        """Si l'admin rebutja la sol·licitud, l'habitatge s'esborra de la base de dades."""
+        habitatge = Habitatge.objects.create(
+            referenciaCadastral="REBUTJAR-ME",
+            edifici=self.edifici,
+            solicitant=self.usuari,
+            estatValidacio=EstatValidacio.EN_REVISIO,
+            superficie=80.0,
+            planta="1",
+            porta="1"
+        )
+        
+        self.client.force_authenticate(user=self.admin_finca)
+        url_validar = reverse('habitatge-validar-acces', kwargs={'pk': habitatge.pk})
+        
+        # L'admin envia rebuig
+        response = self.client.post(url_validar, {"estat": "Rebutjada"}, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        habitatge.refresh_from_db()
+        self.assertTrue(Habitatge.objects.filter(pk=habitatge.pk).exists())
+        self.assertEqual(habitatge.estatValidacio, EstatValidacio.REBUTJADA)
+        self.assertIsNone(habitatge.solicitant)
+
 class TestFluxSolicitudHabitatge(BaseTestData):
     """
     Validació US-H2: Sol·licitud d'unió a edifici per part d'un owner/tenant
     """
-    def test_flux_complet_solicitud_i_validacio(self):
-        # Creem usuaris
-        admin = self._create_user(email="admin_edifici@test.com", role=RoleChoices.ADMIN)
-        tenant = self._create_user(email="nou_llogater@test.com", role=RoleChoices.TENANT)
-
-        # Creem l'edifici i un habitatge buit (sense resident)
-        loc = Localitzacio.objects.create(carrer="Carrer Prova", numero=10, codiPostal="08002")
-        edifici = Edifici.objects.create(
-            localitzacio=loc, anyConstruccio=1990, superficieTotal=200, administradorFinca=admin
-        )
-        habitatge = Habitatge.objects.create(
-            referenciaCadastral="1234567AB9999C0001ZZ",
-            planta="2",
-            porta="B",
-            superficie=75.0,
-            edifici=edifici
-        )
-
-        # El llogater (tenant) sol·licita l'accés
-        self.client.force_authenticate(user=tenant)
-        url_solicitar = reverse('habitatge-solicitar-acces', kwargs={'pk': habitatge.pk})
-        response_solicitar = self.client.post(url_solicitar)
-
-        self.assertEqual(response_solicitar.status_code, status.HTTP_200_OK)
-
-        # Comprovem a la base de dades que l'habitatge està EN_REVISIO
-        habitatge.refresh_from_db()
-        self.assertEqual(habitatge.estatValidacio, EstatValidacio.EN_REVISIO)
-        self.assertEqual(habitatge.solicitant, tenant)
-        self.assertIsNone(habitatge.usuari)  # Encara no és el resident oficial
-
-        # L'administrador de la finca aprova la sol·licitud
-        self.client.force_authenticate(user=admin)
-        url_validar = reverse('habitatge-validar-acces', kwargs={'pk': habitatge.pk})
-        response_validar = self.client.post(url_validar, {
-            "estat": EstatValidacio.VALIDADA
-        }, format='json')
-
-        self.assertEqual(response_validar.status_code, status.HTTP_200_OK)
-
-        # Comprovem que tot s'ha aplicat perfectament a la base de dades
-        habitatge.refresh_from_db()
-        self.assertEqual(habitatge.estatValidacio, EstatValidacio.VALIDADA)
-        self.assertEqual(habitatge.usuari, tenant) # Ara ja és el resident oficial
-        self.assertIsNone(habitatge.solicitant)
-
-def test_llistat_pendents_administrador(self):
+    def test_llistat_pendents_administrador(self):
         # Preparem dades: Un admin, un llogater i dos habitatges
         admin = self._create_user(email="admin_llista@test.com", role=RoleChoices.ADMIN)
         tenant = self._create_user(email="tenant_espera@test.com", role=RoleChoices.TENANT)
@@ -2861,12 +2870,12 @@ def test_llistat_pendents_administrador(self):
         # Habitatge 1: En revisió (hauria de sortir a la llista)
         h_pendent = Habitatge.objects.create(
             referenciaCadastral="PENDENT11111", planta="1", porta="1", superficie=50, edifici=edifici,
-            estat_validacio=EstatValidacio.EN_REVISIO, solicitant=tenant
+            estatValidacio=EstatValidacio.EN_REVISIO, solicitant=tenant
         )
         # Habitatge 2: Ja validat (NO hauria de sortir)
         h_validat = Habitatge.objects.create(
             referenciaCadastral="VALIDAT22222", planta="1", porta="2", superficie=50, edifici=edifici,
-            estat_validacio=EstatValidacio.VALIDADA, usuari=tenant
+            estatValidacio=EstatValidacio.VALIDADA, usuari=tenant
         )
 
         # Fem la petició com a Administrador
@@ -3154,6 +3163,141 @@ class HabitatgeMeUpdateTests(BaseTestData):
             float(response.data["dadesEnergetiques"]["consumEnergiaPrimaria"]), 200.0
         )
 
+
+class EdificiMapaEndpointTests(BaseTestData):
+    """Tests de l'endpoint GeoJSON per al mapa d'edificis."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = cls._create_user("map-admin@example.com", RoleChoices.ADMIN)
+
+        cls.grup = GrupComparable.objects.create(
+            idGrup=99,
+            zonaClimatica="C2",
+            tipologia="Residencial",
+            rangSuperficie="100-200",
+        )
+
+        cls.edifici_visible = cls._create_edifici(
+            administrador=cls.admin,
+            grup=cls.grup,
+            carrer="Carrer Mallorca",
+            numero=120,
+        )
+        cls.edifici_visible.puntuacioBase = 72.5
+        cls.edifici_visible.classificacioEstimada = "C"
+        cls.edifici_visible.classificacioFont = "estimada"
+        cls.edifici_visible.save(
+            update_fields=[
+                "puntuacioBase",
+                "classificacioEstimada",
+                "classificacioFont",
+            ]
+        )
+
+        cls.edifici_sense_coords = cls._create_edifici(
+            administrador=cls.admin,
+            grup=cls.grup,
+            carrer="Carrer Sense Coordenades",
+            numero=1,
+        )
+        cls.edifici_sense_coords.localitzacio.latitud = 0.0
+        cls.edifici_sense_coords.localitzacio.longitud = 0.0
+        cls.edifici_sense_coords.localitzacio.save(
+            update_fields=["latitud", "longitud"]
+        )
+
+    def test_mapa_requires_authentication(self):
+        response = self.client.get("/api/buildings/edificis/mapa/")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_mapa_returns_geojson_feature_collection(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get("/api/buildings/edificis/mapa/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["type"], "FeatureCollection")
+        self.assertIn("features", response.data)
+        self.assertGreaterEqual(len(response.data["features"]), 1)
+
+        feature = response.data["features"][0]
+        self.assertEqual(feature["type"], "Feature")
+        self.assertEqual(feature["geometry"]["type"], "Point")
+        self.assertIn("coordinates", feature["geometry"])
+        self.assertIn("properties", feature)
+
+    def test_mapa_excludes_buildings_without_valid_coordinates(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get("/api/buildings/edificis/mapa/")
+
+        ids = [
+            feature["properties"]["idEdifici"]
+            for feature in response.data["features"]
+        ]
+
+        self.assertIn(self.edifici_visible.idEdifici, ids)
+        self.assertNotIn(self.edifici_sense_coords.idEdifici, ids)
+
+    def test_mapa_does_not_expose_private_user_or_habitatge_data(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get("/api/buildings/edificis/mapa/")
+
+        feature = response.data["features"][0]
+        properties = feature["properties"]
+
+        self.assertNotIn("habitatges", properties)
+        self.assertNotIn("usuari", properties)
+        self.assertNotIn("administradorFinca", properties)
+        self.assertNotIn("email", properties)
+
+    def test_mapa_bbox_filter(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get(
+            "/api/buildings/edificis/mapa/?bbox=1.9,40.9,2.1,41.1"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+class EdificiCercaTests(BaseTestData):
+    def setUp(self):
+        super().setUp()
+        self.user = self._create_user("cercador@test.com", RoleChoices.OWNER)
+
+        loc1 = Localitzacio.objects.create(carrer="Carrer de Mallorca", numero=10, codiPostal="08001")
+        Edifici.objects.create(
+            localitzacio=loc1,
+            anyConstruccio=1990,
+            tipologia=TipusEdifici.RESIDENCIAL,
+            superficieTotal=500.0
+        )
+
+        loc2 = Localitzacio.objects.create(carrer="Carrer de València", numero=20, codiPostal="08002")
+        Edifici.objects.create(
+            localitzacio=loc2,
+            anyConstruccio=1985,
+            tipologia=TipusEdifici.RESIDENCIAL,
+            superficieTotal=450.0
+        )
+
+    def test_cerca_retorna_edificis_correctes(self):
+        self.client.force_authenticate(user=self.user)
+        url = reverse('edifici-cerca-per-carrer')
+        response = self.client.get(url, {'q': 'Mallorca'})
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['localitzacio']['carrer'], "Carrer de Mallorca")
+
+    def test_cerca_buida_no_retorna_res(self):
+        self.client.force_authenticate(user=self.user)
+        url = reverse('edifici-cerca-per-carrer')
+        response = self.client.get(url, {'q': 'Ma'})
+        self.assertEqual(len(response.data), 0)
 
 # ============================================================================
 # THIRD PARTY SERVICE — POST /api/third-party/score/

@@ -19,6 +19,14 @@ from datetime import date
 from apps.accounts.models import RoleChoices
 from .scoring import calcular_classificacio_estimada
 from django.db import transaction
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
+
+class UsuariBasicSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'first_name', 'last_name', 'email']
 
 class LocalitzacioSerializer(serializers.ModelSerializer):
     class Meta:
@@ -105,6 +113,7 @@ class HabitatgeResumSerializer(serializers.ModelSerializer):
 # Detall habitatge complet (protegit)
 class HabitatgeDetailSerializer(serializers.ModelSerializer):
     dadesEnergetiques = DadesEnergetiquesSerializer(read_only=True)
+    solicitant = UsuariBasicSerializer(read_only=True)
 
     # validacio superficie
     def validate_superficie(self, value):
@@ -139,6 +148,8 @@ class HabitatgeDetailSerializer(serializers.ModelSerializer):
         model = Habitatge
         unique_together = ('edifici', 'planta', 'porta')
         fields = '__all__'
+        # bloquegem aquests camps perquè l'usuari no els pugui manipular durant el POST
+        read_only_fields = ['estatValidacio', 'solicitant', 'usuari']
 
 class DadesEnergetiquesUpdateSerializer(serializers.ModelSerializer):
     """Per crear o actualitzar DadesEnergetiques des de l'endpoint de l'habitatge."""
@@ -211,12 +222,100 @@ class HabitatgeMeUpdateSerializer(serializers.ModelSerializer):
                     instance.save(update_fields=["dadesEnergetiques"])
 
         return instance
+    
+class EdificiCercaSerializer(serializers.ModelSerializer):
+    # Això és el que fa que el JSON inclogui l'objecte localització sencer
+    localitzacio = LocalitzacioSerializer(read_only=True)
+
+    class Meta:
+        model = Edifici
+        fields = ['idEdifici', 'localitzacio', 'anyConstruccio']
 
 # Edifici 1. Llistat lleuger
 class EdificiListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Edifici
-        fields = ['idEdifici', 'tipologia', 'anyConstruccio', 'superficieTotal', 'puntuacioBase']
+        fields = ['idEdifici', 'localitzacio', 'tipologia', 'anyConstruccio', 'superficieTotal', 'puntuacioBase']
+
+class EdificiMapSerializer(serializers.ModelSerializer):
+    """
+    Serializer lleuger per representar edificis al mapa en format GeoJSON.
+
+    No exposa dades personals, habitatges ni informació sensible.
+    Només retorna dades agregades i visuals de l'edifici.
+    """
+    type = serializers.SerializerMethodField()
+    id = serializers.IntegerField(source="idEdifici", read_only=True)
+    geometry = serializers.SerializerMethodField()
+    properties = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Edifici
+        fields = ["type", "id", "geometry", "properties"]
+
+    def get_type(self, obj):
+        return "Feature"
+
+    def get_geometry(self, obj):
+        loc = obj.localitzacio
+
+        return {
+            "type": "Point",
+            "coordinates": [
+                loc.longitud,
+                loc.latitud,
+            ],
+        }
+
+    def get_properties(self, obj):
+        loc = obj.localitzacio
+
+        score = obj.puntuacioBase
+        if score is None:
+            score = obj.puntuacioBaseOpenData
+
+        score_label = self._score_label(score)
+
+        carrer = (loc.carrer or "").strip()
+        numero = loc.numero
+        barri = (loc.barri or "").strip()
+        codi_postal = (loc.codiPostal or "").strip()
+
+        titol = f"{carrer}, {numero}" if carrer else f"Edifici {obj.idEdifici}"
+
+        adreca_parts = [
+            titol,
+            barri,
+            codi_postal,
+        ]
+
+        return {
+            "idEdifici": obj.idEdifici,
+            "titol": titol,
+            "adreca": " · ".join([part for part in adreca_parts if part]),
+            "barri": barri,
+            "codiPostal": codi_postal,
+            "tipologia": obj.tipologia,
+            "anyConstruccio": obj.anyConstruccio,
+            "superficieTotal": obj.superficieTotal,
+            "puntuacioBase": round(score, 2) if score is not None else None,
+            "puntuacioLabel": score_label,
+            "classificacioEstimada": obj.classificacioEstimada,
+            "classificacioFont": obj.classificacioFont,
+            "fontOpenData": obj.font_open_data,
+            "detailEndpoint": f"/api/buildings/edificis/{obj.idEdifici}/",
+        }
+
+    def _score_label(self, score):
+        if score is None:
+            return "SENSE_DADES"
+        if score >= 80:
+            return "EXCEL·LENT"
+        if score >= 65:
+            return "BO"
+        if score >= 50:
+            return "MILLORABLE"
+        return "PRIORITARI"
 
 def _etiqueta_font(font: str | None) -> str:
     """Retorna una etiqueta llegible per a la UI segons l'origen de la classificació."""
@@ -361,6 +460,11 @@ class RankingSerializer(serializers.ModelSerializer):
         fields = ['idEdifici','puntuacioBase'] #Afegir posició
 
 class CatalegMilloraSerializer(serializers.ModelSerializer):
+    costOrientatiuUnitari = serializers.FloatField(
+        source="cost_orientatiu_unitari",
+        read_only=True,
+    )
+
     class Meta:
         model = CatalegMillora
         fields = [
@@ -372,6 +476,7 @@ class CatalegMilloraSerializer(serializers.ModelSerializer):
             'activa',
             'unitatBase',
             'costEstimatBase',
+            'costOrientatiuUnitari',
             'mantenimentAnual',
             'vidaUtil',
             'estalviEnergeticEstimat',
@@ -400,9 +505,15 @@ class SimulacioMilloraPreviewSerializer(serializers.Serializer):
 
     def validate_millores(self, value):
         if not value:
-            raise serializers.ValidationError("Cal seleccionar com a mínim una millora.")
+            raise serializers.ValidationError("Cal seleccionar com a m?nim una millora.")
 
         ids = [item["milloraId"] for item in value]
+
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError(
+                "No es pot seleccionar la mateixa millora m?s d'una vegada en una simulaci?."
+            )
+
         existing_ids = set(
             CatalegMillora.objects
             .filter(idMillora__in=ids, activa=True)
@@ -412,7 +523,7 @@ class SimulacioMilloraPreviewSerializer(serializers.Serializer):
         missing = sorted(set(ids) - existing_ids)
         if missing:
             raise serializers.ValidationError(
-                f"Les millores següents no existeixen o no estan actives: {missing}"
+                f"Les millores seg?ents no existeixen o no estan actives: {missing}"
             )
 
         return value

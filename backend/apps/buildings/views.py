@@ -3,11 +3,12 @@ import random
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, viewsets
+from rest_framework import serializers, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, action, permission_classes
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.db import IntegrityError
 from django.db.models import Q
 from rest_framework.exceptions import PermissionDenied
 
@@ -20,7 +21,8 @@ from .models import (
     CatalegMillora, SimulacioMillora, SimulacioMilloraItem, MilloraImplementada,
 )
 from .serializers import (
-    EdificiDetailSerializer, EdificiListSerializer,
+    EdificiDetailSerializer, EdificiListSerializer, EdificiMapSerializer,
+    EdificiCercaSerializer,
     HabitatgeDetailSerializer, HabitatgeMeUpdateSerializer, HabitatgeResumSerializer,
     LocalitzacioSerializer, DadesEnergetiquesSerializer,
     RankingSerializer,
@@ -513,7 +515,148 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         serializer = MilloraImplementadaSerializer(implementacions, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="mapa",
+        permission_classes=[IsAuthenticated],
+    )
+    def mapa(self, request):
+        """
+        GET /api/buildings/edificis/mapa/
 
+        Retorna els edificis actius amb coordenades vàlides en format GeoJSON.
+
+        Query params opcionals:
+        - scope=public|mine
+        - bbox=minLng,minLat,maxLng,maxLat
+        - tipologia=Residencial
+        - score_min=60
+        - q=text
+        - limit=500
+        """
+        scope = request.query_params.get("scope", "public").lower().strip()
+
+        if scope == "mine":
+            queryset = self.get_queryset()
+        else:
+            queryset = Edifici.actius.all()
+
+        queryset = (
+            queryset
+            .select_related("localitzacio", "grupComparable")
+            .filter(
+                localitzacio__isnull=False,
+                localitzacio__latitud__isnull=False,
+                localitzacio__longitud__isnull=False,
+            )
+            .exclude(localitzacio__latitud=0.0)
+            .exclude(localitzacio__longitud=0.0)
+        )
+
+        tipologia = request.query_params.get("tipologia")
+        if tipologia:
+            queryset = queryset.filter(tipologia=tipologia)
+
+        search = request.query_params.get("q", "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(localitzacio__carrer__icontains=search)
+                | Q(localitzacio__barri__icontains=search)
+                | Q(localitzacio__codiPostal__icontains=search)
+            )
+
+        score_min_raw = request.query_params.get("score_min")
+        if score_min_raw:
+            try:
+                score_min = float(score_min_raw)
+            except ValueError:
+                return Response(
+                    {"detail": "El paràmetre score_min ha de ser numèric."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            queryset = queryset.filter(
+                Q(puntuacioBase__gte=score_min)
+                | Q(puntuacioBaseOpenData__gte=score_min)
+            )
+
+        bbox_raw = request.query_params.get("bbox")
+        if bbox_raw:
+            try:
+                min_lng, min_lat, max_lng, max_lat = [
+                    float(value.strip())
+                    for value in bbox_raw.split(",")
+                ]
+            except ValueError:
+                return Response(
+                    {
+                        "detail": (
+                            "El paràmetre bbox ha de tenir el format "
+                            "minLng,minLat,maxLng,maxLat."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            queryset = queryset.filter(
+                localitzacio__longitud__gte=min_lng,
+                localitzacio__longitud__lte=max_lng,
+                localitzacio__latitud__gte=min_lat,
+                localitzacio__latitud__lte=max_lat,
+            )
+
+        limit_raw = request.query_params.get("limit", "500")
+        try:
+            limit = int(limit_raw)
+        except ValueError:
+            return Response(
+                {"detail": "El paràmetre limit ha de ser un enter."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        limit = max(1, min(limit, 1000))
+
+        total = queryset.count()
+        queryset = queryset.order_by("idEdifici")[:limit]
+
+        serializer = EdificiMapSerializer(
+            queryset,
+            many=True,
+            context={"request": request},
+        )
+
+        return Response(
+            {
+                "type": "FeatureCollection",
+                "count": total,
+                "features": serializer.data,
+                "meta": {
+                    "scope": scope,
+                    "limit": limit,
+                    "truncated": total > limit,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+    
+    @action(detail=False, methods=['get'], url_path='cerca')
+    def cerca_per_carrer(self, request):
+        """
+        Endpoint per buscar edificis pel nom del carrer.
+        """
+        query = request.query_params.get('q', '')
+
+        if not query or len(query) < 3:
+            return Response([])
+        
+        edificis = Edifici.objects.filter(
+            localitzacio__carrer__icontains=query
+        ).select_related('localitzacio').distinct()
+
+        serializer = EdificiCercaSerializer(edificis[:15], many=True)
+        return Response(serializer.data)
 
 class MilloraImplementadaViewSet(viewsets.GenericViewSet):
     queryset = MilloraImplementada.objects.select_related("millora", "edifici")
@@ -580,11 +723,45 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         elif self.action == 'list':
             return [IsAuthenticated(), EsAdminOPropietariHabitatge()]
         return [IsAuthenticated()]
+    
+    def create(self, request, *args, **kwargs):
+        refCadastral = request.data.get('referenciaCadastral')
+        edificiID = request.data.get('edifici')
+
+        if not refCadastral:
+            return Response({"error": "La referència cadastral és obligatòria."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        habitatge = Habitatge.objects.filter(referenciaCadastral=refCadastral).first()
+
+        if habitatge:
+            if habitatge.estatValidacio == EstatValidacio.VALIDADA:
+                return Response({"error": "Aquest habitatge ja està validat per un altre usuari."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            if habitatge.solicitant and habitatge.solicitant != request.user:
+                return Response(
+                    {"error": "Aquest habitatge ja té una sol·licitud d'accés pendent de revisió per part d'un altre usuari."},
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            habitatge.solicitant = request.user
+            habitatge.estatValidacio = EstatValidacio.EN_REVISIO
+            habitatge.idEdifici = edificiID
+            habitatge.save()
+            
+            serializer = self.get_serializer(habitatge)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        
+        return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         if self.request.user.profile.role == RoleChoices.ADMIN:
             raise PermissionDenied("Els administradors de finca no poden crear habitatges.")
-        serializer.save()
+        try:
+            serializer.save(solicitant=self.request.user)
+        except IntegrityError:
+            raise serializers.ValidationError(
+                {"referenciaCadastral": "Ja existeix un habitatge amb aquesta referència cadastral."}
+            )
 
     @action(detail=True, methods=['post'], url_path='solicitar-acces')
     def solicitar_acces(self, request, pk=None):
@@ -597,14 +774,28 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
                 {"detail": "Aquest habitatge ja té un resident assignat."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
-        # Posem l'estat en revisió i guardem qui és l'usuari que ho demana
+        
+        # Bloquejar si l'estat ja és 'Validada'
+        if habitatge.estatValidacio == EstatValidacio.VALIDADA:
+            return Response(
+                {"error": "Aquest habitatge ja ha estat validat prèviament."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Evitar trepitjar una sol·licitud pendent d'un altre usuari
+        if habitatge.solicitant and habitatge.solicitant != request.user:
+            return Response(
+                {"error": "Ja hi ha una sol·licitud pendent per aquest habitatge."},
+                status=status.HTTP_409_CONFLICT
+            )
+        
+        # Guardem la sol·licitud, posem l'estat en revisió i guardem qui és l'usuari que ho demana
         habitatge.estatValidacio = EstatValidacio.EN_REVISIO
         habitatge.solicitant = request.user
         habitatge.save(update_fields=['estatValidacio', 'solicitant'])
 
         return Response(
-            {"detail": "Sol·licitud enviada correctament. Pendent de l'aprovació de l'Administrador."},
+            {"detail": "Sol·licitud enviada correctament."},
             status=status.HTTP_200_OK
         )
 
@@ -613,17 +804,24 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         # L'Administrador de finca aprova o rebutja la sol·licitud
         habitatge = self.get_object()
 
+        if habitatge.usuari is not None:
+            return Response(
+                {"error": "Aquest habitatge ja té un resident vinculat."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+
         # Només l'admin d'aquest edifici pot validar-ho
         if habitatge.edifici.administradorFinca != request.user:
             return Response(
-                {"detail": "No tens permisos per validar accessos en aquest edifici."},
+                {"error": "No tens permisos per validar accessos en aquest edifici."},
                 status=status.HTTP_403_FORBIDDEN
             )
 
         # Comprovem que realment hi hagi algú pendent
         if habitatge.estatValidacio != EstatValidacio.EN_REVISIO or not habitatge.solicitant:
             return Response(
-                {"detail": "Aquest habitatge no té cap sol·licitud pendent de revisió."},
+                {"error": "Aquest habitatge no té cap sol·licitud pendent de revisió."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -636,26 +834,18 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
             habitatge.save(update_fields=['usuari', 'estatValidacio', 'solicitant'])
 
             return Response(
-                {"detail": "Sol·licitud aprovada. Resident assignat."},
+                {"message": "Sol·licitud aprovada. Resident assignat."},
                 status=status.HTTP_200_OK
             )
 
         elif nouEstat == EstatValidacio.REBUTJADA:
             habitatge.estatValidacio = EstatValidacio.REBUTJADA
             habitatge.solicitant = None
-            habitatge.save(update_fields=['estatValidacio', 'solicitant'])
-
-            return Response(
-                {"detail": "Sol·licitud rebutjada."},
-                status=status.HTTP_200_OK
-            )
-
-        else:
-            return Response(
-                {"detail": "Cal enviar un estat vàlid ('Validada' o 'Rebutjada)"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
+            habitatge.save()
+            return Response({"detail": "Sol·licitud rebutjada."}, status=status.HTTP_200_OK)
+        
+        return Response({"error": "Estat no vàlid."}, status=status.HTTP_400_BAD_REQUEST)
+        
     @action(detail=False, methods=['get'])
     def pendents(self, request):
         # Retorna només els habitatges que estan pendents de validació

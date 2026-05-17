@@ -80,6 +80,8 @@ INSTALLED_APPS = [
     'apps.leagues',
     'apps.participations',
     "apps.chat",
+
+    "apps.verification",
 ]
 
 MIDDLEWARE = [
@@ -269,3 +271,12 @@ CORS_ALLOW_CREDENTIALS = env_bool("CORS_ALLOW_CREDENTIALS", default=True)
 STREAM_API_KEY = os.getenv("STREAM_API_KEY", "")
 STREAM_API_SECRET = os.getenv("STREAM_API_SECRET", "")
 STREAM_TOKEN_EXPIRATION_SECONDS = int(os.getenv("STREAM_TOKEN_EXPIRATION_SECONDS", "3600"))
+
+# Google OAuth / Sign-In
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+
+# Celery (configuració bàsica, més detalls a config/celery.py)
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0')
+CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+CELERY_TASK_SERIALIZER = 'json'
+INSTALLED_APPS += ['django_celery_results']

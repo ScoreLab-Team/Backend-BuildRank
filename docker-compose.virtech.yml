@@ -33,7 +33,7 @@ services:
       - /opt/buildrank/data/ollama:/root/.ollama
     expose:
       - "11434"
-    mem_limit: 1500m
+    #mem_limit: 1500m
     environment:
       OLLAMA_MAX_LOADED_MODELS: "1"
     healthcheck:
@@ -66,7 +66,7 @@ services:
     env_file:
       - /opt/buildrank/env/backend.env
     command: celery -A config worker --loglevel=info --concurrency=1
-    #mem_limit: 1800m
+    mem_limit: 1800m
     volumes:
       - media_volume:/app/verifications
     depends_on:

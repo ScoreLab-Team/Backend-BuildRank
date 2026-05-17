@@ -116,6 +116,9 @@ class AdminFincaDocumentVerificationSerializer(serializers.ModelSerializer):
             'result',
             'created_at',
             'updated_at',
+            'score',
+            'score_flags',
+            'suggeriment',
         ]
         read_only_fields = fields
 
@@ -126,68 +129,85 @@ class AdminFincaDocumentVerificationSerializer(serializers.ModelSerializer):
 
 class AdminFincaDocumentVerificationCreateSerializer(serializers.ModelSerializer):
     """
-    Escriptura: rep edifici + llista de {fitxer, doc_type}.
-    L'usuari s'extreu del request (no s'exposa al payload).
-
-    Validacions:
-    - Mínim 1 document, màxim 10
-    - Cada fitxer: PDF/JPEG/PNG/WEBP, màx 10 MB
-    - No pot haver-hi una verificació PENDING o RUNNING activa pel mateix edifici
+    Escriptura: rep edifici + llistes paral·leles de fitxers i tipus.
+ 
+    Postman / Flutter han d'enviar:
+        edifici               = 1
+        documents_fitxer      = <file1>
+        documents_fitxer      = <file2>
+        documents_doctype     = identificatiu
+        documents_doctype     = certificat
     """
-
-    documents = DocumentInputSerializer(
-        many=True,
+ 
+    documents_fitxer  = serializers.ListField(
+        child=serializers.FileField(),
         write_only=True,
     )
-
+    documents_doctype = serializers.ListField(
+        child=serializers.ChoiceField(
+            choices=AdminFincaVerificationDocument.DocType.choices
+        ),
+        write_only=True,
+    )
+ 
     class Meta:
         model = AdminFincaDocumentVerification
-        fields = ['edifici', 'documents']
-
-    def validate_documents(self, value):
-        if len(value) < 1:
-            raise serializers.ValidationError(
-                "Cal adjuntar almenys un document."
-            )
-        if len(value) > 10:
-            raise serializers.ValidationError(
-                "No es poden pujar més de 10 documents per verificació."
-            )
-        return value
-
+        fields = ['edifici', 'documents_fitxer', 'documents_doctype']
+ 
     def validate(self, attrs):
-        user = self.context['request'].user
+        fitxers  = attrs.get('documents_fitxer', [])
+        doctypes = attrs.get('documents_doctype', [])
+ 
+        if not fitxers:
+            raise serializers.ValidationError("Cal adjuntar almenys un document.")
+        if len(fitxers) > 10:
+            raise serializers.ValidationError("Màxim 10 documents per verificació.")
+        if len(fitxers) != len(doctypes):
+            raise serializers.ValidationError(
+                f"El nombre de fitxers ({len(fitxers)}) i de tipus "
+                f"({len(doctypes)}) ha de coincidir."
+            )
+ 
+        # Valida cada fitxer
+        allowed = {'application/pdf', 'image/jpeg', 'image/png', 'image/webp'}
+        for f in fitxers:
+            if f.content_type not in allowed:
+                raise serializers.ValidationError(
+                    f"Tipus no permès: {f.content_type}"
+                )
+            if f.size > 10 * 1024 * 1024:
+                raise serializers.ValidationError(
+                    f"'{f.name}' supera els 10 MB."
+                )
+ 
+        # Verifica que no hi ha verificació activa pel mateix edifici
+        user    = self.context['request'].user
         edifici = attrs['edifici']
-
-        active_statuses = [
+        actives = [
             AdminFincaDocumentVerification.Status.PENDING,
             AdminFincaDocumentVerification.Status.RUNNING,
         ]
         if AdminFincaDocumentVerification.objects.filter(
-            user=user,
-            edifici=edifici,
-            status__in=active_statuses,
+            user=user, edifici=edifici, status__in=actives
         ).exists():
             raise serializers.ValidationError(
-                "Ja tens una verificació en curs per aquest edifici. "
-                "Espera que es resolgui abans de pujar nous documents."
+                "Ja tens una verificació en curs per aquest edifici."
             )
+ 
         return attrs
-
+ 
     def create(self, validated_data):
-        documents_data = validated_data.pop('documents')
-        user = self.context['request'].user
-
+        fitxers  = validated_data.pop('documents_fitxer')
+        doctypes = validated_data.pop('documents_doctype')
+        user     = self.context['request'].user
+ 
         verification = AdminFincaDocumentVerification.objects.create(
-            user=user,
-            **validated_data,
+            user=user, **validated_data
         )
-
-        for doc_data in documents_data:
+        for fitxer, doctype in zip(fitxers, doctypes):
             AdminFincaVerificationDocument.objects.create(
                 verification=verification,
-                fitxer=doc_data['fitxer'],
-                doc_type=doc_data['doc_type'],  # ← declarat per l'usuari
+                fitxer=fitxer,
+                doc_type=doctype,
             )
-
         return verification

@@ -17,7 +17,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://ollama:11434')
-OLLAMA_MODEL = 'llama3.2:3b'
+OLLAMA_MODEL = 'llama3.2:1b'
 OLLAMA_TIMEOUT = 60  # segons — el model pot trigar en CPU
 
 

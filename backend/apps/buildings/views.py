@@ -836,6 +836,7 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
             habitatge.estatValidacio = EstatValidacio.REBUTJADA
             habitatge.solicitant = None
             habitatge.save()
+            return Response({"detail": "Sol·licitud rebutjada."}, status=status.HTTP_200_OK)
         
         return Response({"error": "Estat no vàlid."}, status=status.HTTP_400_BAD_REQUEST)
         

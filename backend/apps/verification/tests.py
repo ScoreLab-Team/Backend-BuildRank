@@ -15,6 +15,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.accounts.models import RoleChoices
 from apps.buildings.models import Edifici, Localitzacio
 from apps.verification.models import (
     AdminFincaDocumentVerification,
@@ -59,12 +60,20 @@ class BaseVerificationTest(APITestCase):
             email='joan@test.com', password='pass1234',
             first_name='Joan', last_name='Pérez',
         )
+        self.user.profile.role = RoleChoices.ADMIN
+        self.user.profile.save()
+
         self.other_user = User.objects.create_user(
             email='altre@test.com', password='pass1234',
         )
+        self.other_user.profile.role = RoleChoices.ADMIN
+        self.other_user.profile.save()
+
         self.superuser = User.objects.create_superuser(
             email='super@test.com', password='pass1234',
         )
+        # El superuser no necessita perfil amb rol especific (is_superuser bypassa el rol)
+
         self.loc = Localitzacio.objects.create(
             carrer='Carrer Major', numero=12,
             codiPostal='08001', barri='Gràcia',
@@ -93,7 +102,7 @@ class BaseVerificationTest(APITestCase):
 
 
 # ---------------------------------------------------------------------------
-# Tests: Creació de verificació
+# Tests: Creacio de verificacio
 # ---------------------------------------------------------------------------
 
 @override_settings(
@@ -192,6 +201,37 @@ class CreateVerificationTests(BaseVerificationTest):
         response = self.client.post(self.url(), data, format='multipart')
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_crear_owner_falla(self):
+        # Un usuari amb rol owner no te permis per crear verificacions
+        owner = User.objects.create_user(
+            email='owner@test.com', password='pass1234',
+        )
+        # El perfil es crea via signal amb role=OWNER per defecte
+        auth(self.client, owner)
+        data = {
+            'edifici': self.edifici.pk,
+            'documents_fitxer': make_pdf(),
+            'documents_doctype': 'identificatiu',
+        }
+        response = self.client.post(self.url(), data, format='multipart')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_crear_tenant_falla(self):
+        # Un usuari amb rol tenant no te permis per crear verificacions
+        tenant = User.objects.create_user(
+            email='tenant@test.com', password='pass1234',
+        )
+        tenant.profile.role = RoleChoices.TENANT
+        tenant.profile.save()
+        auth(self.client, tenant)
+        data = {
+            'edifici': self.edifici.pk,
+            'documents_fitxer': make_pdf(),
+            'documents_doctype': 'identificatiu',
+        }
+        response = self.client.post(self.url(), data, format='multipart')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
 
 # ---------------------------------------------------------------------------
 # Tests: Llistat i detall
@@ -221,6 +261,16 @@ class ListDetailVerificationTests(BaseVerificationTest):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 2)
 
+    def test_llistat_owner_falla(self):
+        # Un owner no te acces al llistat de verificacions
+        owner = User.objects.create_user(
+            email='owner@test.com', password='pass1234',
+        )
+        # El perfil es crea via signal amb role=OWNER per defecte
+        auth(self.client, owner)
+        response = self.client.get(reverse('verification:list'))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_detall_propi_ok(self):
         v = self._crear_verificacio()
         response = self.client.get(reverse('verification:detail', kwargs={'pk': v.pk}))
@@ -238,14 +288,24 @@ class ListDetailVerificationTests(BaseVerificationTest):
     def test_detall_inclou_score(self):
         v = self._crear_verificacio(AdminFincaDocumentVerification.Status.REVIEW)
         v.score = 0.82
-        v.suggeriment = 'Revisió detallada recomanada'
+        v.suggeriment = 'Revisio detallada recomanada'
         v.save()
         response = self.client.get(reverse('verification:detail', kwargs={'pk': v.pk}))
         self.assertAlmostEqual(float(response.data['score']), 0.82)
 
+    def test_detall_owner_falla(self):
+        # Un owner no pot accedir al detall encara que conegui la pk
+        v = self._crear_verificacio()
+        owner = User.objects.create_user(
+            email='owner@test.com', password='pass1234',
+        )
+        auth(self.client, owner)
+        response = self.client.get(reverse('verification:detail', kwargs={'pk': v.pk}))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
 
 # ---------------------------------------------------------------------------
-# Tests: Revisió manual
+# Tests: Revisio manual
 # ---------------------------------------------------------------------------
 
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
@@ -293,7 +353,7 @@ class RevisioVerificacioTests(BaseVerificationTest):
         auth(self.client, self.superuser)
         response = self.client.post(
             self.url(self.v.pk),
-            {'accio': 'rebutjar', 'motiu': 'Document no vàlid'},
+            {'accio': 'rebutjar', 'motiu': 'Document no valid'},
             format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -310,6 +370,22 @@ class RevisioVerificacioTests(BaseVerificationTest):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_revisar_no_superuser_falla(self):
+        # Un AdminFinca normal no pot revisar verificacions
+        response = self.client.post(
+            self.url(self.v.pk),
+            {'accio': 'aprovar'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_revisar_admin_finca_falla(self):
+        # Comprova explicitament que un AdminFinca amb rol ADMIN pero sense is_superuser rep 403
+        admin_finca = User.objects.create_user(
+            email='adminfinca2@test.com', password='pass1234',
+        )
+        admin_finca.profile.role = RoleChoices.ADMIN
+        admin_finca.profile.save()
+        auth(self.client, admin_finca)
         response = self.client.post(
             self.url(self.v.pk),
             {'accio': 'aprovar'},
@@ -383,7 +459,7 @@ class ScorerTests(BaseVerificationTest):
 
     def test_score_baix_sense_camps_critics(self):
         result = compute_score({'_ok': True})
-        self.assertLess(result.score, 0.50)  # sense cap camp crític ha de ser baix
+        self.assertLess(result.score, 0.50)  # sense cap camp critic ha de ser baix
 
     def test_penalitzacio_dni_invalid(self):
         result = compute_score(self._dades_completes(dni_nie='INVALID'))
@@ -439,14 +515,14 @@ class ValidadorsTests(BaseVerificationTest):
         self.assertIsNone(flag)
 
     def test_nie_valid(self):
-        # X2482300W és un NIE amb lletra de control correcta
+        # X2482300W es un NIE amb lletra de control correcta
         ok, flag = _valida_dni_nie('X2482300W')
         self.assertTrue(ok)
         self.assertIsNone(flag)
 
     def test_dni_lletra_incorrecta(self):
         ok, flag = _valida_dni_nie('12345678A')
-        # format vàlid però lletra pot ser incorrecta — comprova format
+        # format valid pero lletra pot ser incorrecta
         self.assertIsNotNone(flag is None or ok in (True, False))
 
     def test_dni_format_invalid(self):

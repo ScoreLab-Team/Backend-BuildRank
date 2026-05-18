@@ -4,25 +4,23 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.views import APIView
 
-
-from .services.review import aprovar_verificacio, rebutjar_verificacio
+from apps.accounts.permissions import IsAdminSistema, IsAdminFinca
 
 from .models import AdminFincaDocumentVerification
 from .serializers import (
     AdminFincaDocumentVerificationCreateSerializer,
     AdminFincaDocumentVerificationSerializer,
 )
+from .services.review import aprovar_verificacio, rebutjar_verificacio
 
 
 class AdminFincaDocumentVerificationCreateView(generics.CreateAPIView):
     """
     POST /api/verification/create/
     Crea una nova verificació amb un o més documents adjunts.
-    Encua automàticament el pipeline OCR via Celery.
     """
-
     serializer_class = AdminFincaDocumentVerificationCreateSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsAdminFinca]
     parser_classes = [MultiPartParser, FormParser]
 
     def create(self, request, *args, **kwargs):
@@ -30,7 +28,6 @@ class AdminFincaDocumentVerificationCreateView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         verification = serializer.save()
 
-        # Encua el pipeline OCR → LLM → scoring
         from .tasks import process_verification
         task = process_verification.delay(verification.pk)
         verification.celery_task_id = task.id
@@ -45,59 +42,50 @@ class AdminFincaDocumentVerificationCreateView(generics.CreateAPIView):
 class AdminFincaDocumentVerificationListView(generics.ListAPIView):
     """
     GET /api/verification/
-    Llista totes les verificacions de l'usuari autenticat.
-    Staff veu totes.
+    Llista verificacions. AdminSistema veu totes; usuari normal les seves.
     """
-
     serializer_class = AdminFincaDocumentVerificationSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsAdminFinca]
 
     def get_queryset(self):
-        user = self.request.user
         qs = AdminFincaDocumentVerification.objects.select_related(
             'result'
         ).prefetch_related('documents')
-
-        if user.is_staff:
+        if IsAdminSistema().has_permission(self.request, self):
             return qs
-        return qs.filter(user=user)
+        return qs.filter(user=self.request.user)
 
 
 class AdminFincaDocumentVerificationDetailView(generics.RetrieveAPIView):
     """
     GET /api/verification/<id>/
-    Retorna l'estat i el resultat d'una verificació.
-    Només accessible pel propietari o staff.
+    Detall d'una verificació.
     """
-
     serializer_class = AdminFincaDocumentVerificationSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsAdminFinca]
 
     def get_queryset(self):
-        user = self.request.user
         qs = AdminFincaDocumentVerification.objects.select_related(
             'result'
         ).prefetch_related('documents')
-
-        if user.is_staff:
+        if IsAdminSistema().has_permission(self.request, self):
             return qs
-        return qs.filter(user=user)
-    
+        return qs.filter(user=self.request.user)
 
-    
+
 class VerificacioRevisioView(APIView):
     """
     POST /api/verification/<id>/revisar/
- 
+
     Endpoint exclusiu per a superusuaris.
     Aprova o rebutja una verificació en estat 'review'.
- 
+
     Body:
         {
             "accio": "aprovar" | "rebutjar",
             "motiu": "text opcional — requerit si rebutja"
         }
- 
+
     Respostes:
         200 → decisió aplicada correctament
         400 → accio invàlida o motiu absent en rebuig
@@ -105,16 +93,9 @@ class VerificacioRevisioView(APIView):
         404 → verificació no trobada
         409 → verificació no està en estat 'review'
     """
-    permission_classes = [permissions.IsAuthenticated]
- 
+    permission_classes = [permissions.IsAuthenticated, IsAdminSistema]
+
     def post(self, request, pk):
-        # Només superusuaris
-        if not request.user.is_superuser:
-            return Response(
-                {'detail': 'Només superusuaris poden revisar verificacions.'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
- 
         # Carrega la verificació
         try:
             verification = AdminFincaDocumentVerification.objects.select_related(
@@ -125,7 +106,7 @@ class VerificacioRevisioView(APIView):
                 {'detail': 'Verificació no trobada.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
- 
+
         # Només es pot revisar si està en estat 'review'
         if verification.status != AdminFincaDocumentVerification.Status.REVIEW:
             return Response(
@@ -135,22 +116,22 @@ class VerificacioRevisioView(APIView):
                 },
                 status=status.HTTP_409_CONFLICT,
             )
- 
+
         accio = request.data.get('accio', '').strip().lower()
         motiu = request.data.get('motiu', '').strip()
- 
+
         if accio not in ('aprovar', 'rebutjar'):
             return Response(
                 {'detail': "El camp 'accio' ha de ser 'aprovar' o 'rebutjar'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
- 
+
         if accio == 'rebutjar' and not motiu:
             return Response(
                 {'detail': "Cal indicar un 'motiu' quan es rebutja una verificació."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
- 
+
         # Executa la decisió
         if accio == 'aprovar':
             aprovar_verificacio(verification, reviewer=request.user)
@@ -165,4 +146,3 @@ class VerificacioRevisioView(APIView):
                 'detail': f"Verificació #{pk} rebutjada.",
                 'motiu': motiu,
             })
- 

@@ -1396,3 +1396,119 @@ class GoogleOAuthTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("detail", response.data)
+        
+    @patch("apps.accounts.serializers.google_id_token.verify_oauth2_token")
+    def test_google_oauth_creates_user_with_requested_role(
+        self,
+        mock_verify,
+    ):
+        mock_verify.return_value = {
+            "email": "tenant-google@example.com",
+            "email_verified": True,
+            "given_name": "Tenant",
+            "family_name": "Google",
+        }
+
+        response = self.client.post(
+            self.url,
+            {
+                "id_token": "valid-google-id-token",
+                "role": RoleChoices.TENANT,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.assertEqual(
+            response.data["user"]["email"],
+            "tenant-google@example.com",
+        )
+        self.assertEqual(
+            response.data["user"]["role"],
+            RoleChoices.TENANT,
+        )
+
+        user = User.objects.get(email="tenant-google@example.com")
+        self.assertEqual(user.profile.role, RoleChoices.TENANT)
+
+    @patch("apps.accounts.serializers.google_id_token.verify_oauth2_token")
+    def test_google_oauth_existing_user_does_not_change_role(
+        self,
+        mock_verify,
+    ):
+        existing_user = User.objects.create_user(
+            email="existing-role@example.com",
+            password="Password123",
+            first_name="Existing",
+            last_name="Role",
+        )
+
+        existing_user.profile.role = RoleChoices.OWNER
+        existing_user.profile.save(update_fields=["role"])
+
+        mock_verify.return_value = {
+            "email": "existing-role@example.com",
+            "email_verified": True,
+            "given_name": "GoogleName",
+            "family_name": "GoogleSurname",
+        }
+
+        response = self.client.post(
+            self.url,
+            {
+                "id_token": "valid-google-id-token",
+                "role": RoleChoices.TENANT,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        existing_user.refresh_from_db()
+        existing_user.profile.refresh_from_db()
+
+        self.assertEqual(
+            existing_user.profile.role,
+            RoleChoices.OWNER,
+        )
+
+        self.assertEqual(
+            response.data["user"]["role"],
+            RoleChoices.OWNER,
+        )
+
+    @patch("apps.accounts.serializers.google_id_token.verify_oauth2_token")
+    def test_google_oauth_rejects_invalid_role(
+        self,
+        mock_verify,
+    ):
+        mock_verify.return_value = {
+            "email": "invalid-role-google@example.com",
+            "email_verified": True,
+            "given_name": "Invalid",
+            "family_name": "Role",
+        }
+
+        response = self.client.post(
+            self.url,
+            {
+                "id_token": "valid-google-id-token",
+                "role": "superadmin",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        self.assertIn("role", response.data)
+
+        self.assertFalse(
+            User.objects.filter(
+                email="invalid-role-google@example.com"
+            ).exists()
+        )

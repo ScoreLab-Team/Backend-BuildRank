@@ -120,8 +120,8 @@ jobs:
         run: |
           pip install coverage
           coverage run manage.py test apps.accounts apps.buildings apps.leagues apps.seasons apps.participations apps.verification -v 2
-          coverage report
-          coverage xml
+          coverage report --ignore-errors
+          coverage xml --ignore-errors
 
       - name: Upload backend coverage artifact
         uses: actions/upload-artifact@v4

@@ -80,6 +80,7 @@ INSTALLED_APPS = [
     'apps.leagues',
     'apps.participations',
     "apps.chat",
+    'apps.community',
 ]
 
 MIDDLEWARE = [

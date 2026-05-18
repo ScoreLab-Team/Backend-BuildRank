@@ -34,6 +34,7 @@ urlpatterns = [
     path('api/third-party-service/', ThirdPartyServiceView.as_view(), name='third-party-service'),
     path("api/chat/", include("apps.chat.urls")),
     path("api/community/", include("apps.community.urls")),
+    path("api/notifications/", include("apps.notifications.urls")),
 ]
 
 if settings.DEBUG and "debug_toolbar" in settings.INSTALLED_APPS:

@@ -1227,7 +1227,9 @@ class AdminFincaEdificiAltaView(APIView):
             anyConstruccio=data.get('anyConstruccio'),
             tipologia=data.get('tipologia'),
             superficieTotal=data.get('superficieTotal'),
-            administradorFinca=request.user
+            reglament=data.get('reglament'),
+            orientacioPrincipal=data.get('orientacioPrincipal'),
+            administradorFinca=request.user,
         )
 
         return Response(

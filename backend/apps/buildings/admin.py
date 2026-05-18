@@ -13,12 +13,12 @@ from .models import Edifici, EdificiAuditLog, Habitatge, DadesEnergetiques, Loca
 class EdificiAdmin(admin.ModelAdmin):
     list_display  = [
         'idEdifici', 'tipologia', 'anyConstruccio',
-        'superficieTotal', 'puntuacioBase', 'actiu', 'dataDesactivacio','puntuacioBaseOpenData', 'classificacioEstimada', 'classificacioFont',
+        'superficieTotal', 'puntuacioBase', 'actiu', 'dataDesactivacio','puntuacioBaseOpenData', 'classificacioEstimada', 'classificacioFont', 'heatRiskIndex', 'heatRiskFont',
     ]
     list_filter   = ['actiu', 'tipologia', 'orientacioPrincipal']
     search_fields = ['idEdifici', 'localitzacio__carrer', 'localitzacio__codiPostal']
     # dataDesactivacio és readonly perquè la gestiona save_model automàticament
-    readonly_fields = ['puntuacioBase', 'dataDesactivacio', 'puntuacioBaseOpenData', 'classificacioEstimada', 'classificacioFont']
+    readonly_fields = ['puntuacioBase', 'dataDesactivacio', 'puntuacioBaseOpenData', 'classificacioEstimada', 'classificacioFont', 'heatRiskIndex', 'heatRiskFont']
     actions = ['desactivar_edificis', 'reactivar_edificis']
 
     def save_model(self, request, obj, form, change):

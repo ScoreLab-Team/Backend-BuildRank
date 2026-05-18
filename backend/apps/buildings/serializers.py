@@ -17,7 +17,7 @@ import re
 from datetime import date
 
 from apps.accounts.models import RoleChoices
-from .scoring import calcular_classificacio_estimada
+from .scoring import calcular_classificacio_estimada, calcular_heat_risk_index
 from django.db import transaction
 from django.contrib.auth import get_user_model
 
@@ -345,6 +345,10 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
         help_text="Classificació energètica de l'edifici. Pot ser oficial, estimada o insuficient."
     )
 
+    heat_risk = serializers.SerializerMethodField(
+        help_text="Heat Risk Index de l'edifici (0–100). Null si manquen dades."
+    )
+
     # Habitatges visibles segons el rol de l'usuari autenticat.
     habitatges = serializers.SerializerMethodField()
 
@@ -366,6 +370,7 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
             "num_cas_origen",
             "tipologia_open_data",
             "classificacio_energetica",
+            "heat_risk",
             "actiu",
             "dataDesactivacio",
             "motivDesactivacio",
@@ -385,6 +390,7 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
             "num_cas_origen",
             "tipologia_open_data",
             "classificacio_energetica",
+            "heat_risk",
             "actiu",
             "dataDesactivacio",
             "motivDesactivacio",
@@ -407,6 +413,28 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
             "etiqueta": _etiqueta_font(resultat["font"]),
             "detall": resultat["detall"],
             "dades_insuficients": resultat.get("dades_insuficients"),
+        }
+
+    def get_heat_risk(self, obj):
+        resultat = calcular_heat_risk_index(obj)
+        index = resultat["index"]
+
+        if index is None:
+            etiqueta = "Sense dades"
+        elif index >= 75:
+            etiqueta = "Risc alt"
+        elif index >= 50:
+            etiqueta = "Risc moderat"
+        elif index >= 25:
+            etiqueta = "Risc baix"
+        else:
+            etiqueta = "Risc molt baix"
+
+        return {
+            "index": index,
+            "font": resultat["font"],
+            "etiqueta": etiqueta,
+            "dades_insuficients": resultat["dades_insuficients"] or None,
         }
 
     def get_habitatges(self, obj):

@@ -384,6 +384,7 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 class GoogleOAuthSerializer(serializers.Serializer):
     id_token = serializers.CharField(write_only=True)
+    role = serializers.ChoiceField(choices=RoleChoices.choices, required=False)
 
     def validate(self, attrs):
         token = attrs["id_token"]
@@ -445,8 +446,13 @@ class GoogleOAuthSerializer(serializers.Serializer):
 
         profile, _ = Profile.objects.get_or_create(user=user)
         if created:
-            profile.role = RoleChoices.OWNER
+            profile.role = self.validated_data.get(
+                "role",
+                RoleChoices.OWNER,
+            )
             profile.save(update_fields=["role"])
+        
+        user.profile.refresh_from_db()
 
         refresh = RefreshToken.for_user(user)
         jti = str(refresh.get("jti"))

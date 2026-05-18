@@ -130,45 +130,71 @@ class AdminFincaDocumentVerificationSerializer(serializers.ModelSerializer):
 class AdminFincaDocumentVerificationCreateSerializer(serializers.ModelSerializer):
     """
     Escriptura: rep edifici + llistes paral·leles de fitxers i tipus.
- 
-    Postman / Flutter han d'enviar:
-        edifici               = 1
-        documents_fitxer      = <file1>
-        documents_fitxer      = <file2>
-        documents_doctype     = identificatiu
-        documents_doctype     = certificat
+
+    Camp recomanat:
+        edifici              = 1
+        documents_fitxer     = <file1>
+        documents_fitxer     = <file2>
+        documents_doc_type   = identificatiu
+        documents_doc_type   = certificat
+
+    Per compatibilitat temporal també s'accepta:
+        documents_doctype
     """
- 
-    documents_fitxer  = serializers.ListField(
+
+    documents_fitxer = serializers.ListField(
         child=serializers.FileField(),
         write_only=True,
     )
+
+    documents_doc_type = serializers.ListField(
+        child=serializers.ChoiceField(
+            choices=AdminFincaVerificationDocument.DocType.choices
+        ),
+        write_only=True,
+        required=False,
+    )
+
     documents_doctype = serializers.ListField(
         child=serializers.ChoiceField(
             choices=AdminFincaVerificationDocument.DocType.choices
         ),
         write_only=True,
+        required=False,
     )
- 
+
     class Meta:
         model = AdminFincaDocumentVerification
-        fields = ['edifici', 'documents_fitxer', 'documents_doctype']
- 
+        fields = [
+            'edifici',
+            'documents_fitxer',
+            'documents_doc_type',
+            'documents_doctype',
+        ]
+
     def validate(self, attrs):
-        fitxers  = attrs.get('documents_fitxer', [])
-        doctypes = attrs.get('documents_doctype', [])
- 
+        fitxers = attrs.get('documents_fitxer', [])
+
+        # Nom nou recomanat. Si no arriba, acceptem el nom antic.
+        doctypes = attrs.get('documents_doc_type') or attrs.get('documents_doctype') or []
+
         if not fitxers:
             raise serializers.ValidationError("Cal adjuntar almenys un document.")
+
         if len(fitxers) > 10:
             raise serializers.ValidationError("Màxim 10 documents per verificació.")
+
+        if not doctypes:
+            raise serializers.ValidationError(
+                "Cal indicar el tipus de cada document amb 'documents_doc_type'."
+            )
+
         if len(fitxers) != len(doctypes):
             raise serializers.ValidationError(
                 f"El nombre de fitxers ({len(fitxers)}) i de tipus "
                 f"({len(doctypes)}) ha de coincidir."
             )
- 
-        # Valida cada fitxer
+
         allowed = {'application/pdf', 'image/jpeg', 'image/png', 'image/webp'}
         for f in fitxers:
             if f.content_type not in allowed:
@@ -179,35 +205,44 @@ class AdminFincaDocumentVerificationCreateSerializer(serializers.ModelSerializer
                 raise serializers.ValidationError(
                     f"'{f.name}' supera els 10 MB."
                 )
- 
-        # Verifica que no hi ha verificació activa pel mateix edifici
-        user    = self.context['request'].user
+
+        user = self.context['request'].user
         edifici = attrs['edifici']
         actives = [
             AdminFincaDocumentVerification.Status.PENDING,
             AdminFincaDocumentVerification.Status.RUNNING,
         ]
+
         if AdminFincaDocumentVerification.objects.filter(
-            user=user, edifici=edifici, status__in=actives
+            user=user,
+            edifici=edifici,
+            status__in=actives,
         ).exists():
             raise serializers.ValidationError(
                 "Ja tens una verificació en curs per aquest edifici."
             )
- 
+
+        # Normalitzem internament a un únic nom.
+        attrs['documents_doc_type'] = doctypes
+        attrs.pop('documents_doctype', None)
+
         return attrs
- 
+
     def create(self, validated_data):
-        fitxers  = validated_data.pop('documents_fitxer')
-        doctypes = validated_data.pop('documents_doctype')
-        user     = self.context['request'].user
- 
+        fitxers = validated_data.pop('documents_fitxer')
+        doctypes = validated_data.pop('documents_doc_type')
+        user = self.context['request'].user
+
         verification = AdminFincaDocumentVerification.objects.create(
-            user=user, **validated_data
+            user=user,
+            **validated_data,
         )
+
         for fitxer, doctype in zip(fitxers, doctypes):
             AdminFincaVerificationDocument.objects.create(
                 verification=verification,
                 fitxer=fitxer,
                 doc_type=doctype,
             )
+
         return verification

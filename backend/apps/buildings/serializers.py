@@ -12,6 +12,7 @@ from apps.buildings.models import (
     MilloraImplementada,
     EstatValidacio,
     TipusEdifici,
+    TipusOrientacio,
 )
 import re
 from datetime import date
@@ -596,10 +597,29 @@ class ReclamarEdificiAdminSerializer(serializers.Serializer):
     numero = serializers.IntegerField()
     codiPostal = serializers.CharField(max_length=10)
     anyConstruccio = serializers.IntegerField(required=False, default=1980)
-    tipologia = serializers.ChoiceField(choices=TipusEdifici.choices, required=False, default=TipusEdifici.RESIDENCIAL)
+    tipologia = serializers.ChoiceField(
+        choices=TipusEdifici.choices,
+        required=False,
+        default=TipusEdifici.RESIDENCIAL,
+    )
     superficieTotal = serializers.FloatField(required=False, default=1000.0)
+
+    # Camps obligatoris al model Edifici. Els donem permesos/default
+    # per no trencar l'alta d'edifici quan el frontend encara no els envia.
+    reglament = serializers.CharField(
+        max_length=100,
+        required=False,
+        default="Desconegut",
+    )
+    orientacioPrincipal = serializers.ChoiceField(
+        choices=TipusOrientacio.choices,
+        required=False,
+        default=TipusOrientacio.SUD,
+    )
 
     def validate_codiPostal(self, value):
         if not re.match(r'^\d{5}$', value):
-            raise serializers.ValidationError("El format del codi postal és incorrecte. Han de ser 5 dígits.")
+            raise serializers.ValidationError(
+                "El format del codi postal és incorrecte. Han de ser 5 dígits."
+            )
         return value

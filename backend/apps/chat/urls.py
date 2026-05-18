@@ -18,6 +18,8 @@ from .views import (
     UnbanFromChannelView,
     UnmuteUserView,
     WarnUserView,
+    TwinBuildingAdminsView,
+    TwinBuildingChannelView,
 )
 
 urlpatterns = [
@@ -42,4 +44,15 @@ urlpatterns = [
     path("moderation/users/<int:user_id>/global-unban/", GlobalUnbanView.as_view(), name="chat-global-unban"),
     path("moderation/users/<int:user_id>/shadow-ban/", ShadowBanView.as_view(), name="chat-shadow-ban"),
     path("moderation/users/<int:user_id>/shadow-unban/", ShadowUnbanView.as_view(), name="chat-shadow-unban"),
+
+    path(
+        "twin-buildings/<int:edifici_id>/admins/",
+        TwinBuildingAdminsView.as_view(),
+        name="chat-twin-building-admins",
+    ),
+    path(
+        "twin-buildings/<int:edifici_id>/channels/",
+        TwinBuildingChannelView.as_view(),
+        name="chat-twin-building-channel",
+    ),
 ]

@@ -12,13 +12,25 @@ from apps.buildings.models import (
     MilloraImplementada,
     EstatValidacio,
     TipusEdifici,
+    TipusOrientacio,
+    VotacioSimulacioMillora,
+    VotSimulacioMillora,
+    SentitVotSimulacio,
 )
 import re
 from datetime import date
 
 from apps.accounts.models import RoleChoices
-from .scoring import calcular_classificacio_estimada
+from .scoring import calcular_classificacio_estimada, calcular_heat_risk_index
 from django.db import transaction
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
+
+class UsuariBasicSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'first_name', 'last_name', 'email']
 
 class LocalitzacioSerializer(serializers.ModelSerializer):
     class Meta:
@@ -105,6 +117,7 @@ class HabitatgeResumSerializer(serializers.ModelSerializer):
 # Detall habitatge complet (protegit)
 class HabitatgeDetailSerializer(serializers.ModelSerializer):
     dadesEnergetiques = DadesEnergetiquesSerializer(read_only=True)
+    solicitant = UsuariBasicSerializer(read_only=True)
 
     # validacio superficie
     def validate_superficie(self, value):
@@ -140,7 +153,7 @@ class HabitatgeDetailSerializer(serializers.ModelSerializer):
         unique_together = ('edifici', 'planta', 'porta')
         fields = '__all__'
         # bloquegem aquests camps perquè l'usuari no els pugui manipular durant el POST
-        read_only_fields = ['estatValidacio', 'solicitant']
+        read_only_fields = ['estatValidacio', 'solicitant', 'usuari']
 
 class DadesEnergetiquesUpdateSerializer(serializers.ModelSerializer):
     """Per crear o actualitzar DadesEnergetiques des de l'endpoint de l'habitatge."""
@@ -336,6 +349,10 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
         help_text="Classificació energètica de l'edifici. Pot ser oficial, estimada o insuficient."
     )
 
+    heat_risk = serializers.SerializerMethodField(
+        help_text="Heat Risk Index de l'edifici (0–100). Null si manquen dades."
+    )
+
     # Habitatges visibles segons el rol de l'usuari autenticat.
     habitatges = serializers.SerializerMethodField()
 
@@ -357,6 +374,7 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
             "num_cas_origen",
             "tipologia_open_data",
             "classificacio_energetica",
+            "heat_risk",
             "actiu",
             "dataDesactivacio",
             "motivDesactivacio",
@@ -376,6 +394,7 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
             "num_cas_origen",
             "tipologia_open_data",
             "classificacio_energetica",
+            "heat_risk",
             "actiu",
             "dataDesactivacio",
             "motivDesactivacio",
@@ -398,6 +417,28 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
             "etiqueta": _etiqueta_font(resultat["font"]),
             "detall": resultat["detall"],
             "dades_insuficients": resultat.get("dades_insuficients"),
+        }
+
+    def get_heat_risk(self, obj):
+        resultat = calcular_heat_risk_index(obj)
+        index = resultat["index"]
+
+        if index is None:
+            etiqueta = "Sense dades"
+        elif index >= 75:
+            etiqueta = "Risc alt"
+        elif index >= 50:
+            etiqueta = "Risc moderat"
+        elif index >= 25:
+            etiqueta = "Risc baix"
+        else:
+            etiqueta = "Risc molt baix"
+
+        return {
+            "index": index,
+            "font": resultat["font"],
+            "etiqueta": etiqueta,
+            "dades_insuficients": resultat["dades_insuficients"] or None,
         }
 
     def get_habitatges(self, obj):
@@ -547,6 +588,8 @@ class SimulacioMilloraSerializer(serializers.ModelSerializer):
             'id',
             'descripcio',
             'edifici',
+            'estatAplicacio',
+            'votacioAprovadaAt',
             'reduccioConsumPrevista',
             'reduccioEmissionsPrevista',
             'costEstimat',
@@ -581,16 +624,170 @@ class ValidacioMilloraSerializer(serializers.Serializer):
     estatValidacio = serializers.ChoiceField(choices=ESTATS_PERMESOS)
     observacionsAdmin = serializers.CharField(required=False, allow_blank=True, default="")
 
+class VotSimulacioMilloraSerializer(serializers.ModelSerializer):
+    usuariEmail = serializers.EmailField(source='usuari.email', read_only=True)
+
+    class Meta:
+        model = VotSimulacioMillora
+        fields = [
+            'id',
+            'usuari',
+            'usuariEmail',
+            'sentit',
+            'data',
+        ]
+        read_only_fields = fields
+
+
+class VotacioSimulacioMilloraSerializer(serializers.ModelSerializer):
+    simulacio = SimulacioMilloraSerializer(read_only=True)
+    totalVots = serializers.SerializerMethodField()
+    votsFavor = serializers.SerializerMethodField()
+    votsContra = serializers.SerializerMethodField()
+    participacioPercent = serializers.SerializerMethodField()
+    favorPercent = serializers.SerializerMethodField()
+    potVotar = serializers.SerializerMethodField()
+    elMeuVot = serializers.SerializerMethodField()
+
+    class Meta:
+        model = VotacioSimulacioMillora
+        fields = [
+            'id',
+            'titol',
+            'descripcio',
+            'edifici',
+            'simulacio',
+            'dataInici',
+            'dataFi',
+            'quorumPercent',
+            'majoriaPercent',
+            'estat',
+            'totalVots',
+            'votsFavor',
+            'votsContra',
+            'participacioPercent',
+            'favorPercent',
+            'potVotar',
+            'elMeuVot',
+        ]
+        read_only_fields = fields
+
+    def _electors_count(self, obj):
+        admin_count = 1 if obj.edifici.administradorFinca_id else 0
+        owners_count = obj.edifici.habitatges.filter(
+            usuari__isnull=False,
+            usuari__profile__role='owner',
+        ).values('usuari').distinct().count()
+        return max(admin_count + owners_count, 1)
+
+    def get_totalVots(self, obj):
+        return obj.total_vots
+
+    def get_votsFavor(self, obj):
+        return obj.vots_favor
+
+    def get_votsContra(self, obj):
+        return obj.vots_contra
+
+    def get_participacioPercent(self, obj):
+        total = self._electors_count(obj)
+        return round((obj.total_vots / total) * 100, 2)
+
+    def get_favorPercent(self, obj):
+        total_vots = obj.total_vots
+        if total_vots == 0:
+            return 0
+        return round((obj.vots_favor / total_vots) * 100, 2)
+
+    def get_potVotar(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+
+        if obj.edifici.administradorFinca_id == user.id:
+            return True
+
+        return obj.edifici.habitatges.filter(
+            usuari=user,
+            usuari__profile__role='owner',
+        ).exists()
+
+    def get_elMeuVot(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return None
+
+        vot = obj.vots.filter(usuari=request.user).first()
+        return vot.sentit if vot else None
+
+
+class CrearVotacioSimulacioSerializer(serializers.Serializer):
+    titol = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    descripcio = serializers.CharField(required=False, allow_blank=True, default='')
+    dataFi = serializers.DateTimeField(required=False)
+    diesDurada = serializers.IntegerField(required=False, min_value=1, max_value=90, default=14)
+    quorumPercent = serializers.FloatField(required=False, min_value=1, max_value=100, default=75)
+    majoriaPercent = serializers.FloatField(required=False, min_value=1, max_value=100, default=50)
+
+
+class VotarSimulacioSerializer(serializers.Serializer):
+    sentit = serializers.ChoiceField(choices=SentitVotSimulacio.choices)
+
+
+class AcreditarSimulacioImplementadaSerializer(serializers.Serializer):
+    dataExecucio = serializers.DateField()
+    costReal = serializers.FloatField(min_value=0)
+    documentacioAdjunta = serializers.FileField()
+
+    def validate_documentacioAdjunta(self, value):
+        allowed = {
+            'application/pdf',
+            'image/jpeg',
+            'image/png',
+            'image/webp',
+        }
+
+        if value.content_type not in allowed:
+            raise serializers.ValidationError(
+                "Només es permet documentació PDF, JPG, PNG o WEBP."
+            )
+
+        if value.size > 10 * 1024 * 1024:
+            raise serializers.ValidationError(
+                "El fitxer no pot superar els 10 MB."
+            )
+
+        return value
 
 class ReclamarEdificiAdminSerializer(serializers.Serializer):
     carrer = serializers.CharField(max_length=255)
     numero = serializers.IntegerField()
     codiPostal = serializers.CharField(max_length=10)
     anyConstruccio = serializers.IntegerField(required=False, default=1980)
-    tipologia = serializers.ChoiceField(choices=TipusEdifici.choices, required=False, default=TipusEdifici.RESIDENCIAL)
+    tipologia = serializers.ChoiceField(
+        choices=TipusEdifici.choices,
+        required=False,
+        default=TipusEdifici.RESIDENCIAL,
+    )
     superficieTotal = serializers.FloatField(required=False, default=1000.0)
+
+    # Camps obligatoris al model Edifici. Els donem permesos/default
+    # per no trencar l'alta d'edifici quan el frontend encara no els envia.
+    reglament = serializers.CharField(
+        max_length=100,
+        required=False,
+        default="Desconegut",
+    )
+    orientacioPrincipal = serializers.ChoiceField(
+        choices=TipusOrientacio.choices,
+        required=False,
+        default=TipusOrientacio.SUD,
+    )
 
     def validate_codiPostal(self, value):
         if not re.match(r'^\d{5}$', value):
-            raise serializers.ValidationError("El format del codi postal és incorrecte. Han de ser 5 dígits.")
+            raise serializers.ValidationError(
+                "El format del codi postal és incorrecte. Han de ser 5 dígits."
+            )
         return value

@@ -194,7 +194,6 @@ class AdminFincaDocumentVerificationCreateSerializer(serializers.ModelSerializer
                 f"El nombre de fitxers ({len(fitxers)}) i de tipus "
                 f"({len(doctypes)}) ha de coincidir."
             )
-
         allowed = {'application/pdf', 'image/jpeg', 'image/png', 'image/webp'}
         for f in fitxers:
             if f.content_type not in allowed:
@@ -244,5 +243,4 @@ class AdminFincaDocumentVerificationCreateSerializer(serializers.ModelSerializer
                 fitxer=fitxer,
                 doc_type=doctype,
             )
-
         return verification

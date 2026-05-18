@@ -168,6 +168,21 @@ class Edifici(models.Model):
         help_text="Origen de la classificació: oficial, estimada o insuficient."
     )
 
+    # --- US17: Heat Risk Index ---
+    heatRiskIndex = models.FloatField(
+        editable=False,
+        null=True,
+        blank=True,
+        help_text="Heat Risk Index (0–100, 100=màxim risc). Null si manquen dades crítiques."
+    )
+    heatRiskFont = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        editable=False,
+        help_text="Font de les dades usades per calcular l'HRI: 'usuaris' o 'opendata'."
+    )
+
     font_open_data = models.BooleanField(
         default=False,
         help_text="True si les dades bàsiques provenen d'open data CEE"

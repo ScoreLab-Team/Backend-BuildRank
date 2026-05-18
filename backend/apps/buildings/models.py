@@ -46,6 +46,25 @@ class EstatValidacio(models.TextChoices):
     VALIDADA = 'Validada', 'Validada'
     REBUTJADA = 'Rebutjada', 'Rebutjada'
 
+class EstatAplicacioSimulacio(models.TextChoices):
+    ESBORRANY = 'esborrany', 'Esborrany'
+    EN_VOTACIO = 'en_votacio', 'En votació'
+    APROVADA = 'aprovada', 'Aprovada'
+    REBUTJADA = 'rebutjada', 'Rebutjada'
+    IMPLEMENTADA = 'implementada', 'Implementada'
+
+
+class EstatVotacioSimulacio(models.TextChoices):
+    ACTIVA = 'activa', 'Activa'
+    APROVADA = 'aprovada', 'Aprovada'
+    REBUTJADA = 'rebutjada', 'Rebutjada'
+    CADUCADA = 'caducada', 'Caducada'
+
+
+class SentitVotSimulacio(models.TextChoices):
+    FAVOR = 'favor', 'A favor'
+    CONTRA = 'contra', 'En contra'
+
 # --- US20: Accions d'auditoria possibles ---
 class AccioAudit(models.TextChoices):
     DESACTIVAR  = 'DESACTIVAR',  'Desactivar'
@@ -607,6 +626,15 @@ class SimulacioMillora(models.Model):
     estalviAnual = models.FloatField(default=0)
     dataSimulacio = models.DateField(auto_now_add=True)
 
+    estatAplicacio = models.CharField(
+        max_length=20,
+        choices=EstatAplicacioSimulacio.choices,
+        default=EstatAplicacioSimulacio.ESBORRANY,
+        db_index=True,
+    )
+
+    votacioAprovadaAt = models.DateTimeField(null=True, blank=True)
+
     versioMotor = models.CharField(max_length=20, default="SIM-1.0")
     resultat = models.JSONField(
         default=dict,
@@ -690,6 +718,15 @@ class MilloraImplementada(models.Model):
     estatValidacio = models.CharField(max_length=20, choices=EstatValidacio.choices, default=EstatValidacio.PENDENT_DOCUMENTACIO)
     observacionsAdmin = models.TextField(blank=True, help_text="Motiu del rebutj o indicacions")
 
+    simulacio = models.ForeignKey(
+        SimulacioMillora,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='implementacions_generades',
+        help_text="Simulació aprovada que origina aquesta implementació, si aplica."
+    )
+
     # relacio 1 a *: una millora pot tenir moltes millores implementades
     millora = models.ForeignKey(
         CatalegMillora,
@@ -716,6 +753,90 @@ class MilloraImplementada(models.Model):
     def __str__(self):
         return f"Implementació {self.millora.nom} a {self.edifici.idEdifici}"    
 
+class VotacioSimulacioMillora(models.Model):
+    simulacio = models.OneToOneField(
+        SimulacioMillora,
+        on_delete=models.CASCADE,
+        related_name='votacio',
+    )
+    edifici = models.ForeignKey(
+        Edifici,
+        on_delete=models.CASCADE,
+        related_name='votacions_simulacions',
+    )
+    creadaPer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='votacions_simulacions_creades',
+    )
+
+    titol = models.CharField(max_length=255)
+    descripcio = models.TextField(blank=True)
+
+    dataInici = models.DateTimeField(default=timezone.now)
+    dataFi = models.DateTimeField()
+
+    quorumPercent = models.FloatField(default=75.0)
+    majoriaPercent = models.FloatField(default=50.0)
+
+    estat = models.CharField(
+        max_length=20,
+        choices=EstatVotacioSimulacio.choices,
+        default=EstatVotacioSimulacio.ACTIVA,
+        db_index=True,
+    )
+
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-createdAt']
+        verbose_name = 'Votació de simulació de millora'
+        verbose_name_plural = 'Votacions de simulacions de millora'
+
+    def __str__(self):
+        return f"Votació {self.id} - Edifici {self.edifici_id}"
+
+    @property
+    def total_vots(self):
+        return self.vots.count()
+
+    @property
+    def vots_favor(self):
+        return self.vots.filter(sentit=SentitVotSimulacio.FAVOR).count()
+
+    @property
+    def vots_contra(self):
+        return self.vots.filter(sentit=SentitVotSimulacio.CONTRA).count()
+
+
+class VotSimulacioMillora(models.Model):
+    votacio = models.ForeignKey(
+        VotacioSimulacioMillora,
+        on_delete=models.CASCADE,
+        related_name='vots',
+    )
+    usuari = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='vots_simulacions',
+    )
+    sentit = models.CharField(
+        max_length=10,
+        choices=SentitVotSimulacio.choices,
+    )
+    data = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('votacio', 'usuari')
+        ordering = ['-data']
+        verbose_name = 'Vot de simulació'
+        verbose_name_plural = 'Vots de simulacions'
+
+    def __str__(self):
+        return f"{self.usuari_id} -> {self.votacio_id}: {self.sentit}"
 
 class carrersBarcelona(models.Model):
     codi_via = models.AutoField(primary_key=True)                # serial4

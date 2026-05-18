@@ -19,6 +19,8 @@ from .models import (
     Edifici, Habitatge, Localitzacio, DadesEnergetiques,
     carrersBarcelona, EstatValidacio, AccioAudit, EdificiAuditLog,
     CatalegMillora, SimulacioMillora, SimulacioMilloraItem, MilloraImplementada,
+    EstatAplicacioSimulacio, EstatVotacioSimulacio, SentitVotSimulacio,
+    VotacioSimulacioMillora, VotSimulacioMillora,
 )
 from .serializers import (
     EdificiDetailSerializer, EdificiListSerializer, EdificiMapSerializer,
@@ -30,7 +32,9 @@ from .serializers import (
     SimulacioMilloraPreviewSerializer,
     SimulacioMilloraSerializer, MilloraImplementadaSerializer,
     ValidacioMilloraSerializer,
-    ReclamarEdificiAdminSerializer,
+    ReclamarEdificiAdminSerializer, VotacioSimulacioMilloraSerializer,
+    CrearVotacioSimulacioSerializer, VotarSimulacioSerializer,
+    AcreditarSimulacioImplementadaSerializer,
 )
 from .permissions import (
     EsAdminEdifici,
@@ -416,6 +420,64 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         return items
 
+    def _es_admin_de_finca_edifici(self, request, edifici):
+        return (
+            request.user.is_authenticated
+            and hasattr(request.user, 'profile')
+            and request.user.profile.role == RoleChoices.ADMIN
+            and edifici.administradorFinca_id == request.user.id
+        )
+
+    def _pot_votar_votacio(self, user, edifici):
+        if not user.is_authenticated or not hasattr(user, 'profile'):
+            return False
+
+        if edifici.administradorFinca_id == user.id:
+            return True
+
+        if user.profile.role != RoleChoices.OWNER:
+            return False
+
+        return edifici.habitatges.filter(usuari=user).exists()
+
+    def _electors_votacio_count(self, edifici):
+        admin_count = 1 if edifici.administradorFinca_id else 0
+        owners_count = edifici.habitatges.filter(
+            usuari__isnull=False,
+            usuari__profile__role=RoleChoices.OWNER,
+        ).values('usuari').distinct().count()
+        return max(admin_count + owners_count, 1)
+
+    def _recalcular_estat_votacio(self, votacio):
+        if votacio.estat != EstatVotacioSimulacio.ACTIVA:
+            return votacio
+
+        total_electors = self._electors_votacio_count(votacio.edifici)
+        total_vots = votacio.total_vots
+        vots_favor = votacio.vots_favor
+
+        participacio = (total_vots / total_electors) * 100
+        favor = (vots_favor / total_vots) * 100 if total_vots else 0
+
+        ara = timezone.now()
+
+        if participacio >= votacio.quorumPercent and favor >= votacio.majoriaPercent:
+            votacio.estat = EstatVotacioSimulacio.APROVADA
+            votacio.simulacio.estatAplicacio = EstatAplicacioSimulacio.APROVADA
+            votacio.simulacio.votacioAprovadaAt = ara
+            votacio.simulacio.save(update_fields=['estatAplicacio', 'votacioAprovadaAt'])
+            votacio.save(update_fields=['estat', 'updatedAt'])
+            return votacio
+
+        if ara > votacio.dataFi:
+            votacio.estat = EstatVotacioSimulacio.REBUTJADA
+            votacio.simulacio.estatAplicacio = EstatAplicacioSimulacio.REBUTJADA
+            votacio.simulacio.save(update_fields=['estatAplicacio'])
+            votacio.save(update_fields=['estat', 'updatedAt'])
+            return votacio
+
+        return votacio
+
     @action(
         detail=True,
         methods=['post'],
@@ -496,6 +558,218 @@ class EdificiViewSet(viewsets.ModelViewSet):
                 )
 
         output = SimulacioMilloraSerializer(simulacio)
+        return Response(output.data, status=status.HTTP_201_CREATED)
+
+
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path=r'simulacions/(?P<simulacio_id>\d+)/sotmetre-votacio',
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici],
+    )
+    def sotmetre_simulacio_votacio(self, request, pk=None, simulacio_id=None):
+        edifici = self.get_object()
+
+        if not self._es_admin_de_finca_edifici(request, edifici):
+            return Response(
+                {"detail": "Només l'administrador de finca de l'edifici pot sotmetre simulacions a votació."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        simulacio = get_object_or_404(
+            SimulacioMillora.objects.prefetch_related('items__millora'),
+            pk=simulacio_id,
+            edifici=edifici,
+        )
+
+        if hasattr(simulacio, 'votacio'):
+            return Response(
+                {"detail": "Aquesta simulació ja té una votació associada."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if simulacio.estatAplicacio not in (
+            EstatAplicacioSimulacio.ESBORRANY,
+            EstatAplicacioSimulacio.REBUTJADA,
+        ):
+            return Response(
+                {"detail": "Aquesta simulació no es pot sotmetre a votació en el seu estat actual."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = CrearVotacioSimulacioSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        data_fi = data.get('dataFi')
+        if data_fi is None:
+            data_fi = timezone.now() + timezone.timedelta(days=data.get('diesDurada', 14))
+
+        titol = data.get('titol') or simulacio.descripcio or f"Votació simulació {simulacio.id}"
+
+        with transaction.atomic():
+            votacio = VotacioSimulacioMillora.objects.create(
+                simulacio=simulacio,
+                edifici=edifici,
+                creadaPer=request.user,
+                titol=titol,
+                descripcio=data.get('descripcio', ''),
+                dataFi=data_fi,
+                quorumPercent=data.get('quorumPercent', 75),
+                majoriaPercent=data.get('majoriaPercent', 50),
+            )
+
+            simulacio.estatAplicacio = EstatAplicacioSimulacio.EN_VOTACIO
+            simulacio.save(update_fields=['estatAplicacio'])
+
+        output = VotacioSimulacioMilloraSerializer(
+            votacio,
+            context={'request': request},
+        )
+        return Response(output.data, status=status.HTTP_201_CREATED)
+
+    @action(
+        detail=True,
+        methods=['get'],
+        url_path='votacions-simulacions',
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici],
+    )
+    def votacions_simulacions(self, request, pk=None):
+        edifici = self.get_object()
+
+        votacions = (
+            edifici.votacions_simulacions
+            .select_related('simulacio', 'edifici', 'creadaPer')
+            .prefetch_related('simulacio__items__millora', 'vots')
+            .order_by('-createdAt')
+        )
+
+        for votacio in votacions:
+            self._recalcular_estat_votacio(votacio)
+
+        serializer = VotacioSimulacioMilloraSerializer(
+            votacions,
+            many=True,
+            context={'request': request},
+        )
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path=r'votacions-simulacions/(?P<votacio_id>\d+)/votar',
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici],
+    )
+    def votar_simulacio(self, request, pk=None, votacio_id=None):
+        edifici = self.get_object()
+
+        votacio = get_object_or_404(
+            VotacioSimulacioMillora.objects.select_related('edifici', 'simulacio'),
+            pk=votacio_id,
+            edifici=edifici,
+        )
+
+        votacio = self._recalcular_estat_votacio(votacio)
+
+        if votacio.estat != EstatVotacioSimulacio.ACTIVA:
+            return Response(
+                {"detail": "Aquesta votació ja no està activa."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if timezone.now() > votacio.dataFi:
+            votacio = self._recalcular_estat_votacio(votacio)
+            return Response(
+                {"detail": "Aquesta votació ha finalitzat."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if not self._pot_votar_votacio(request.user, edifici):
+            return Response(
+                {"detail": "No tens permisos per votar en aquesta votació."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = VotarSimulacioSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        VotSimulacioMillora.objects.update_or_create(
+            votacio=votacio,
+            usuari=request.user,
+            defaults={'sentit': serializer.validated_data['sentit']},
+        )
+
+        votacio = self._recalcular_estat_votacio(votacio)
+
+        output = VotacioSimulacioMilloraSerializer(
+            votacio,
+            context={'request': request},
+        )
+        return Response(output.data, status=status.HTTP_200_OK)
+
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path=r'simulacions/(?P<simulacio_id>\d+)/acreditar-implementacio',
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici],
+    )
+    def acreditar_implementacio_simulacio(self, request, pk=None, simulacio_id=None):
+        edifici = self.get_object()
+
+        if not self._es_admin_de_finca_edifici(request, edifici):
+            return Response(
+                {"detail": "Només l'administrador de finca pot acreditar l'aplicació d'una simulació aprovada."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        simulacio = get_object_or_404(
+            SimulacioMillora.objects.prefetch_related('items__millora'),
+            pk=simulacio_id,
+            edifici=edifici,
+        )
+
+        if simulacio.estatAplicacio != EstatAplicacioSimulacio.APROVADA:
+            return Response(
+                {"detail": "Només es poden acreditar simulacions aprovades per votació."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = AcreditarSimulacioImplementadaSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        items = list(simulacio.items.select_related('millora'))
+
+        if not items:
+            return Response(
+                {"detail": "La simulació no té millores associades."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        implementacions = []
+
+        with transaction.atomic():
+            for item in items:
+                impl = MilloraImplementada.objects.create(
+                    simulacio=simulacio,
+                    edifici=edifici,
+                    millora=item.millora,
+                    dataExecucio=data['dataExecucio'],
+                    costReal=data['costReal'],
+                    documentacioAdjunta=data['documentacioAdjunta'],
+                    estatValidacio=EstatValidacio.EN_REVISIO,
+                    administradorFinca=request.user,
+                )
+                implementacions.append(impl)
+
+            simulacio.estatAplicacio = EstatAplicacioSimulacio.IMPLEMENTADA
+            simulacio.save(update_fields=['estatAplicacio'])
+
+        output = MilloraImplementadaSerializer(
+            implementacions,
+            many=True,
+            context={'request': request},
+        )
         return Response(output.data, status=status.HTTP_201_CREATED)
 
     @action(

@@ -3,7 +3,7 @@
 from django.utils import timezone
 
 from django.contrib import admin
-from .models import Edifici, EdificiAuditLog, Habitatge, DadesEnergetiques, Localitzacio, GrupComparable
+from .models import Edifici, EdificiAuditLog, Habitatge, DadesEnergetiques, Localitzacio, GrupComparable, VotacioSimulacioMillora, VotSimulacioMillora
 
 # ---------------------------------------------------------------------------
 # Edifici
@@ -186,3 +186,16 @@ class GrupComparableAdmin(admin.ModelAdmin):
         "zonaClimatica",
         "tipologia",
     )
+
+@admin.register(VotacioSimulacioMillora)
+class VotacioSimulacioMilloraAdmin(admin.ModelAdmin):
+    list_display = ('id', 'edifici', 'simulacio', 'estat', 'quorumPercent', 'majoriaPercent', 'dataFi')
+    list_filter = ('estat',)
+    search_fields = ('titol', 'edifici__idEdifici')
+
+
+@admin.register(VotSimulacioMillora)
+class VotSimulacioMilloraAdmin(admin.ModelAdmin):
+    list_display = ('id', 'votacio', 'usuari', 'sentit', 'data')
+    list_filter = ('sentit',)
+    search_fields = ('usuari__email',)

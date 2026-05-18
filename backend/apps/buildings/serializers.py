@@ -13,6 +13,9 @@ from apps.buildings.models import (
     EstatValidacio,
     TipusEdifici,
     TipusOrientacio,
+    VotacioSimulacioMillora,
+    VotSimulacioMillora,
+    SentitVotSimulacio,
 )
 import re
 from datetime import date
@@ -585,6 +588,8 @@ class SimulacioMilloraSerializer(serializers.ModelSerializer):
             'id',
             'descripcio',
             'edifici',
+            'estatAplicacio',
+            'votacioAprovadaAt',
             'reduccioConsumPrevista',
             'reduccioEmissionsPrevista',
             'costEstimat',
@@ -619,6 +624,141 @@ class ValidacioMilloraSerializer(serializers.Serializer):
     estatValidacio = serializers.ChoiceField(choices=ESTATS_PERMESOS)
     observacionsAdmin = serializers.CharField(required=False, allow_blank=True, default="")
 
+class VotSimulacioMilloraSerializer(serializers.ModelSerializer):
+    usuariEmail = serializers.EmailField(source='usuari.email', read_only=True)
+
+    class Meta:
+        model = VotSimulacioMillora
+        fields = [
+            'id',
+            'usuari',
+            'usuariEmail',
+            'sentit',
+            'data',
+        ]
+        read_only_fields = fields
+
+
+class VotacioSimulacioMilloraSerializer(serializers.ModelSerializer):
+    simulacio = SimulacioMilloraSerializer(read_only=True)
+    totalVots = serializers.SerializerMethodField()
+    votsFavor = serializers.SerializerMethodField()
+    votsContra = serializers.SerializerMethodField()
+    participacioPercent = serializers.SerializerMethodField()
+    favorPercent = serializers.SerializerMethodField()
+    potVotar = serializers.SerializerMethodField()
+    elMeuVot = serializers.SerializerMethodField()
+
+    class Meta:
+        model = VotacioSimulacioMillora
+        fields = [
+            'id',
+            'titol',
+            'descripcio',
+            'edifici',
+            'simulacio',
+            'dataInici',
+            'dataFi',
+            'quorumPercent',
+            'majoriaPercent',
+            'estat',
+            'totalVots',
+            'votsFavor',
+            'votsContra',
+            'participacioPercent',
+            'favorPercent',
+            'potVotar',
+            'elMeuVot',
+        ]
+        read_only_fields = fields
+
+    def _electors_count(self, obj):
+        admin_count = 1 if obj.edifici.administradorFinca_id else 0
+        owners_count = obj.edifici.habitatges.filter(
+            usuari__isnull=False,
+            usuari__profile__role='owner',
+        ).values('usuari').distinct().count()
+        return max(admin_count + owners_count, 1)
+
+    def get_totalVots(self, obj):
+        return obj.total_vots
+
+    def get_votsFavor(self, obj):
+        return obj.vots_favor
+
+    def get_votsContra(self, obj):
+        return obj.vots_contra
+
+    def get_participacioPercent(self, obj):
+        total = self._electors_count(obj)
+        return round((obj.total_vots / total) * 100, 2)
+
+    def get_favorPercent(self, obj):
+        total_vots = obj.total_vots
+        if total_vots == 0:
+            return 0
+        return round((obj.vots_favor / total_vots) * 100, 2)
+
+    def get_potVotar(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+
+        if obj.edifici.administradorFinca_id == user.id:
+            return True
+
+        return obj.edifici.habitatges.filter(
+            usuari=user,
+            usuari__profile__role='owner',
+        ).exists()
+
+    def get_elMeuVot(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return None
+
+        vot = obj.vots.filter(usuari=request.user).first()
+        return vot.sentit if vot else None
+
+
+class CrearVotacioSimulacioSerializer(serializers.Serializer):
+    titol = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    descripcio = serializers.CharField(required=False, allow_blank=True, default='')
+    dataFi = serializers.DateTimeField(required=False)
+    diesDurada = serializers.IntegerField(required=False, min_value=1, max_value=90, default=14)
+    quorumPercent = serializers.FloatField(required=False, min_value=1, max_value=100, default=75)
+    majoriaPercent = serializers.FloatField(required=False, min_value=1, max_value=100, default=50)
+
+
+class VotarSimulacioSerializer(serializers.Serializer):
+    sentit = serializers.ChoiceField(choices=SentitVotSimulacio.choices)
+
+
+class AcreditarSimulacioImplementadaSerializer(serializers.Serializer):
+    dataExecucio = serializers.DateField()
+    costReal = serializers.FloatField(min_value=0)
+    documentacioAdjunta = serializers.FileField()
+
+    def validate_documentacioAdjunta(self, value):
+        allowed = {
+            'application/pdf',
+            'image/jpeg',
+            'image/png',
+            'image/webp',
+        }
+
+        if value.content_type not in allowed:
+            raise serializers.ValidationError(
+                "Només es permet documentació PDF, JPG, PNG o WEBP."
+            )
+
+        if value.size > 10 * 1024 * 1024:
+            raise serializers.ValidationError(
+                "El fitxer no pot superar els 10 MB."
+            )
+
+        return value
 
 class ReclamarEdificiAdminSerializer(serializers.Serializer):
     carrer = serializers.CharField(max_length=255)

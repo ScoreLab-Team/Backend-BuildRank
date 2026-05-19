@@ -1321,7 +1321,10 @@ class GoogleOAuthTests(APITestCase):
 
         response = self.client.post(
             self.url,
-            {"id_token": "valid-google-id-token"},
+            {
+                "id_token": "valid-google-id-token",
+                "mode": "register",
+            },
             format="json",
         )
 
@@ -1357,12 +1360,17 @@ class GoogleOAuthTests(APITestCase):
 
         response = self.client.post(
             self.url,
-            {"id_token": "valid-google-id-token"},
+            {
+                "id_token": "valid-google-id-token",
+                "mode": "register"
+            },
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(User.objects.filter(email="existing@example.com").count(), 1)
+
+        self.assertIn("detail", response.data)
 
         existing_user.refresh_from_db()
         self.assertEqual(existing_user.first_name, "Existing")
@@ -1379,7 +1387,10 @@ class GoogleOAuthTests(APITestCase):
 
         response = self.client.post(
             self.url,
-            {"id_token": "valid-google-id-token"},
+            {
+                "id_token": "valid-google-id-token",
+                "mode": "register",
+            },
             format="json",
         )
 
@@ -1390,7 +1401,10 @@ class GoogleOAuthTests(APITestCase):
     def test_google_oauth_requires_client_id_configuration(self):
         response = self.client.post(
             self.url,
-            {"id_token": "any-token"},
+            {
+                "id_token": "any-token",
+                "mode": "login",
+            },
             format="json",
         )
 
@@ -1414,6 +1428,7 @@ class GoogleOAuthTests(APITestCase):
             {
                 "id_token": "valid-google-id-token",
                 "role": RoleChoices.TENANT,
+                "mode": "register",
             },
             format="json",
         )
@@ -1460,22 +1475,21 @@ class GoogleOAuthTests(APITestCase):
             {
                 "id_token": "valid-google-id-token",
                 "role": RoleChoices.TENANT,
+                "mode": "register",
             },
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("detail", response.data)
 
         existing_user.refresh_from_db()
         existing_user.profile.refresh_from_db()
 
-        self.assertEqual(
-            existing_user.profile.role,
-            RoleChoices.OWNER,
-        )
+        self.assertEqual(existing_user.profile.role, RoleChoices.OWNER)
 
         self.assertEqual(
-            response.data["user"]["role"],
+            existing_user.profile.role,
             RoleChoices.OWNER,
         )
 
@@ -1496,6 +1510,7 @@ class GoogleOAuthTests(APITestCase):
             {
                 "id_token": "valid-google-id-token",
                 "role": "superadmin",
+                "mode": "register",
             },
             format="json",
         )

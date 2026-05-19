@@ -464,7 +464,7 @@ class ChannelPermissionTests(APITestCase):
 
 class IsBuildingModeratorTests(APITestCase):
     def setUp(self):
-        self.grup = GrupComparable.objects.create(nom="G1", criteris="c")
+        self.grup = _create_grup()
         self.admin = User.objects.create_user(email="admin@test.com", password="pw")
         _set_role(self.admin, RoleChoices.ADMIN)
         self.admin.profile.save()
@@ -513,7 +513,11 @@ class IsBuildingModeratorTests(APITestCase):
 )
 class ModerationPermissionTests(APITestCase):
     def setUp(self):
-        self.grup = GrupComparable.objects.create(nom="G2", criteris="c")
+        stream_patcher = patch("apps.chat.services.sync_user_to_stream")
+        stream_patcher.start()
+        self.addCleanup(stream_patcher.stop)
+
+        self.grup = _create_grup()
         self.admin = User.objects.create_user(email="mod_admin@test.com", password="pw")
         _set_role(self.admin, RoleChoices.ADMIN)
         self.admin.profile.save()

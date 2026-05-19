@@ -8,6 +8,7 @@ class ParticipationManager(models.Manager):
             edifici=edifici,
             lliga=lliga,
             puntuacio=0,
+            puntuacio_inicial=0,
             posicio=0,
             divisio=lliga.divisio
         )

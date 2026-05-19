@@ -63,6 +63,7 @@ class ParticipacioViewSet(viewsets.ModelViewSet):
             "temporada": participacio.lliga.temporada.id_temporada,
             "nom_temporada": participacio.lliga.temporada.nom,
             "puntuacio": participacio.puntuacio,
+            "puntuacio_inicial": participacio.puntuacio_inicial,
             "posicio": participacio.posicio,
             "divisio": participacio.divisio,
             "grup_comparable": (
@@ -70,3 +71,43 @@ class ParticipacioViewSet(viewsets.ModelViewSet):
                 if participacio.edifici.grupComparable else None
             )
         })
+
+    @action(detail=False, methods=["get"], url_path="evolucio_puntuacio")
+    def evolucio_puntuacio(self, request):
+
+        edifici_id = request.query_params.get("edifici")
+        temporades = int(request.query_params.get("temporades", 5))
+
+        if not edifici_id:
+            return Response(
+                {"error": "edifici is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        get_object_or_404(Edifici, pk=edifici_id)
+
+        historial = (
+            Participacio.objects
+            .select_related("lliga__temporada")
+            .filter(edifici_id=edifici_id)
+            .order_by("-lliga__temporada__dataInici")[:temporades]
+        )
+
+        data = [
+            {
+                "temporada_id": p.lliga.temporada.id_temporada,
+                "nom_temporada": p.lliga.temporada.nom,
+                "lliga": p.lliga.nom,
+
+                "puntuacio_inicial": p.puntuacio_inicial,
+                "puntuacio_actual": p.puntuacio,
+
+                "delta_puntuacio": (
+                        p.puntuacio - p.puntuacio_inicial
+                ),
+
+                "posicio_actual": p.posicio,
+            }
+            for p in historial
+        ]
+
+        return Response(data)

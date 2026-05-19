@@ -189,7 +189,11 @@ class MeEdificisView(APIView):
             # Owner / Tenant: edificis on té vinculació per habitatge
             edificis = (
                 Edifici.objects.select_related("localitzacio")
-                .filter(habitatges__usuari=user)
+                .filter(
+                    Q(habitatges__usuari=user)
+                    | Q(habitatges__propietari=user)
+                    | Q(habitatges__llogater=user)
+                )
                 .distinct()
             )
 

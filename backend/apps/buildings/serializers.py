@@ -1,4 +1,5 @@
 # apps/buildings/serializers.py
+from django.db.models import Q
 from rest_framework import serializers
 from apps.buildings.models import (
     Edifici,
@@ -16,6 +17,7 @@ from apps.buildings.models import (
     VotacioSimulacioMillora,
     VotSimulacioMillora,
     SentitVotSimulacio,
+    RolVinculacioHabitatge,
 )
 import re
 from datetime import date
@@ -119,6 +121,14 @@ class HabitatgeDetailSerializer(serializers.ModelSerializer):
     dadesEnergetiques = DadesEnergetiquesSerializer(read_only=True)
     solicitant = UsuariBasicSerializer(read_only=True)
 
+    propietari = UsuariBasicSerializer(read_only=True)
+    llogater = UsuariBasicSerializer(read_only=True)
+    rolSolicitat = serializers.ChoiceField(
+        choices=RolVinculacioHabitatge.choices,
+        required=False,
+        allow_null=True
+    )
+
     # validacio superficie
     def validate_superficie(self, value):
         if value <= 0:
@@ -153,7 +163,7 @@ class HabitatgeDetailSerializer(serializers.ModelSerializer):
         unique_together = ('edifici', 'planta', 'porta')
         fields = '__all__'
         # bloquegem aquests camps perquè l'usuari no els pugui manipular durant el POST
-        read_only_fields = ['estatValidacio', 'solicitant', 'usuari']
+        read_only_fields = ['estatValidacio', 'solicitant', 'usuari', 'propietari', 'llogater', 'rolSolicitat']
 
 class DadesEnergetiquesUpdateSerializer(serializers.ModelSerializer):
     """Per crear o actualitzar DadesEnergetiques des de l'endpoint de l'habitatge."""
@@ -457,7 +467,7 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
             qs = obj.habitatges.all()
         else:
             # Owner/Tenant: només veu els habitatges vinculats al seu usuari.
-            qs = obj.habitatges.filter(usuari=user)
+            qs = obj.habitatges.filter(Q(usuari=user) | Q(propietari=user) | Q(llogater=user))
 
         return HabitatgeResumSerializer(qs, many=True).data
 

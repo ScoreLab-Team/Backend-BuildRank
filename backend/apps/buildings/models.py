@@ -47,6 +47,11 @@ class EstatValidacio(models.TextChoices):
     VALIDADA = 'Validada', 'Validada'
     REBUTJADA = 'Rebutjada', 'Rebutjada'
 
+
+class RolVinculacioHabitatge(models.TextChoices):
+    OWNER = 'owner', 'Propietari'
+    TENANT = 'tenant', 'Llogater'
+
 class EstatAplicacioSimulacio(models.TextChoices):
     ESBORRANY = 'esborrany', 'Esborrany'
     EN_VOTACIO = 'en_votacio', 'En votació'
@@ -472,6 +477,31 @@ class Habitatge(models.Model):
     )
 
     # relacio amb DadesEnergetiques (relacio 1 a 1)
+    # Nous camps explícits de vinculació residencial.
+    # Es manté usuari com a camp legacy per compatibilitat amb endpoints existents.
+    propietari = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='habitatges_com_propietari'
+    )
+
+    llogater = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='habitatges_com_llogater'
+    )
+
+    # Rol que està demanant el solicitant pendent de validació.
+    rolSolicitat = models.CharField(
+        max_length=10,
+        choices=RolVinculacioHabitatge.choices,
+        null=True,
+        blank=True
+    )
     dadesEnergetiques = models.OneToOneField(
         DadesEnergetiques, 
         on_delete=models.CASCADE, 
@@ -495,6 +525,47 @@ class Habitatge(models.Model):
         blank=True,
         related_name="solicituds_habitatge"
     )
+
+    def te_vinculacio(self, user):
+        if not user or not getattr(user, "is_authenticated", False):
+            return False
+        return user.id in {
+            self.usuari_id,
+            self.propietari_id,
+            self.llogater_id,
+        }
+
+    def es_propietari(self, user):
+        if not user or not getattr(user, "is_authenticated", False):
+            return False
+        return user.id == self.propietari_id or user.id == self.usuari_id
+
+    def es_llogater(self, user):
+        if not user or not getattr(user, "is_authenticated", False):
+            return False
+        return user.id == self.llogater_id
+
+    def slot_ocupat(self, rol):
+        if rol == RolVinculacioHabitatge.OWNER:
+            return self.propietari_id is not None
+        if rol == RolVinculacioHabitatge.TENANT:
+            return self.llogater_id is not None
+        return True
+
+    def assignar_solicitant_validat(self):
+        if not self.solicitant_id:
+            return
+
+        if self.rolSolicitat == RolVinculacioHabitatge.OWNER:
+            self.propietari = self.solicitant
+            # Compatibilitat amb el model anterior: el propietari queda com a resident principal.
+            self.usuari = self.solicitant
+
+        elif self.rolSolicitat == RolVinculacioHabitatge.TENANT:
+            self.llogater = self.solicitant
+            # Si encara no hi havia resident legacy, el tenant manté compatibilitat amb codi antic.
+            if self.usuari_id is None:
+                self.usuari = self.solicitant
 
     def __str__(self):
         return f"{self.edifici} - {self.planta}, {self.porta}"

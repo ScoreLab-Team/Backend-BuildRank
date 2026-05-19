@@ -3,6 +3,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 
 from apps.buildings.models import Edifici
@@ -22,7 +23,7 @@ def _is_edifici_member(user, edifici):
         return True
     if edifici.administradorFinca_id == user.id:
         return True
-    return edifici.habitatges.filter(usuari=user).exists()
+    return edifici.habitatges.filter(Q(usuari=user) | Q(propietari=user) | Q(llogater=user)).exists()
 
 
 def _is_edifici_admin(user, edifici):
@@ -34,7 +35,7 @@ def _can_vote(user, edifici):
         return True
     try:
         if user.profile.role == 'owner':
-            return edifici.habitatges.filter(usuari=user).exists()
+            return edifici.habitatges.filter(Q(usuari=user) | Q(propietari=user)).exists()
     except Exception:
         pass
     return False

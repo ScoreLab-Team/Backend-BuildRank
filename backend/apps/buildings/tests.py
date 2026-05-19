@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.core.files.uploadedfile import SimpleUploadedFile
 
-from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora, SimulacioMilloraItem, EstatAplicacioSimulacio, TipusEdifici
+from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora, SimulacioMilloraItem, EstatAplicacioSimulacio, RolVinculacioHabitatge, TipusEdifici
 from apps.buildings.serializers import EdificiDetailSerializer, LocalitzacioSerializer
 from apps.accounts.models import RoleChoices, ValidacioAdmin
 from .simulation.engine import simular_millores, clamp, UnitatBaseMillora
@@ -2996,6 +2996,64 @@ class HabitatgeFluxTests(BaseTestData):
         self.assertTrue(Habitatge.objects.filter(pk=habitatge.pk).exists())
         self.assertEqual(habitatge.estatValidacio, EstatValidacio.REBUTJADA)
         self.assertIsNone(habitatge.solicitant)
+
+    def test_creacio_habitatge_guarda_rol_solicitat_owner(self):
+        self.client.force_authenticate(user=self.usuari)
+        payload = {
+            "referenciaCadastral": "BCN-ROL-OWNER",
+            "edifici": self.edifici.idEdifici,
+            "planta": "4",
+            "porta": "2",
+            "superficie": 75.0,
+        }
+
+        response = self.client.post(self.url_list, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        habitatge = Habitatge.objects.get(referenciaCadastral="BCN-ROL-OWNER")
+        self.assertEqual(habitatge.estatValidacio, EstatValidacio.EN_REVISIO)
+        self.assertEqual(habitatge.solicitant, self.usuari)
+        self.assertEqual(habitatge.rolSolicitat, RolVinculacioHabitatge.OWNER)
+
+    def test_habitatge_permet_propietari_i_llogater_alhora(self):
+        tenant = self._create_user("tenant_habitatge@test.com", RoleChoices.TENANT)
+
+        habitatge = Habitatge.objects.create(
+            referenciaCadastral="OWNER-TENANT-001",
+            edifici=self.edifici,
+            superficie=80.0,
+            planta="1",
+            porta="1",
+            estatValidacio=EstatValidacio.VALIDADA,
+            usuari=self.usuari,
+            propietari=self.usuari,
+        )
+
+        self.client.force_authenticate(user=tenant)
+        url_solicitar = reverse('habitatge-solicitar-acces', kwargs={'pk': habitatge.pk})
+        response = self.client.post(url_solicitar, {}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        habitatge.refresh_from_db()
+        self.assertEqual(habitatge.estatValidacio, EstatValidacio.EN_REVISIO)
+        self.assertEqual(habitatge.solicitant, tenant)
+        self.assertEqual(habitatge.rolSolicitat, RolVinculacioHabitatge.TENANT)
+        self.assertEqual(habitatge.propietari, self.usuari)
+        self.assertIsNone(habitatge.llogater)
+
+        self.client.force_authenticate(user=self.admin_finca)
+        url_validar = reverse('habitatge-validar-acces', kwargs={'pk': habitatge.pk})
+        response = self.client.post(url_validar, {"estat": "Validada"}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        habitatge.refresh_from_db()
+        self.assertEqual(habitatge.estatValidacio, EstatValidacio.VALIDADA)
+        self.assertEqual(habitatge.propietari, self.usuari)
+        self.assertEqual(habitatge.llogater, tenant)
+        self.assertEqual(habitatge.usuari, self.usuari)
+        self.assertIsNone(habitatge.solicitant)
+        self.assertIsNone(habitatge.rolSolicitat)
+
 
 class TestFluxSolicitudHabitatge(BaseTestData):
     """

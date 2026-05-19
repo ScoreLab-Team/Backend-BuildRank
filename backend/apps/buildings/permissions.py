@@ -71,14 +71,19 @@ class EsAdminOPropietariEdifici(BasePermission):
         # ABAC + RBAC combinats
         if role == RoleChoices.ADMIN and obj.administradorFinca == user:
             return True
-        if role == RoleChoices.OWNER:
-            if obj.habitatges.filter(usuari=user).exists():
-                return True
+        te_vinculacio_edifici = (
+            obj.habitatges.filter(usuari=user).exists()
+            or obj.habitatges.filter(propietari=user).exists()
+            or obj.habitatges.filter(llogater=user).exists()
+        )
+
+        if role == RoleChoices.OWNER and te_vinculacio_edifici:
+            return True
+
         if role == RoleChoices.TENANT:
-            # Tenant: només lectura per matriu de permisos
-            if request.method in ('GET', 'HEAD', 'OPTIONS'):
-                if obj.habitatges.filter(usuari=user).exists():
-                    return True
+            # Tenant: només lectura per matriu de permisos.
+            if request.method in ('GET', 'HEAD', 'OPTIONS') and te_vinculacio_edifici:
+                return True
 
         log_denial(request, view.action, 'Sense relació amb l\'edifici', obj.idEdifici)
         return False
@@ -107,7 +112,7 @@ class EsAdminOPropietariHabitatge(BasePermission):
 
         if role == RoleChoices.ADMIN and obj.edifici.administradorFinca == user:
             return True
-        if role in (RoleChoices.OWNER, RoleChoices.TENANT) and obj.usuari == user:
+        if role in (RoleChoices.OWNER, RoleChoices.TENANT) and obj.te_vinculacio(user):
             return True
 
         log_denial(request, view.action, 'Sense relació amb l\'habitatge',
@@ -137,7 +142,7 @@ class EsOwnerOAdminHabitatge(BasePermission):
 
         if role == RoleChoices.ADMIN and obj.edifici.administradorFinca == user:
             return True
-        if role == RoleChoices.OWNER and obj.usuari == user:
+        if role == RoleChoices.OWNER and obj.es_propietari(user):
             return True
 
         log_denial(request, view.action, 'Sense relació owner/admin amb l\'habitatge', obj.edifici.idEdifici)
@@ -174,7 +179,7 @@ class EsOwnerOAdminDadesEnergetiques(BasePermission):
 
         if role == RoleChoices.ADMIN and habitatge.edifici.administradorFinca == user:
             return True
-        if role == RoleChoices.OWNER and habitatge.usuari == user:
+        if role == RoleChoices.OWNER and habitatge.es_propietari(user):
             return True
 
         log_denial(request, view.action, 'Sense relació owner/admin amb dades energètiques', habitatge.edifici.idEdifici)

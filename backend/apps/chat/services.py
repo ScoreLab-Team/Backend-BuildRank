@@ -3,6 +3,7 @@ import time
 from typing import Any
 
 from django.conf import settings
+from django.db.models import Q
 from django.core.exceptions import ImproperlyConfigured
 from stream_chat import StreamChat
 
@@ -112,7 +113,7 @@ def get_accessible_buildings(user):
         ).select_related("grupComparable", "localitzacio")
 
     return (
-        Edifici.objects.filter(actiu=True, habitatges__usuari=user)
+        Edifici.objects.filter(actiu=True).filter(Q(habitatges__usuari=user) | Q(habitatges__propietari=user) | Q(habitatges__llogater=user))
         .distinct()
         .select_related("grupComparable", "localitzacio")
     )

@@ -3,7 +3,7 @@ from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 
 from .models import Habitatge, DadesEnergetiques, DadesEnergetiquesOpenData
-from .scoring import calcular_building_health_score, calcular_classificacio_estimada, calcular_bhs_opendata
+from .scoring import calcular_building_health_score, calcular_classificacio_estimada, calcular_bhs_opendata, calcular_heat_risk_index
 
 
 def _recalcular_edifici(edifici):
@@ -48,6 +48,12 @@ def _recalcular_edifici(edifici):
     edifici.classificacioFont = resultat["font"]
     update_fields.extend(["classificacioEstimada", "classificacioFont"])
 
+    # --- Heat Risk Index ---
+    resultat_hr = calcular_heat_risk_index(edifici)
+    edifici.heatRiskIndex = resultat_hr["index"]
+    edifici.heatRiskFont = resultat_hr["font"]
+    update_fields.extend(["heatRiskIndex", "heatRiskFont"])
+
     edifici.save(update_fields=update_fields)
 
 
@@ -67,7 +73,7 @@ def signal_dades_energetiques(sender, instance, **kwargs):
     _recalcular_edifici(habitatge.edifici)
 
 
-# --- NOU: recalcular quan canvien les dades open data ---
+# Recalcular quan canvien les dades open data ---
 @receiver(post_save, sender=DadesEnergetiquesOpenData)
 @receiver(post_delete, sender=DadesEnergetiquesOpenData)
 def signal_dades_opendata(sender, instance, **kwargs):

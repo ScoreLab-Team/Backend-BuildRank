@@ -301,3 +301,220 @@ def validate_twin_channel_access(user, group_id: int) -> bool:
     if role == RoleChoices.TENANT and not user.is_superuser:
         return False
     return get_accessible_buildings(user).filter(grupComparable_id=group_id).exists()
+
+def _format_building_address(edifici) -> str:
+    loc = getattr(edifici, "localitzacio", None)
+    if not loc:
+        return f"Edifici {edifici.idEdifici}"
+
+    parts = []
+    if loc.carrer:
+        parts.append(str(loc.carrer))
+    if loc.numero is not None:
+        parts.append(str(loc.numero))
+
+    address = " ".join(parts).strip()
+    return address or f"Edifici {edifici.idEdifici}"
+
+
+def _format_user_name(user) -> str:
+    full_name = f"{user.first_name} {user.last_name}".strip()
+    return full_name or user.email
+
+
+def _is_admin_finca_of_building(user, edifici) -> bool:
+    if not user.is_authenticated:
+        return False
+
+    if user.is_superuser:
+        return True
+
+    role = getattr(getattr(user, "profile", None), "role", None)
+    return role == RoleChoices.ADMIN and edifici.administradorFinca_id == user.id
+
+
+def _is_valid_target_admin(user) -> bool:
+    if user is None:
+        return False
+
+    if user.is_superuser:
+        return True
+
+    role = getattr(getattr(user, "profile", None), "role", None)
+    return role == RoleChoices.ADMIN
+
+
+def _build_twin_admin_descriptor(edifici) -> dict[str, Any]:
+    admin = edifici.administradorFinca
+    loc = getattr(edifici, "localitzacio", None)
+
+    return {
+        "edifici_id": edifici.idEdifici,
+        "adreca": _format_building_address(edifici),
+        "barri": getattr(loc, "barri", "") if loc else "",
+        "codiPostal": getattr(loc, "codiPostal", "") if loc else "",
+        "zonaClimatica": getattr(loc, "zonaClimatica", "") if loc else "",
+        "tipologia": edifici.tipologia,
+        "superficieTotal": edifici.superficieTotal,
+        "puntuacioBase": edifici.puntuacioBase,
+        "grupComparable": edifici.grupComparable_id,
+        "admin": {
+            "id": admin.id,
+            "stream_user_id": get_stream_user_id(admin),
+            "email": admin.email,
+            "name": _format_user_name(admin),
+        },
+    }
+
+
+def get_twin_building_admin_candidates(user, edifici_id: int) -> list[dict[str, Any]]:
+    """
+    Retorna administradors de finca d'edificis comparables al de partida.
+
+    Regles:
+    - L'usuari ha de ser l'administrador de finca de l'edifici origen.
+    - L'edifici origen ha de tenir GrupComparable.
+    - Només es retornen edificis actius del mateix grup.
+    - No es retorna el propi edifici.
+    - No es retorna el mateix administrador.
+    - Només es retornen edificis amb administrador de finca vàlid.
+    """
+    try:
+        source = (
+            Edifici.objects
+            .select_related("localitzacio", "grupComparable", "administradorFinca__profile")
+            .get(pk=edifici_id, actiu=True)
+        )
+    except Edifici.DoesNotExist as exc:
+        raise ValueError("No s'ha trobat l'edifici origen.") from exc
+
+    if not _is_admin_finca_of_building(user, source):
+        raise PermissionError(
+            "Només l'administrador de finca d'aquest edifici pot consultar edificis comparables."
+        )
+
+    if not source.grupComparable_id:
+        return []
+
+    candidates = (
+        Edifici.objects
+        .filter(
+            actiu=True,
+            grupComparable_id=source.grupComparable_id,
+            administradorFinca__isnull=False,
+        )
+        .exclude(pk=source.pk)
+        .exclude(administradorFinca_id=user.id)
+        .select_related("localitzacio", "grupComparable", "administradorFinca__profile")
+        .order_by("idEdifici")
+    )
+
+    results: list[dict[str, Any]] = []
+    for edifici in candidates:
+        if _is_valid_target_admin(edifici.administradorFinca):
+            results.append(_build_twin_admin_descriptor(edifici))
+
+    return results
+
+
+def get_or_create_twin_building_admin_channel(
+    user,
+    source_edifici_id: int,
+    target_edifici_id: int,
+) -> dict[str, Any]:
+    """
+    Crea o obté un canal directe entre dos administradors de finca
+    d'edificis del mateix GrupComparable.
+    """
+    try:
+        source = (
+            Edifici.objects
+            .select_related("localitzacio", "grupComparable", "administradorFinca__profile")
+            .get(pk=source_edifici_id, actiu=True)
+        )
+    except Edifici.DoesNotExist as exc:
+        raise ValueError("No s'ha trobat l'edifici origen.") from exc
+
+    if not _is_admin_finca_of_building(user, source):
+        raise PermissionError(
+            "Només l'administrador de finca d'aquest edifici pot crear el xat Twin Building."
+        )
+
+    if not source.grupComparable_id:
+        raise ValueError("L'edifici origen no té cap grup comparable assignat.")
+
+    try:
+        target = (
+            Edifici.objects
+            .select_related("localitzacio", "grupComparable", "administradorFinca__profile")
+            .get(pk=target_edifici_id, actiu=True)
+        )
+    except Edifici.DoesNotExist as exc:
+        raise ValueError("No s'ha trobat l'edifici destí.") from exc
+
+    if target.pk == source.pk:
+        raise ValueError("No es pot crear un xat Twin Building amb el mateix edifici.")
+
+    if target.grupComparable_id != source.grupComparable_id:
+        raise ValueError("L'edifici destí no pertany al mateix grup comparable.")
+
+    target_admin = target.administradorFinca
+    if not _is_valid_target_admin(target_admin):
+        raise ValueError("L'edifici destí no té un administrador de finca vàlid.")
+
+    if target_admin.id == user.id:
+        raise ValueError("No es pot crear un xat Twin Building amb un edifici gestionat pel mateix usuari.")
+
+    client = get_stream_client()
+
+    source_stream_uid = get_stream_user_id(user)
+    target_stream_uid = get_stream_user_id(target_admin)
+
+    sync_user_to_stream(client, user)
+    sync_user_to_stream(client, target_admin)
+
+    source_id = int(source.idEdifici)
+    target_id = int(target.idEdifici)
+    low_id = min(source_id, target_id)
+    high_id = max(source_id, target_id)
+
+    channel_id = f"twin_building_{low_id}_{high_id}_admins"
+    channel_name = f"Twin Building: {_format_building_address(source)} ↔ {_format_building_address(target)}"
+
+    channel = client.channel(
+        "messaging",
+        channel_id,
+        data={
+            "name": channel_name,
+            "kind": "twin_building_direct",
+            "source_edifici_id": source.idEdifici,
+            "target_edifici_id": target.idEdifici,
+            "grup_comparable_id": source.grupComparable_id,
+        },
+    )
+    channel.create(source_stream_uid)
+    channel.add_members([source_stream_uid, target_stream_uid])
+
+    return {
+        "id": channel_id,
+        "type": "messaging",
+        "kind": "twin_building_direct",
+        "name": channel_name,
+        "stream_channel_id": channel_id,
+        "source_edifici": _build_twin_admin_descriptor(source),
+        "target_edifici": _build_twin_admin_descriptor(target),
+        "members": [
+            {
+                "id": user.id,
+                "stream_user_id": source_stream_uid,
+                "email": user.email,
+                "name": _format_user_name(user),
+            },
+            {
+                "id": target_admin.id,
+                "stream_user_id": target_stream_uid,
+                "email": target_admin.email,
+                "name": _format_user_name(target_admin),
+            },
+        ],
+    }

@@ -5,7 +5,8 @@ from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
-
+from django.db.models.signals import post_save
+from apps.chat import signals as chat_signals
 from apps.accounts.models import Profile, RoleChoices, User
 from apps.buildings.models import Edifici, GrupComparable, Habitatge, Localitzacio
 
@@ -453,3 +454,182 @@ class ChannelPermissionTests(APITestCase):
         from apps.chat.services import validate_twin_channel_access
 
         self.assertFalse(validate_twin_channel_access(self.owner, 999999))
+
+# ---------------------------------------------------------------------------
+# US40 — Twin Building direct chat entre administradors de finca
+# ---------------------------------------------------------------------------
+
+@override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s", STREAM_TOKEN_EXPIRATION_SECONDS=3600)
+class TwinBuildingDirectChatTests(APITestCase):
+    def setUp(self):
+        # Evitem que els signals de xat facin crides reals a GetStream
+        # mentre preparem dades de test. Aquests tests validen els endpoints
+        # Twin Building, no la sincronització automàtica per signals.
+        post_save.disconnect(chat_signals.sync_profile_to_stream, sender=Profile)
+        post_save.disconnect(chat_signals.add_tenant_to_building_channel, sender=Habitatge)
+
+        self.addCleanup(
+            post_save.connect,
+            chat_signals.sync_profile_to_stream,
+            sender=Profile,
+        )
+        self.addCleanup(
+            post_save.connect,
+            chat_signals.add_tenant_to_building_channel,
+            sender=Habitatge,
+        )
+
+        self.grup = GrupComparable.objects.create(
+            idGrup=40,
+            zonaClimatica="C2",
+            tipologia="Residencial",
+            rangSuperficie="200-500",
+        )
+        self.altre_grup = GrupComparable.objects.create(
+            idGrup=41,
+            zonaClimatica="C2",
+            tipologia="Residencial",
+            rangSuperficie="500-1000",
+        )
+
+        self.admin_origen = User.objects.create_user(
+            email="admin.origen@example.com",
+            password="Pass123!",
+            first_name="Admin",
+            last_name="Origen",
+        )
+        _set_role(self.admin_origen, RoleChoices.ADMIN)
+
+        self.admin_desti = User.objects.create_user(
+            email="admin.desti@example.com",
+            password="Pass123!",
+            first_name="Admin",
+            last_name="Desti",
+        )
+        _set_role(self.admin_desti, RoleChoices.ADMIN)
+
+        self.admin_altre_grup = User.objects.create_user(
+            email="admin.altre@example.com",
+            password="Pass123!",
+        )
+        _set_role(self.admin_altre_grup, RoleChoices.ADMIN)
+
+        self.owner = User.objects.create_user(
+            email="owner.twin@example.com",
+            password="Pass123!",
+        )
+        _set_role(self.owner, RoleChoices.OWNER)
+
+        self.edifici_origen = _create_building(owner=self.admin_origen, grup=self.grup)
+        self.edifici_desti = _create_building(owner=self.admin_desti, grup=self.grup)
+        self.edifici_altre_grup = _create_building(owner=self.admin_altre_grup, grup=self.altre_grup)
+
+        Habitatge.objects.create(
+            referenciaCadastral="TWIN001",
+            planta="1",
+            porta="1A",
+            superficie=80.0,
+            edifici=self.edifici_origen,
+            usuari=self.owner,
+        )
+
+    def test_admin_can_list_twin_building_admins_same_group(self):
+        self.client.force_authenticate(user=self.admin_origen)
+
+        response = self.client.get(
+            reverse(
+                "chat-twin-building-admins",
+                kwargs={"edifici_id": self.edifici_origen.idEdifici},
+            )
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
+
+        result = response.data["results"][0]
+        self.assertEqual(result["edifici_id"], self.edifici_desti.idEdifici)
+        self.assertEqual(result["admin"]["email"], self.admin_desti.email)
+
+    def test_admin_list_does_not_include_own_building_or_other_group(self):
+        self.client.force_authenticate(user=self.admin_origen)
+
+        response = self.client.get(
+            reverse(
+                "chat-twin-building-admins",
+                kwargs={"edifici_id": self.edifici_origen.idEdifici},
+            )
+        )
+
+        ids = {item["edifici_id"] for item in response.data["results"]}
+
+        self.assertNotIn(self.edifici_origen.idEdifici, ids)
+        self.assertNotIn(self.edifici_altre_grup.idEdifici, ids)
+
+    def test_owner_cannot_list_twin_building_admins(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(
+            reverse(
+                "chat-twin-building-admins",
+                kwargs={"edifici_id": self.edifici_origen.idEdifici},
+            )
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    @patch("apps.chat.services.get_stream_client")
+    def test_admin_can_create_direct_twin_building_channel(self, mock_get_client):
+        mock_client, mock_channel = _make_mock_stream_client()
+        mock_get_client.return_value = mock_client
+
+        self.client.force_authenticate(user=self.admin_origen)
+
+        response = self.client.post(
+            reverse(
+                "chat-twin-building-channel",
+                kwargs={"edifici_id": self.edifici_origen.idEdifici},
+            ),
+            {"target_edifici_id": self.edifici_desti.idEdifici},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["kind"], "twin_building_direct")
+        self.assertEqual(
+            response.data["id"],
+            f"twin_building_{self.edifici_origen.idEdifici}_{self.edifici_desti.idEdifici}_admins",
+        )
+
+        mock_client.channel.assert_called()
+        mock_channel.create.assert_called()
+        mock_channel.add_members.assert_called()
+
+    def test_cannot_create_channel_with_building_from_other_group(self):
+        self.client.force_authenticate(user=self.admin_origen)
+
+        response = self.client.post(
+            reverse(
+                "chat-twin-building-channel",
+                kwargs={"edifici_id": self.edifici_origen.idEdifici},
+            ),
+            {"target_edifici_id": self.edifici_altre_grup.idEdifici},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("mateix grup comparable", response.data["detail"])
+
+    def test_missing_target_edifici_id_returns_400(self):
+        self.client.force_authenticate(user=self.admin_origen)
+
+        response = self.client.post(
+            reverse(
+                "chat-twin-building-channel",
+                kwargs={"edifici_id": self.edifici_origen.idEdifici},
+            ),
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("target_edifici_id", response.data["detail"])

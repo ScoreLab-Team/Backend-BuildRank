@@ -14,6 +14,7 @@ import os
 from django.db import transaction
 from django.utils import timezone
 
+from apps.accounts.models import RoleChoices, ValidacioAdmin
 from apps.verification.models import (
     AdminFincaDocumentVerification,
     AdminFincaVerificationResult,
@@ -43,13 +44,25 @@ def aprovar_verificacio(verification, reviewer) -> None:
             edifici.pk, user.email, reviewer.email,
         )
 
-        # 2. Actualitza rol del perfil
+        # 2. Actualitza rol i estat de validació del perfil
         profile = user.profile
-        from apps.accounts.models import RoleChoices
+        camps_profile = []
+
         if profile.role != RoleChoices.ADMIN:
             profile.role = RoleChoices.ADMIN
-            profile.save(update_fields=['role'])
-            logger.info("Rol de %s actualitzat a ADMIN", user.email)
+            camps_profile.append('role')
+
+        if profile.estatValidacioAdmin != ValidacioAdmin.APROVAT:
+            profile.estatValidacioAdmin = ValidacioAdmin.APROVAT
+            camps_profile.append('estatValidacioAdmin')
+
+        if camps_profile:
+            profile.save(update_fields=camps_profile)
+            logger.info(
+                "Perfil de %s actualitzat. Camps: %s",
+                user.email,
+                ', '.join(camps_profile),
+            )
 
         # 3. Desa registre històric
         _desar_registre_historic(verification, reviewer, aprovada=True)
@@ -71,6 +84,12 @@ def rebutjar_verificacio(verification, reviewer, motiu: str = '') -> None:
       3. Marca la verificació com a 'rejected'
     """
     with transaction.atomic():
+        # 0. Marca el perfil com a rebutjat si correspon
+        profile = verification.user.profile
+        if profile.estatValidacioAdmin != ValidacioAdmin.REBUTJAT:
+            profile.estatValidacioAdmin = ValidacioAdmin.REBUTJAT
+            profile.save(update_fields=['estatValidacioAdmin'])
+
         # 1. Registre històric
         _desar_registre_historic(verification, reviewer, aprovada=False, motiu=motiu)
 
@@ -146,7 +165,7 @@ def _esborrar_fitxers(verification) -> int:
                     logger.info("  Fitxer esborrat: %s", path)
                     n += 1
                 # Buida el camp FileField per evitar referències mortes
-                doc.fitxer = None
+                doc.fitxer.name = ''
                 doc.save(update_fields=['fitxer'])
             except OSError as exc:
                 logger.error("  Error esborrant %s: %s", path, exc)

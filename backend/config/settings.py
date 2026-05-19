@@ -180,7 +180,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'apps.accounts.authentication.AccountStatusJWTAuthentication',
     ),
     # Política "denegar per defecte": qualsevol endpoint nou requereix autenticació
     # tret que declari explícitament permission_classes = [AllowAny]

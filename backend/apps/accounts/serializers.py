@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction, IntegrityError
 from rest_framework import serializers
 
-from apps.accounts.models import Profile, RoleChoices, TokenLoginLog
+from apps.accounts.models import AccountStatus, Profile, RoleChoices, TokenLoginLog
 from apps.buildings.models import Edifici, Habitatge
 
 from django.contrib.auth import authenticate
@@ -110,6 +110,20 @@ class LoginSerializer(serializers.Serializer):
         if not user.is_active:
             raise serializers.ValidationError("Aquest usuari està inactiu.")
 
+        profile = getattr(user, "profile", None)
+        if profile is not None:
+            if profile.account_status == AccountStatus.BLOCKED:
+                raise serializers.ValidationError(
+                    "Aquest compte ha estat bloquejat. Contacteu amb l'administrador."
+                )
+            if profile.account_status == AccountStatus.SUSPENDED:
+                from django.utils import timezone as tz
+                until = profile.suspended_until
+                if until is None or until > tz.now():
+                    raise serializers.ValidationError(
+                        "Aquest compte està suspès temporalment."
+                    )
+
         refresh = RefreshToken.for_user(user)
         jti = str(refresh.get('jti'))
 
@@ -198,6 +212,7 @@ class LogoutSerializer(serializers.Serializer):
 class MeSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
     is_system_admin = serializers.SerializerMethodField()
+    account_status = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -210,6 +225,7 @@ class MeSerializer(serializers.ModelSerializer):
             "is_staff",
             "is_superuser",
             "is_system_admin",
+            "account_status",
         )
 
     def get_role(self, obj):
@@ -220,6 +236,12 @@ class MeSerializer(serializers.ModelSerializer):
 
     def get_is_system_admin(self, obj):
         return bool(obj.is_superuser)
+
+    def get_account_status(self, obj):
+        profile = getattr(obj, "profile", None)
+        if profile:
+            return profile.account_status
+        return AccountStatus.ACTIVE
 
 
 class LocalitzacioResum(serializers.Serializer):
@@ -382,6 +404,43 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         return user
 
 
+# ---------------------------------------------------------------------------
+# Gestió d'usuaris (US49) — només AdminSistema
+# ---------------------------------------------------------------------------
+
+class UserAdminSerializer(serializers.ModelSerializer):
+    """Representació completa d'un usuari per al panell d'administració."""
+    role = serializers.CharField(source="profile.role", read_only=True)
+    account_status = serializers.CharField(source="profile.account_status", read_only=True)
+    suspension_reason = serializers.CharField(source="profile.suspension_reason", read_only=True)
+    suspended_until = serializers.DateTimeField(source="profile.suspended_until", read_only=True)
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "is_active",
+            "is_superuser",
+            "date_joined",
+            "role",
+            "account_status",
+            "suspension_reason",
+            "suspended_until",
+        )
+
+
+class SuspendSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    suspended_until = serializers.DateTimeField(
+        required=False,
+        allow_null=True,
+        help_text="Null o omès = suspensió indefinida.",
+    )
+
+
 class GoogleOAuthSerializer(serializers.Serializer):
     id_token = serializers.CharField(write_only=True)
     role = serializers.ChoiceField(choices=RoleChoices.choices, required=False)
@@ -451,8 +510,20 @@ class GoogleOAuthSerializer(serializers.Serializer):
                 RoleChoices.OWNER,
             )
             profile.save(update_fields=["role"])
-        
+
         user.profile.refresh_from_db()
+
+        if profile.account_status == AccountStatus.BLOCKED:
+            raise serializers.ValidationError(
+                "Aquest compte ha estat bloquejat. Contacteu amb l'administrador."
+            )
+        if profile.account_status == AccountStatus.SUSPENDED:
+            from django.utils import timezone as tz
+            until = profile.suspended_until
+            if until is None or until > tz.now():
+                raise serializers.ValidationError(
+                    "Aquest compte està suspès temporalment."
+                )
 
         refresh = RefreshToken.for_user(user)
         jti = str(refresh.get("jti"))

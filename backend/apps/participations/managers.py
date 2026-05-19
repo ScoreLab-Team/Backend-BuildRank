@@ -1,13 +1,27 @@
 from django.db import models
-
+from django.db.models import Sum
+from apps.buildings.models import EstatValidacio
 
 class ParticipationManager(models.Manager):
 
     def create_participation(self, edifici, lliga):
+        puntuacio_base = edifici.puntuacioBase or 0
+
+        puntuacio_millores = (
+                edifici.implementacions.filter(
+                    estatValidacio=EstatValidacio.VALIDADA
+                ).aggregate(
+                    total=Sum("millora__impactePunts")
+                )["total"] or 0
+        )
+
+        puntuacio_inicial = puntuacio_base + puntuacio_millores
+
         return self.create(
             edifici=edifici,
             lliga=lliga,
-            puntuacio=0,
+            puntuacio=puntuacio_inicial,
+            puntuacio_inicial=puntuacio_inicial,
             posicio=0,
             divisio=lliga.divisio
         )

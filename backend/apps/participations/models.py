@@ -15,11 +15,10 @@ class Participacio(models.Model):
         on_delete=models.CASCADE,
         related_name="participations"
     )
-
+    puntuacio_inicial = models.FloatField()
     puntuacio = models.FloatField()
     posicio = models.IntegerField()
     divisio = models.CharField(max_length=50)
-
     objects = ParticipationManager()
 
     class Meta:

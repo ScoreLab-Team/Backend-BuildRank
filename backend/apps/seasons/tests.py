@@ -441,6 +441,7 @@ class TemporadaRankingAPITest(APITestCase):
             edifici=self.edifici_1,
             lliga=self.lliga_bronze,
             puntuacio=80,
+            puntuacio_inicial=30,
             posicio=1,
             divisio='Bronze'
         )
@@ -449,6 +450,7 @@ class TemporadaRankingAPITest(APITestCase):
             edifici=self.edifici_2,
             lliga=self.lliga_gold,
             puntuacio=95,
+            puntuacio_inicial=50,
             posicio=1,
             divisio='Gold'
         )
@@ -457,6 +459,7 @@ class TemporadaRankingAPITest(APITestCase):
             edifici=self.edifici_3,
             lliga=self.lliga_gold,
             puntuacio=70,
+            puntuacio_inicial=10,
             posicio=2,
             divisio='Gold'
         )

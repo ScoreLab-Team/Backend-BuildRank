@@ -2,7 +2,7 @@
 """
 Extracció estructurada de dades a partir de text OCR brut.
 
-Crida Ollama (llama3.2:3b) amb un prompt dissenyat per:
+Crida Ollama (llama3.2:1b) amb un prompt dissenyat per:
 - Tolerar soroll OCR (caràcters incorrectes, paraules tallades)
 - Retornar sempre JSON vàlid
 - No al·lucinar: si no troba un camp, retorna null
@@ -17,23 +17,27 @@ import requests
 logger = logging.getLogger(__name__)
 
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://ollama:11434')
-OLLAMA_MODEL = 'llama3.2:1b'
+OLLAMA_MODEL = 'llama3.2:3b'
 OLLAMA_TIMEOUT = 60  # segons — el model pot trigar en CPU
 
 
 # ── Prompt ────────────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """Ets un sistema d'extracció de dades de documents administratius espanyols.
+SYSTEM_PROMPT = """Ets un sistema d'extracció de dades de documents administratius en CATALÀ.
 El text que rebràs prové d'OCR i pot contenir errors tipogràfics, caràcters incorrectes o paraules tallades.
 
 La teva única funció és extreure camps específics i retornar-los en JSON.
+
+Pensa que Adreca finca pot apareixer com Direcció o Domicili aqui si que pots ser flexible.
+La data de inici de vigència pot aparèixer com Data alta domicili o padró.
+
 
 REGLES ESTRICTES:
 1. Respon ÚNICAMENT amb un objecte JSON vàlid. Cap text addicional, cap explicació.
 2. Si no trobes un camp o no n'estàs segur, posa null. MAI inventes dades.
 3. El DNI/NIE té format: 8 dígits + lletra (DNI) o lletra + 7 dígits + lletra (NIE).
-4. Les dates han d'estar en format ISO: YYYY-MM-DD. Si només tens any/mes, posa el primer dia.
-5. Normalitza els noms en MAJÚSCULES."""
+5. Normalitza els noms en MAJÚSCULES.
+"""
 
 USER_PROMPT_TEMPLATE = """Extreu les dades d'aquest document de tipus "{doc_type}".
 

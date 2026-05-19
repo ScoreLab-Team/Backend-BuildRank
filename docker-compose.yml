@@ -35,7 +35,7 @@ services:
       - ollama_data:/root/.ollama
     expose:
       - "11434"
-    mem_limit: 1500m       # llama3.2:1b ~1.1GB
+    #mem_limit: 1500m       # llama3.2:1b ~1.1GB
     environment:
       OLLAMA_MAX_LOADED_MODELS: "1"   # no carreguis mai dos models alhora
     healthcheck:
@@ -77,7 +77,7 @@ services:
       - ./backend:/app
       - media_volume:/app/verifications
     command: celery -A config worker --loglevel=info --concurrency=1
-    mem_limit: 1800m       # EasyOCR ~1.2GB + marge
+    #mem_limit: 1800m       # EasyOCR ~1.2GB + marge
     environment:
       DEBUG:              "True"
       DB_HOST:            db

@@ -2,7 +2,7 @@
 """
 Extracció estructurada de dades a partir de text OCR brut.
 
-Crida Ollama (llama3.2:3b) amb un prompt dissenyat per:
+Crida Ollama (llama3.2:1b) amb un prompt dissenyat per:
 - Tolerar soroll OCR (caràcters incorrectes, paraules tallades)
 - Retornar sempre JSON vàlid
 - No al·lucinar: si no troba un camp, retorna null

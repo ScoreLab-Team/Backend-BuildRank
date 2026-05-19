@@ -36,6 +36,7 @@ urlpatterns = [
     path('api/verification/', include('apps.verification.urls', namespace='verification')),
     path("api/community/", include("apps.community.urls")),
     path("api/notifications/", include("apps.notifications.urls")),
+    path('api/audit/', include('apps.audit.urls')),
 ]
 
 if settings.DEBUG and "debug_toolbar" in settings.INSTALLED_APPS:

@@ -84,6 +84,8 @@ INSTALLED_APPS = [
     "apps.verification",
     'apps.community',
     'apps.notifications',
+
+    'apps.audit',
 ]
 
 MIDDLEWARE = [
@@ -95,6 +97,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'apps.audit.middleware.AuditMiddleware',
 ]
 
 if DEBUG and ENABLE_DEBUG_TOOLBAR:

@@ -82,6 +82,10 @@ INSTALLED_APPS = [
     "apps.chat",
 
     "apps.verification",
+    'apps.community',
+    'apps.notifications',
+
+    'apps.audit',
 ]
 
 MIDDLEWARE = [
@@ -93,6 +97,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'apps.audit.middleware.AuditMiddleware',
 ]
 
 if DEBUG and ENABLE_DEBUG_TOOLBAR:
@@ -178,7 +183,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'apps.accounts.authentication.AccountStatusJWTAuthentication',
     ),
     # Política "denegar per defecte": qualsevol endpoint nou requereix autenticació
     # tret que declari explícitament permission_classes = [AllowAny]

@@ -41,13 +41,11 @@ def sync_user_to_stream(client: StreamChat, user) -> None:
     """
     profile = getattr(user, "profile", None)
     role = getattr(profile, "role", None)
-    full_name = f"{user.first_name} {user.last_name}".strip() or user.email
 
     user_data: dict[str, Any] = {
         "id": get_stream_user_id(user),
-        "name": full_name,
+        "name": user.email.split("@")[0],
         "email": user.email,
-        "buildrank_role": role or "",
     }
 
     if user.is_superuser or role == RoleChoices.ADMIN:
@@ -120,10 +118,11 @@ def get_accessible_buildings(user):
     )
 
 
-def _get_twin_group_admin_member_ids(group_id: int) -> list[str]:
+def _get_twin_group_member_entries(group_id: int) -> list[dict[str, str]]:
     """
-    Retorna els IDs de Stream de tots els ADMIN/OWNER que gestionen
-    edificis del grup comparable indicat.
+    Retorna les entrades de membres (user_id + channel_role) per al canal twin
+    del grup comparable. ADMIN/superuser → channel_moderator, OWNER → channel_member.
+    Usa un dict per deduplicar usuaris que gestionen múltiples edificis del grup.
     """
     buildings = Edifici.objects.filter(
         actiu=True,
@@ -131,24 +130,35 @@ def _get_twin_group_admin_member_ids(group_id: int) -> list[str]:
         administradorFinca__isnull=False,
     ).select_related("administradorFinca__profile")
 
-    member_ids: list[str] = []
+    entries: dict[str, dict[str, str]] = {}
     for edifici in buildings:
         admin_user = edifici.administradorFinca
         if admin_user is None:
             continue
         role = getattr(getattr(admin_user, "profile", None), "role", None)
         if role in (RoleChoices.ADMIN, RoleChoices.OWNER) or admin_user.is_superuser:
-            member_ids.append(get_stream_user_id(admin_user))
+            uid = get_stream_user_id(admin_user)
+            if uid not in entries:
+                channel_role = (
+                    "channel_moderator"
+                    if (admin_user.is_superuser or role == RoleChoices.ADMIN)
+                    else "channel_member"
+                )
+                entries[uid] = {"user_id": uid, "channel_role": channel_role}
 
-    return list(set(member_ids))
+    return list(entries.values())
 
 
 def _ensure_building_channel(
-    client: StreamChat, edifici, stream_uid: str
+    client: StreamChat, edifici, stream_uid: str, user
 ) -> dict[str, Any]:
     """
     Crea el canal comunitari de l'edifici a GetStream si no existeix,
-    i afegeix l'usuari com a membre. Operació idempotent.
+    i afegeix l'usuari com a membre amb el rol adequat. Operació idempotent.
+
+    El rol dins del canal depèn de la relació amb AQUEST edifici concretament:
+    - ADMIN/superuser o administradorFinca d'aquest edifici → channel_moderator
+    - Qualsevol altre (inquilí, propietari d'un altre edifici) → channel_member
     """
     channel_id = f"building_{edifici.idEdifici}"
     loc = edifici.localitzacio
@@ -158,9 +168,17 @@ def _ensure_building_channel(
         else f"Comunitat edifici {edifici.idEdifici}"
     )
 
+    role = getattr(getattr(user, "profile", None), "role", None)
+    is_manager = (
+        user.is_superuser
+        or role == RoleChoices.ADMIN
+        or edifici.administradorFinca_id == user.id
+    )
+    channel_role = "channel_moderator" if is_manager else "channel_member"
+
     channel = client.channel("messaging", channel_id, data={"name": channel_name})
     channel.create(stream_uid)
-    channel.add_members([stream_uid])
+    channel.add_members([{"user_id": stream_uid, "channel_role": channel_role}])
 
     return {
         "id": channel_id,
@@ -174,7 +192,7 @@ def _ensure_building_channel(
 
 
 def _ensure_twin_group_channel(
-    client: StreamChat, group_id: int, stream_uid: str
+    client: StreamChat, group_id: int, stream_uid: str, user
 ) -> dict[str, Any]:
     """
     Crea el canal de twin buildings del grup comparable si no existeix,
@@ -189,10 +207,17 @@ def _ensure_twin_group_channel(
     )
     channel.create(stream_uid)
 
-    member_ids = _get_twin_group_admin_member_ids(group_id)
-    if stream_uid not in member_ids:
-        member_ids.append(stream_uid)
-    channel.add_members(member_ids)
+    member_entries = _get_twin_group_member_entries(group_id)
+    uids = {e["user_id"] for e in member_entries}
+    if stream_uid not in uids:
+        role = getattr(getattr(user, "profile", None), "role", None)
+        channel_role = (
+            "channel_moderator"
+            if (user.is_superuser or role == RoleChoices.ADMIN)
+            else "channel_member"
+        )
+        member_entries.append({"user_id": stream_uid, "channel_role": channel_role})
+    channel.add_members(member_entries)
 
     return {
         "id": channel_id,
@@ -275,7 +300,7 @@ def get_or_create_channels_for_user(user) -> list[dict[str, Any]]:
     seen_twin_groups: set[int] = set()
 
     for edifici in buildings:
-        channels.append(_ensure_building_channel(client, edifici, stream_uid))
+        channels.append(_ensure_building_channel(client, edifici, stream_uid, user))
 
         if (
             (role in (RoleChoices.ADMIN, RoleChoices.OWNER) or user.is_superuser)
@@ -284,7 +309,7 @@ def get_or_create_channels_for_user(user) -> list[dict[str, Any]]:
         ):
             seen_twin_groups.add(edifici.grupComparable_id)
             channels.append(
-                _ensure_twin_group_channel(client, edifici.grupComparable_id, stream_uid)
+                _ensure_twin_group_channel(client, edifici.grupComparable_id, stream_uid, user)
             )
 
     return channels

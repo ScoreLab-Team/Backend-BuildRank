@@ -6,6 +6,9 @@ from apps.accounts.views import (
     MeView, MeRoleView,
     MeEdificisView, AssignarResidentView, AssignarAdminEdificiView,
     GoogleOAuthView,
+    UserListView, UserDetailView,
+    UserBlockView, UserUnblockView,
+    UserSuspendView, UserUnsuspendView,
 )
 
 urlpatterns = [
@@ -44,4 +47,12 @@ urlpatterns = [
         AssignarAdminEdificiView.as_view(),
         name="assignar-admin-edifici",
     ),
+
+    # Gestió d'usuaris (US49) — AdminSistema only
+    path("users/", UserListView.as_view(), name="user-list"),
+    path("users/<int:pk>/", UserDetailView.as_view(), name="user-detail"),
+    path("users/<int:pk>/block/", UserBlockView.as_view(), name="user-block"),
+    path("users/<int:pk>/unblock/", UserUnblockView.as_view(), name="user-unblock"),
+    path("users/<int:pk>/suspend/", UserSuspendView.as_view(), name="user-suspend"),
+    path("users/<int:pk>/unsuspend/", UserUnsuspendView.as_view(), name="user-unsuspend"),
 ]

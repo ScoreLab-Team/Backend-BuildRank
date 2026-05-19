@@ -334,7 +334,9 @@ class ChannelProvisioningTests(APITestCase):
 
         owner_stream_id = f"user_{self.owner.id}"
         mock_channel.create.assert_called()
-        mock_channel.add_members.assert_any_call([owner_stream_id])
+        mock_channel.add_members.assert_any_call(
+            [{"user_id": owner_stream_id, "channel_role": "channel_moderator"}]
+        )
 
     @override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s")
     @patch("apps.chat.services.get_stream_client")
@@ -349,7 +351,7 @@ class ChannelProvisioningTests(APITestCase):
         mock_client.upsert_user.assert_called_once()
         call_args = mock_client.upsert_user.call_args[0][0]
         self.assertEqual(call_args["id"], f"user_{self.owner.id}")
-        self.assertEqual(call_args["buildrank_role"], RoleChoices.OWNER)
+        self.assertNotIn("buildrank_role", call_args)
 
     @override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s")
     @patch("apps.chat.services.get_stream_client")
@@ -455,6 +457,243 @@ class ChannelPermissionTests(APITestCase):
 
         self.assertFalse(validate_twin_channel_access(self.owner, 999999))
 
+
+# ---------------------------------------------------------------------------
+# Moderation: _is_building_moderator
+# ---------------------------------------------------------------------------
+
+class IsBuildingModeratorTests(APITestCase):
+    def setUp(self):
+        self.grup = _create_grup()
+        self.admin = User.objects.create_user(email="admin@test.com", password="pw")
+        _set_role(self.admin, RoleChoices.ADMIN)
+        self.admin.profile.save()
+
+        self.other_admin = User.objects.create_user(email="other@test.com", password="pw")
+        _set_role(self.other_admin, RoleChoices.ADMIN)
+        self.other_admin.profile.save()
+
+        self.tenant = User.objects.create_user(email="tenant@test.com", password="pw")
+        _set_role(self.tenant, RoleChoices.TENANT)
+        self.tenant.profile.save()
+
+        self.superuser = User.objects.create_superuser(email="su@test.com", password="pw")
+
+        self.edifici = _create_building(owner=self.admin, grup=self.grup)
+
+    def test_superuser_always_can_moderate(self):
+        from apps.chat.moderation import _is_building_moderator
+        self.assertTrue(_is_building_moderator(self.superuser, f"building_{self.edifici.idEdifici}"))
+
+    def test_admin_can_moderate_own_building(self):
+        from apps.chat.moderation import _is_building_moderator
+        self.assertTrue(_is_building_moderator(self.admin, f"building_{self.edifici.idEdifici}"))
+
+    def test_admin_cannot_moderate_other_building(self):
+        from apps.chat.moderation import _is_building_moderator
+        self.assertFalse(_is_building_moderator(self.other_admin, f"building_{self.edifici.idEdifici}"))
+
+    def test_tenant_cannot_moderate(self):
+        from apps.chat.moderation import _is_building_moderator
+        self.assertFalse(_is_building_moderator(self.tenant, f"building_{self.edifici.idEdifici}"))
+
+    def test_invalid_channel_returns_false(self):
+        from apps.chat.moderation import _is_building_moderator
+        self.assertFalse(_is_building_moderator(self.admin, "unknown_channel_format"))
+
+
+# ---------------------------------------------------------------------------
+# Moderation endpoints — permission checks
+# ---------------------------------------------------------------------------
+
+@override_settings(
+    STREAM_API_KEY="test-key",
+    STREAM_API_SECRET="test-secret",
+    STREAM_TOKEN_EXPIRATION_SECONDS=3600,
+)
+class ModerationPermissionTests(APITestCase):
+    def setUp(self):
+        stream_patcher = patch("apps.chat.services.sync_user_to_stream")
+        stream_patcher.start()
+        self.addCleanup(stream_patcher.stop)
+
+        self.grup = _create_grup()
+        self.admin = User.objects.create_user(email="mod_admin@test.com", password="pw")
+        _set_role(self.admin, RoleChoices.ADMIN)
+        self.admin.profile.save()
+
+        self.tenant = User.objects.create_user(email="mod_tenant@test.com", password="pw")
+        _set_role(self.tenant, RoleChoices.TENANT)
+        self.tenant.profile.save()
+
+        self.superuser = User.objects.create_superuser(email="mod_su@test.com", password="pw")
+        self.target = User.objects.create_user(email="mod_target@test.com", password="pw")
+        _set_role(self.target, RoleChoices.TENANT)
+        self.target.profile.save()
+
+        self.edifici = _create_building(owner=self.admin, grup=self.grup)
+        self.channel_id = f"building_{self.edifici.idEdifici}"
+
+    def _post(self, url, user, data=None):
+        self.client.force_authenticate(user=user)
+        return self.client.post(url, data or {}, format="json")
+
+    def _delete(self, url, user, data=None):
+        self.client.force_authenticate(user=user)
+        return self.client.delete(url, data or {}, format="json")
+
+    # --- flag_message: any authenticated user ---
+
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_tenant_can_flag_message(self, mock_client_fn):
+        mock_client, _ = _make_mock_stream_client()
+        mock_client_fn.return_value = mock_client
+        url = reverse("chat-flag-message", kwargs={"message_id": "msg-1"})
+        resp = self._post(url, self.tenant, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 200)
+
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_admin_can_flag_message(self, mock_client_fn):
+        mock_client, _ = _make_mock_stream_client()
+        mock_client_fn.return_value = mock_client
+        url = reverse("chat-flag-message", kwargs={"message_id": "msg-2"})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_unauthenticated_cannot_flag(self):
+        url = reverse("chat-flag-message", kwargs={"message_id": "msg-3"})
+        resp = self.client.post(url, {}, format="json")
+        self.assertEqual(resp.status_code, 401)
+
+    # --- hide_message: only ADMIN of building or superuser ---
+
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_admin_can_hide_message_in_own_building(self, mock_client_fn):
+        mock_client, mock_channel = _make_mock_stream_client()
+        mock_client_fn.return_value = mock_client
+        url = reverse("chat-hide-message", kwargs={"message_id": "msg-4"})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_tenant_cannot_hide_message(self):
+        url = reverse("chat-hide-message", kwargs={"message_id": "msg-5"})
+        resp = self._post(url, self.tenant, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 403)
+
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_superuser_can_hide_message(self, mock_client_fn):
+        mock_client, mock_channel = _make_mock_stream_client()
+        mock_client_fn.return_value = mock_client
+        url = reverse("chat-hide-message", kwargs={"message_id": "msg-6"})
+        resp = self._post(url, self.superuser, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 200)
+
+    # --- delete_message: author (is_own=True) or moderator ---
+
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_tenant_can_delete_own_message(self, mock_client_fn):
+        mock_client, mock_channel = _make_mock_stream_client()
+        mock_client_fn.return_value = mock_client
+        url = reverse("chat-delete-message", kwargs={"message_id": "msg-7"})
+        resp = self._delete(url, self.tenant, {"channel_id": self.channel_id, "is_own": True})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_tenant_cannot_delete_others_message(self):
+        url = reverse("chat-delete-message", kwargs={"message_id": "msg-8"})
+        resp = self._delete(url, self.tenant, {"channel_id": self.channel_id, "is_own": False})
+        self.assertEqual(resp.status_code, 403)
+
+    # --- warn_user: only ADMIN/superuser ---
+
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_admin_can_warn_user(self, mock_client_fn):
+        mock_client, _ = _make_mock_stream_client()
+        mock_client_fn.return_value = mock_client
+        url = reverse("chat-warn-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_tenant_cannot_warn_user(self):
+        url = reverse("chat-warn-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.tenant, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 403)
+
+    # --- mute_user ---
+
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_admin_can_mute_user(self, mock_client_fn):
+        mock_client, _ = _make_mock_stream_client()
+        mock_client_fn.return_value = mock_client
+        url = reverse("chat-mute-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id, "timeout": 30})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_tenant_cannot_mute_user(self):
+        url = reverse("chat-mute-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.tenant, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 403)
+
+    # --- global_ban: superuser only ---
+
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_superuser_can_global_ban(self, mock_client_fn):
+        mock_client, _ = _make_mock_stream_client()
+        mock_client_fn.return_value = mock_client
+        url = reverse("chat-global-ban", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.superuser, {"reason": "spam"})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_admin_cannot_global_ban(self):
+        url = reverse("chat-global-ban", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.admin, {"reason": "spam"})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_tenant_cannot_global_ban(self):
+        url = reverse("chat-global-ban", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.tenant, {"reason": "spam"})
+        self.assertEqual(resp.status_code, 403)
+
+    # --- shadow_ban: superuser only ---
+
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_superuser_can_shadow_ban(self, mock_client_fn):
+        mock_client, _ = _make_mock_stream_client()
+        mock_client_fn.return_value = mock_client
+        url = reverse("chat-shadow-ban", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.superuser, {})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_admin_cannot_shadow_ban(self):
+        url = reverse("chat-shadow-ban", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.admin, {})
+        self.assertEqual(resp.status_code, 403)
+
+    # --- ModerationLog is created ---
+
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_warn_creates_moderation_log(self, mock_client_fn):
+        from apps.chat.models import ModerationLog
+        mock_client, _ = _make_mock_stream_client()
+        mock_client_fn.return_value = mock_client
+        url = reverse("chat-warn-user", kwargs={"user_id": self.target.id})
+        self._post(url, self.admin, {"channel_id": self.channel_id, "reason": "test"})
+        log = ModerationLog.objects.filter(action="warn_user", target_user=self.target).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.channel_id, self.channel_id)
+        self.assertEqual(log.reason, "test")
+        self.assertEqual(log.new_state, "warned")
+
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_global_ban_creates_moderation_log(self, mock_client_fn):
+        from apps.chat.models import ModerationLog
+        mock_client, _ = _make_mock_stream_client()
+        mock_client_fn.return_value = mock_client
+        url = reverse("chat-global-ban", kwargs={"user_id": self.target.id})
+        self._post(url, self.superuser, {"reason": "abuse"})
+        log = ModerationLog.objects.filter(action="global_ban", target_user=self.target).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.moderator_role, "superuser")
+        self.assertEqual(log.new_state, "global_banned")
 # ---------------------------------------------------------------------------
 # US40 — Twin Building direct chat entre administradors de finca
 # ---------------------------------------------------------------------------

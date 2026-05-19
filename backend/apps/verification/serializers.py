@@ -1,5 +1,7 @@
 # apps/verification/serializers.py
 from rest_framework import serializers
+from django.contrib.auth import get_user_model
+from apps.buildings.models import Edifici
 
 from .models import (
     AdminFincaDocumentVerification,
@@ -7,6 +9,7 @@ from .models import (
     AdminFincaVerificationResult,
 )
 
+User = get_user_model()
 
 # ---------------------------------------------------------------------------
 # Sub-serializer per a cada document en el moment de la creació
@@ -97,6 +100,63 @@ class AdminFincaVerificationResultSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+class VerificationUserDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = [
+            'id',
+            'first_name',
+            'last_name',
+            'email',
+        ]
+        read_only_fields = fields
+
+
+class VerificationEdificiDetailSerializer(serializers.ModelSerializer):
+    localitzacio = serializers.SerializerMethodField()
+    adreca = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Edifici
+        fields = [
+            'idEdifici',
+            'localitzacio',
+            'adreca',
+        ]
+        read_only_fields = fields
+
+    def get_localitzacio(self, obj):
+        loc = getattr(obj, 'localitzacio', None)
+
+        if loc is None:
+            return None
+
+        return {
+            'carrer': loc.carrer,
+            'numero': loc.numero,
+            'codiPostal': loc.codiPostal,
+            'barri': loc.barri,
+        }
+
+    def get_adreca(self, obj):
+        loc = getattr(obj, 'localitzacio', None)
+
+        if loc is None:
+            return f"Edifici {obj.idEdifici}"
+
+        carrer = loc.carrer or ''
+        numero = loc.numero
+        codi_postal = loc.codiPostal or ''
+
+        base = carrer.strip()
+
+        if numero is not None:
+            base = f"{base}, {numero}".strip(', ')
+
+        if codi_postal:
+            return f"{base} ({codi_postal})".strip()
+
+        return base or f"Edifici {obj.idEdifici}"
 
 class AdminFincaDocumentVerificationSerializer(serializers.ModelSerializer):
     """Serialitzador de lectura complet: inclou documents i resultat."""
@@ -104,12 +164,17 @@ class AdminFincaDocumentVerificationSerializer(serializers.ModelSerializer):
     documents = AdminFincaVerificationDocumentSerializer(many=True, read_only=True)
     result = AdminFincaVerificationResultSerializer(read_only=True)
 
+    user_detail = VerificationUserDetailSerializer(source='user', read_only=True)
+    edifici_detail = VerificationEdificiDetailSerializer(source='edifici', read_only=True)
+
     class Meta:
         model = AdminFincaDocumentVerification
         fields = [
             'id',
             'user',
+            'user_detail',
             'edifici',
+            'edifici_detail',
             'status',
             'celery_task_id',
             'documents',

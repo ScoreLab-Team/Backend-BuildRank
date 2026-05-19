@@ -49,10 +49,15 @@ class AdminFincaDocumentVerificationListView(generics.ListAPIView):
 
     def get_queryset(self):
         qs = AdminFincaDocumentVerification.objects.select_related(
-            'result'
+            'user',
+            'edifici',
+            'edifici__localitzacio',
+            'result',
         ).prefetch_related('documents')
+
         if IsAdminSistema().has_permission(self.request, self):
             return qs
+
         return qs.filter(user=self.request.user)
 
 
@@ -66,10 +71,15 @@ class AdminFincaDocumentVerificationDetailView(generics.RetrieveAPIView):
 
     def get_queryset(self):
         qs = AdminFincaDocumentVerification.objects.select_related(
-            'result'
+            'user',
+            'edifici',
+            'edifici__localitzacio',
+            'result',
         ).prefetch_related('documents')
+
         if IsAdminSistema().has_permission(self.request, self):
             return qs
+
         return qs.filter(user=self.request.user)
 
 
@@ -99,7 +109,10 @@ class VerificacioRevisioView(APIView):
         # Carrega la verificació
         try:
             verification = AdminFincaDocumentVerification.objects.select_related(
-                'user', 'user__profile', 'edifici'
+                'user',
+                'user__profile',
+                'edifici',
+                'edifici__localitzacio',
             ).prefetch_related('documents').get(pk=pk)
         except AdminFincaDocumentVerification.DoesNotExist:
             return Response(

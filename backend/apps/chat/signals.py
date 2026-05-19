@@ -58,7 +58,7 @@ def add_tenant_to_building_channel(sender, instance, **kwargs):
         client = get_stream_client()
         sync_user_to_stream(client, instance.usuari)
         stream_uid = get_stream_user_id(instance.usuari)
-        _ensure_building_channel(client, instance.edifici, stream_uid)
+        _ensure_building_channel(client, instance.edifici, stream_uid, instance.usuari)
     except Exception:
         logger.warning(
             "No s'ha pogut afegir l'usuari %s al canal de l'edifici %s a GetStream.",

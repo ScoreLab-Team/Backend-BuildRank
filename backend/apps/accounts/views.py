@@ -1,10 +1,14 @@
+from django.contrib.auth import get_user_model
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.views import TokenRefreshView as SimpleJWTTokenRefreshView
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
 
-from apps.accounts.models import RoleChoices
+from apps.accounts.models import AccountStatus, RoleChoices, TokenLoginLog
 from apps.buildings.models import Edifici, Habitatge
 from apps.accounts.permissions import IsAdminSistema, IsAdminFinca, ABACMixin
 from apps.accounts.throttles import LoginThrottle, RegisterThrottle, RefreshThrottle
@@ -15,7 +19,10 @@ from apps.accounts.serializers import (
     EdificiResumSerializer, HabitatgeResumSerializer,
     AssignarResidentSerializer, AssignarAdminSerializer,
     GoogleOAuthSerializer,
+    UserAdminSerializer, SuspendSerializer,
 )
+
+User = get_user_model()
 
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
@@ -262,3 +269,146 @@ class MeRoleView(APIView):
             MeSerializer(request.user).data,
             status=status.HTTP_200_OK
         )
+
+
+# ---------------------------------------------------------------------------
+# Gestió d'usuaris (US49) — només AdminSistema
+# ---------------------------------------------------------------------------
+
+def _revoke_all_user_tokens(user):
+    """Blacklist every outstanding refresh token and mark all active sessions as REVOKED."""
+    outstanding = OutstandingToken.objects.filter(user=user)
+    for token in outstanding:
+        BlacklistedToken.objects.get_or_create(token=token)
+
+    TokenLoginLog.objects.filter(
+        user=user,
+        status=TokenLoginLog.LOGIN,
+        logout_at__isnull=True,
+    ).update(status=TokenLoginLog.REVOKED, logout_at=timezone.now())
+
+
+class UserListView(generics.ListAPIView):
+    """Llista tots els usuaris de la plataforma."""
+    permission_classes = [IsAdminSistema]
+    serializer_class = UserAdminSerializer
+    queryset = User.objects.select_related("profile").order_by("id")
+
+
+class UserDetailView(generics.RetrieveAPIView):
+    """Detall d'un usuari concret."""
+    permission_classes = [IsAdminSistema]
+    serializer_class = UserAdminSerializer
+    queryset = User.objects.select_related("profile")
+
+
+class UserBlockView(APIView):
+    """
+    Bloqueja permanentment un compte.
+    Revoca immediatament totes les sessions actives de l'usuari.
+    """
+    permission_classes = [IsAdminSistema]
+
+    def post(self, request, pk):
+        try:
+            user = User.objects.select_related("profile").get(pk=pk)
+        except User.DoesNotExist:
+            return Response({"detail": "Usuari no trobat."}, status=status.HTTP_404_NOT_FOUND)
+
+        if user.is_superuser:
+            return Response(
+                {"detail": "No es pot bloquejar un administrador del sistema."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        with transaction.atomic():
+            profile = user.profile
+            profile.account_status = AccountStatus.BLOCKED
+            profile.suspension_reason = ""
+            profile.suspended_until = None
+            profile.save(update_fields=["account_status", "suspension_reason", "suspended_until", "updated_at"])
+            _revoke_all_user_tokens(user)
+
+        return Response(UserAdminSerializer(user).data, status=status.HTTP_200_OK)
+
+
+class UserUnblockView(APIView):
+    """Desbloqueja un compte i el torna a l'estat actiu."""
+    permission_classes = [IsAdminSistema]
+
+    def post(self, request, pk):
+        try:
+            user = User.objects.select_related("profile").get(pk=pk)
+        except User.DoesNotExist:
+            return Response({"detail": "Usuari no trobat."}, status=status.HTTP_404_NOT_FOUND)
+
+        profile = user.profile
+        if profile.account_status != AccountStatus.BLOCKED:
+            return Response(
+                {"detail": "El compte no està bloquejat."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        profile.account_status = AccountStatus.ACTIVE
+        profile.save(update_fields=["account_status", "updated_at"])
+
+        return Response(UserAdminSerializer(user).data, status=status.HTTP_200_OK)
+
+
+class UserSuspendView(APIView):
+    """
+    Suspèn temporalment un compte.
+    Camps opcionals: reason (text), suspended_until (datetime; null = indefinit).
+    Revoca immediatament totes les sessions actives.
+    """
+    permission_classes = [IsAdminSistema]
+
+    def post(self, request, pk):
+        try:
+            user = User.objects.select_related("profile").get(pk=pk)
+        except User.DoesNotExist:
+            return Response({"detail": "Usuari no trobat."}, status=status.HTTP_404_NOT_FOUND)
+
+        if user.is_superuser:
+            return Response(
+                {"detail": "No es pot suspendre un administrador del sistema."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = SuspendSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            profile = user.profile
+            profile.account_status = AccountStatus.SUSPENDED
+            profile.suspension_reason = serializer.validated_data.get("reason", "")
+            profile.suspended_until = serializer.validated_data.get("suspended_until")
+            profile.save(update_fields=["account_status", "suspension_reason", "suspended_until", "updated_at"])
+            _revoke_all_user_tokens(user)
+
+        return Response(UserAdminSerializer(user).data, status=status.HTTP_200_OK)
+
+
+class UserUnsuspendView(APIView):
+    """Aixeca la suspensió d'un compte i el torna a l'estat actiu."""
+    permission_classes = [IsAdminSistema]
+
+    def post(self, request, pk):
+        try:
+            user = User.objects.select_related("profile").get(pk=pk)
+        except User.DoesNotExist:
+            return Response({"detail": "Usuari no trobat."}, status=status.HTTP_404_NOT_FOUND)
+
+        profile = user.profile
+        if profile.account_status != AccountStatus.SUSPENDED:
+            return Response(
+                {"detail": "El compte no està suspès."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        profile.account_status = AccountStatus.ACTIVE
+        profile.suspension_reason = ""
+        profile.suspended_until = None
+        profile.save(update_fields=["account_status", "suspension_reason", "suspended_until", "updated_at"])
+
+        return Response(UserAdminSerializer(user).data, status=status.HTTP_200_OK)

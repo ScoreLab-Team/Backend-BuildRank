@@ -3,6 +3,7 @@ from django.db import models
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import Avg
+from django.core.validators import MinValueValidator, MaxValueValidator
 
 class TipusEdifici(models.TextChoices):
     RESIDENCIAL = 'Residencial', 'Residencial'
@@ -326,38 +327,52 @@ class EdificiAuditLog(models.Model):
 
 
 class DadesEnergetiques(models.Model):
-    qualificacioGlobal = models.CharField(
-        max_length=1,
-        choices=LletraEnergetica.choices,
-        null=True,   # ← permet NULL a la BD
-        blank=True   # ← permet formularis buits
+
+    consumEnergiaPrimaria = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(600.0)]
     )
-    consumEnergiaPrimaria = models.FloatField()
-    consumEnergiaFinal = models.FloatField()
-    emissionsCO2 = models.FloatField()
-    costAnualEnergia = models.FloatField()
+    consumEnergiaFinal = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(450.0)]
+    )
+    emissionsCO2 = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(150.0)]
+    )
+    costAnualEnergia = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(15000.0)]
+    )
 
-    energiaCalefaccio = models.FloatField()
-    energiaRefrigeracio = models.FloatField()
-    energiaACS = models.FloatField()
-    energiaEnllumenament = models.FloatField()
+    energiaCalefaccio = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(250.0)]
+    )
+    energiaRefrigeracio = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(120.0)]
+    )
+    energiaACS = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(80.0)]
+    )
+    energiaEnllumenament = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(50.0)]
+    )
 
-    emissionsCalefaccio = models.FloatField()
-    emissionsRefrigeracio = models.FloatField()
-    emissionsACS = models.FloatField()
-    emissionsEnllumenament = models.FloatField()
+    emissionsCalefaccio = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(100.0)]
+    )
+    emissionsRefrigeracio = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(50.0)]
+    )
+    emissionsACS = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(40.0)]
+    )
+    emissionsEnllumenament = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(25.0)]
+    )
 
-    aillamentTermic = models.FloatField()
-    valorFinestres = models.FloatField()
-
-    normativa = models.CharField(max_length=255)
-    einaCertificacio = models.CharField(max_length=255)
-    motiuCertificacio = models.CharField(max_length=255)
-    rehabilitacioEnergetica = models.BooleanField(default=False)
-    dataEntrada = models.DateField()
-
-    def __str__(self):
-        return f"Qualificacio {self.qualificacioGlobal} - Data entrada: {self.dataEntrada}"
+    aillamentTermic = models.FloatField(
+        validators=[MinValueValidator(0.05), MaxValueValidator(5.0)]
+    )
+    valorFinestres = models.FloatField(
+        validators=[MinValueValidator(0.5), MaxValueValidator(8.0)]
+    )
 class DadesEnergetiquesOpenData(models.Model):
     """
     US13 — Dades energètiques agregades provinents de l'open data CEE.

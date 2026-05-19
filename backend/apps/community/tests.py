@@ -92,9 +92,19 @@ class VotacioCreateAPITest(TestCase):
 
     def setUp(self):
         self.admin = create_user('admin@test.com', role='admin')
+        self.owner = create_user('owner@test.com', role='owner')
         self.tenant = create_user('tenant@test.com', role='tenant')
         self.outsider = create_user('outsider@test.com', role='owner')
         self.edifici = create_edifici(admin_user=self.admin)
+        Habitatge.objects.create(
+            edifici=self.edifici,
+            referenciaCadastral='CAD000',
+            planta='0',
+            porta='A',
+            superficie=70.0,
+            usuari=self.owner,
+            solicitant=self.owner,
+        )
         Habitatge.objects.create(
             edifici=self.edifici,
             referenciaCadastral='CAD001',
@@ -118,6 +128,11 @@ class VotacioCreateAPITest(TestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(Votacio.objects.count(), 1)
         self.assertEqual(OpcioVot.objects.count(), 3)
+
+    def test_owner_cannot_create_votacio(self):
+        client = auth_client(self.owner)
+        response = client.post(self.url, self.payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_tenant_cannot_create_votacio(self):
         client = auth_client(self.tenant)
@@ -209,10 +224,10 @@ class EmitreVotAPITest(TestCase):
         response = client.post(self.url, {'opcio_id': self.opcio_si.id}, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
-    def test_tenant_can_vote(self):
+    def test_tenant_cannot_vote(self):
         client = auth_client(self.tenant)
         response = client.post(self.url, {'opcio_id': self.opcio_no.id}, format='json')
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class ResultatsVotacioAPITest(TestCase):
@@ -298,10 +313,10 @@ class VotacioUpdateAPITest(TestCase):
         self.votacio.refresh_from_db()
         self.assertEqual(self.votacio.titol, 'Nou títol')
 
-    def test_owner_can_update_votacio(self):
+    def test_owner_cannot_update_votacio(self):
         client = auth_client(self.owner)
         response = client.patch(self.url, {'descripcio': 'Nova descripció'}, format='json')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_tenant_cannot_update_votacio(self):
         client = auth_client(self.tenant)
@@ -372,11 +387,12 @@ class VotacioDeleteAPITest(TestCase):
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertEqual(Votacio.objects.count(), 0)
 
-    def test_owner_can_delete_votacio(self):
+    def test_owner_cannot_delete_votacio(self):
         v = self._fresh_votacio()
         client = auth_client(self.owner)
         response = client.delete(reverse('votacio-detail', kwargs={'pk': v.pk}))
-        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(Votacio.objects.count(), 1)
 
     def test_tenant_cannot_delete_votacio(self):
         v = self._fresh_votacio()

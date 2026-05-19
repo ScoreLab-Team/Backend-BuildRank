@@ -25,10 +25,12 @@ def _is_edifici_member(user, edifici):
     return edifici.habitatges.filter(usuari=user).exists()
 
 
-def _is_edifici_admin_or_owner(user, edifici):
-    if user.is_superuser:
-        return True
-    if edifici.administradorFinca_id == user.id:
+def _is_edifici_admin(user, edifici):
+    return edifici.administradorFinca_id == user.id
+
+
+def _can_vote(user, edifici):
+    if _is_edifici_admin(user, edifici):
         return True
     try:
         if user.profile.role == 'owner':
@@ -59,9 +61,9 @@ class VotacioListCreateView(generics.ListCreateAPIView):
         serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         edifici = serializer.validated_data['edifici']
-        if not _is_edifici_admin_or_owner(request.user, edifici):
+        if not _is_edifici_admin(request.user, edifici):
             return Response(
-                {'detail': 'Només l\'administrador o propietari pot crear votacions.'},
+                {'detail': "Només l'administrador de finca pot crear votacions."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         votacio = serializer.save()
@@ -85,14 +87,13 @@ class VotacioDetailView(generics.RetrieveUpdateDestroyAPIView):
             raise PermissionDenied()
         return votacio
 
-    def _check_admin_or_owner(self, votacio):
-        if not _is_edifici_admin_or_owner(self.request.user, votacio.edifici):
-            raise PermissionDenied('Només l\'administrador o propietari pot modificar votacions.')
+    def _check_admin_finca(self, votacio):
+        if not _is_edifici_admin(self.request.user, votacio.edifici):
+            raise PermissionDenied("Només l'administrador de finca pot modificar votacions.")
 
     def update(self, request, *args, **kwargs):
         votacio = self.get_object()
-        self._check_admin_or_owner(votacio)
-        kwargs['partial'] = True
+        self._check_admin_finca(votacio)
         serializer = self.get_serializer(votacio, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -100,7 +101,7 @@ class VotacioDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def destroy(self, request, *args, **kwargs):
         votacio = self.get_object()
-        self._check_admin_or_owner(votacio)
+        self._check_admin_finca(votacio)
         votacio.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -110,9 +111,9 @@ class EmitreVotView(APIView):
 
     def post(self, request, pk):
         votacio = get_object_or_404(Votacio, pk=pk)
-        if not _is_edifici_member(request.user, votacio.edifici):
+        if not _can_vote(request.user, votacio.edifici):
             return Response(
-                {'detail': 'No ets membre d\'aquest edifici.'},
+                {'detail': "Només poden votar l'administrador de finca i els propietaris del mateix edifici."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         serializer = EmitreVotSerializer(

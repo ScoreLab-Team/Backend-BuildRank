@@ -120,20 +120,19 @@ class PasswordResetRequestView(APIView):
     throttle_classes = [LoginThrottle]
 
     def post(self, request):
-        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer = PasswordResetRequestSerializer(
+            data=request.data,
+            context={"request": request},
+        )
         serializer.is_valid(raise_exception=True)
-        reset_data = serializer.save()
+        serializer.save()
 
-        response_data = {
-            "detail": "Si el correu existeix, s'han generat instruccions per restablir la contrasenya."
-        }
-
-        # MVP: retornem uid/token només si existeix usuari per facilitar integració frontend.
-        # En producció s'hauria d'enviar per email i no retornar el token a la resposta.
-        if reset_data:
-            response_data.update(reset_data)
-
-        return Response(response_data, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "detail": "Si el correu existeix, s'han enviat instruccions per restablir la contrasenya."
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class PasswordResetConfirmView(APIView):

@@ -6,8 +6,9 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.core.files.uploadedfile import SimpleUploadedFile
 
-from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora, TipusEdifici
+from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora, SimulacioMilloraItem, EstatAplicacioSimulacio, TipusEdifici
 from apps.buildings.serializers import EdificiDetailSerializer, LocalitzacioSerializer
 from apps.accounts.models import RoleChoices, ValidacioAdmin
 from .simulation.engine import simular_millores, clamp, UnitatBaseMillora
@@ -2668,12 +2669,11 @@ class ValidacioMilloraImplementadaTests(BaseTestData):
 
     # --- permisos ---
 
-    def test_admin_propi_pot_validar(self):
+    def test_admin_finca_no_pot_validar(self):
         mi = self._crear_millora_impl()
         self.client.force_authenticate(user=self.admin)
         resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp.data["estatValidacio"], "Validada")
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_superuser_pot_validar(self):
         mi = self._crear_millora_impl()
@@ -2705,19 +2705,19 @@ class ValidacioMilloraImplementadaTests(BaseTestData):
 
     def test_validar_des_de_pendent_documentacio(self):
         mi = self._crear_millora_impl(estat=EstatValidacio.PENDENT_DOCUMENTACIO)
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
 
     def test_no_es_pot_validar_una_millora_ja_validada(self):
         mi = self._crear_millora_impl(estat=EstatValidacio.VALIDADA)
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Rebutjada"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_no_es_pot_validar_una_millora_ja_rebutjada(self):
         mi = self._crear_millora_impl(estat=EstatValidacio.REBUTJADA)
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
@@ -2725,34 +2725,113 @@ class ValidacioMilloraImplementadaTests(BaseTestData):
 
     def test_estat_invalid_retorna_400(self):
         mi = self._crear_millora_impl()
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         resp = self.client.post(self._url(mi.pk), {"estatValidacio": "EnRevisió"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_estat_absent_retorna_400(self):
         mi = self._crear_millora_impl()
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         resp = self.client.post(self._url(mi.pk), {}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     # --- efectes secundaris ---
 
-    def test_validar_desa_administrador_finca(self):
+    def test_validar_desa_admin_sistema(self):
         mi = self._crear_millora_impl()
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
         mi.refresh_from_db()
-        self.assertEqual(mi.administradorFinca, self.admin)
+        self.assertEqual(mi.administradorFinca, self.superuser)
 
-    def test_admin_pot_validar_multiples_millores(self):
-        """Un admin pot validar més d'una millora (ForeignKey, no OneToOneField)."""
+    def test_admin_sistema_pot_validar_multiples_millores(self):
+        """Un admin de sistema pot validar més d'una millora."""
         mi1 = self._crear_millora_impl()
         mi2 = self._crear_millora_impl()
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         r1 = self.client.post(self._url(mi1.pk), {"estatValidacio": "Validada"}, format="json")
         r2 = self.client.post(self._url(mi2.pk), {"estatValidacio": "Rebutjada"}, format="json")
         self.assertEqual(r1.status_code, status.HTTP_200_OK)
         self.assertEqual(r2.status_code, status.HTTP_200_OK)
+
+    def test_acreditar_implementacio_no_marca_simulacio_com_implementada(self):
+        simulacio = SimulacioMillora.objects.create(
+            edifici=self.edifici,
+            creadaPer=self.admin,
+            estatAplicacio=EstatAplicacioSimulacio.APROVADA,
+        )
+        SimulacioMilloraItem.objects.create(
+            simulacio=simulacio,
+            millora=self.cataleg,
+            coberturaPercent=100,
+        )
+
+        document = SimpleUploadedFile(
+            "evidencia.pdf",
+            b"%PDF-1.4 evidencia de prova",
+            content_type="application/pdf",
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        url = reverse(
+            "edifici-acreditar-implementacio-simulacio",
+            args=[self.edifici.pk, simulacio.pk],
+        )
+        resp = self.client.post(
+            url,
+            {
+                "dataExecucio": "2025-06-01",
+                "costReal": 1500.0,
+                "documentacioAdjunta": document,
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        simulacio.refresh_from_db()
+        self.assertEqual(simulacio.estatAplicacio, EstatAplicacioSimulacio.APROVADA)
+        self.assertEqual(
+            MilloraImplementada.objects.filter(
+                simulacio=simulacio,
+                estatValidacio=EstatValidacio.EN_REVISIO,
+            ).count(),
+            1,
+        )
+
+    def test_simulacio_passa_a_implementada_quan_totes_les_millores_estan_validades(self):
+        simulacio = SimulacioMillora.objects.create(
+            edifici=self.edifici,
+            creadaPer=self.admin,
+            estatAplicacio=EstatAplicacioSimulacio.APROVADA,
+        )
+        mi1 = MilloraImplementada.objects.create(
+            dataExecucio="2025-06-01",
+            costReal=1500.0,
+            estatValidacio=EstatValidacio.EN_REVISIO,
+            millora=self.cataleg,
+            edifici=self.edifici,
+            simulacio=simulacio,
+        )
+        mi2 = MilloraImplementada.objects.create(
+            dataExecucio="2025-06-02",
+            costReal=1700.0,
+            estatValidacio=EstatValidacio.EN_REVISIO,
+            millora=self.cataleg,
+            edifici=self.edifici,
+            simulacio=simulacio,
+        )
+
+        self.client.force_authenticate(user=self.superuser)
+
+        r1 = self.client.post(self._url(mi1.pk), {"estatValidacio": "Validada"}, format="json")
+        self.assertEqual(r1.status_code, status.HTTP_200_OK)
+        simulacio.refresh_from_db()
+        self.assertEqual(simulacio.estatAplicacio, EstatAplicacioSimulacio.APROVADA)
+
+        r2 = self.client.post(self._url(mi2.pk), {"estatValidacio": "Validada"}, format="json")
+        self.assertEqual(r2.status_code, status.HTTP_200_OK)
+        simulacio.refresh_from_db()
+        self.assertEqual(simulacio.estatAplicacio, EstatAplicacioSimulacio.IMPLEMENTADA)
 
 class TestAdminFincaAltaEdifici(BaseTestData):
     # US-AF1: Validació de permisos, bloquejos i creació d'edificis per a Administradors de Finca
@@ -3800,3 +3879,15 @@ class TestHeatRiskPersistencia(BaseTestData):
 
         self.edifici.refresh_from_db()
         self.assertIsNone(self.edifici.heatRiskIndex)
+
+class LocalitzacioCoordinatesTests(APITestCase):
+    def test_localitzacio_without_coordinates_keeps_null_values(self):
+        localitzacio = Localitzacio.objects.create(
+            carrer="Carrer Sense Coordenades Reals",
+            numero=10,
+            codiPostal="08001",
+            barri="Centre",
+        )
+
+        self.assertIsNone(localitzacio.latitud)
+        self.assertIsNone(localitzacio.longitud)

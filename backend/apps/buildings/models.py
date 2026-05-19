@@ -121,18 +121,14 @@ class Localitzacio(models.Model):
     def __str__(self):
         return f"{self.carrer}, {self.numero} ({self.codiPostal})"
     def save(self, *args, **kwargs):
-        # Si la zona climática no está definida, poner un valor por defecto
+        # Si la zona climàtica no està definida, posem un valor per defecte.
         if not self.zonaClimatica:
             self.zonaClimatica = "N/A"
 
-        # Si latitud o longitud no están definidas, poner 0.0
-        if self.latitud is None:
-            self.latitud = 0.0
-        if self.longitud is None:
-            self.longitud = 0.0
-
+        # No inventem coordenades.
+        # Si no tenim latitud/longitud, es guarden com a NULL.
+        # El GeoJSON del mapa ja filtra edificis sense coordenades vàlides.
         super().save(*args, **kwargs)
-
 
 class GrupComparable(models.Model):
     idGrup = models.IntegerField()

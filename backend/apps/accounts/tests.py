@@ -1,15 +1,17 @@
 from datetime import timedelta
+import re
 from unittest.mock import patch
 
 from django.test import override_settings
 from django.core.cache import cache
+from django.core import mail
 from django.urls import reverse
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 from rest_framework import status
 from rest_framework.test import APITestCase, APIClient
-from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.models import (
@@ -1203,16 +1205,42 @@ class SystemAdminMeEndpointTests(APITestCase):
         self.assertIn("access", response.data)
         self.assertIn("refresh", response.data)
     
-@override_settings(REST_FRAMEWORK=NO_THROTTLE_REST_FRAMEWORK)
+@override_settings(
+    REST_FRAMEWORK=NO_THROTTLE_REST_FRAMEWORK,
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    PASSWORD_RESET_FRONTEND_URL="http://localhost/reset-password",
+)
 class PasswordResetTests(APITestCase):
     def setUp(self):
         cache.clear()
+        mail.outbox = []
         self.user = User.objects.create_user(
             email="reset@example.com",
             password="OldPassword123",
         )
 
-    def test_password_reset_request_existing_email_returns_uid_and_token(self):
+    def _request_reset_and_get_uid_token(self):
+        response = self.client.post(
+            reverse("password-reset"),
+            {"email": "reset@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn("uid", response.data)
+        self.assertNotIn("token", response.data)
+        self.assertEqual(len(mail.outbox), 1)
+
+        body = mail.outbox[0].body
+        uid_match = re.search(r"uid=([^&\s]+)", body)
+        token_match = re.search(r"token=([^\s]+)", body)
+
+        self.assertIsNotNone(uid_match)
+        self.assertIsNotNone(token_match)
+
+        return uid_match.group(1), token_match.group(1)
+
+    def test_password_reset_request_existing_email_sends_email_without_returning_token(self):
         response = self.client.post(
             reverse("password-reset"),
             {"email": "reset@example.com"},
@@ -1221,8 +1249,14 @@ class PasswordResetTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("detail", response.data)
-        self.assertIn("uid", response.data)
-        self.assertIn("token", response.data)
+        self.assertNotIn("uid", response.data)
+        self.assertNotIn("token", response.data)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["reset@example.com"])
+        self.assertIn("http://localhost/reset-password", mail.outbox[0].body)
+        self.assertIn("uid=", mail.outbox[0].body)
+        self.assertIn("token=", mail.outbox[0].body)
 
     def test_password_reset_request_unknown_email_does_not_enumerate_accounts(self):
         response = self.client.post(
@@ -1235,19 +1269,16 @@ class PasswordResetTests(APITestCase):
         self.assertIn("detail", response.data)
         self.assertNotIn("uid", response.data)
         self.assertNotIn("token", response.data)
+        self.assertEqual(len(mail.outbox), 0)
 
     def test_password_reset_confirm_valid_token_changes_password(self):
-        request_response = self.client.post(
-            reverse("password-reset"),
-            {"email": "reset@example.com"},
-            format="json",
-        )
+        uid, token = self._request_reset_and_get_uid_token()
 
         response = self.client.post(
             reverse("password-reset-confirm"),
             {
-                "uid": request_response.data["uid"],
-                "token": request_response.data["token"],
+                "uid": uid,
+                "token": token,
                 "password": "NewPassword123",
                 "password_confirm": "NewPassword123",
             },
@@ -1260,16 +1291,12 @@ class PasswordResetTests(APITestCase):
         self.assertTrue(self.user.check_password("NewPassword123"))
 
     def test_password_reset_confirm_invalid_token_fails(self):
-        request_response = self.client.post(
-            reverse("password-reset"),
-            {"email": "reset@example.com"},
-            format="json",
-        )
+        uid, _token = self._request_reset_and_get_uid_token()
 
         response = self.client.post(
             reverse("password-reset-confirm"),
             {
-                "uid": request_response.data["uid"],
+                "uid": uid,
                 "token": "invalid-token",
                 "password": "NewPassword123",
                 "password_confirm": "NewPassword123",
@@ -1281,17 +1308,13 @@ class PasswordResetTests(APITestCase):
         self.assertIn("token", response.data)
 
     def test_password_reset_confirm_password_mismatch_fails(self):
-        request_response = self.client.post(
-            reverse("password-reset"),
-            {"email": "reset@example.com"},
-            format="json",
-        )
+        uid, token = self._request_reset_and_get_uid_token()
 
         response = self.client.post(
             reverse("password-reset-confirm"),
             {
-                "uid": request_response.data["uid"],
-                "token": request_response.data["token"],
+                "uid": uid,
+                "token": token,
                 "password": "NewPassword123",
                 "password_confirm": "DifferentPassword123",
             },
@@ -1300,6 +1323,54 @@ class PasswordResetTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("password_confirm", response.data)
+
+    def test_password_reset_confirm_revokes_active_refresh_tokens(self):
+        login_response = self.client.post(
+            reverse("login"),
+            {
+                "email": "reset@example.com",
+                "password": "OldPassword123",
+            },
+            format="json",
+        )
+        self.assertEqual(login_response.status_code, status.HTTP_200_OK)
+
+        refresh = RefreshToken(login_response.data["refresh"])
+        jti = str(refresh.get("jti"))
+        outstanding = OutstandingToken.objects.get(jti=jti)
+        self.assertFalse(BlacklistedToken.objects.filter(token=outstanding).exists())
+        self.assertEqual(
+            TokenLoginLog.objects.filter(
+                user=self.user,
+                status=TokenLoginLog.LOGIN,
+                logout_at__isnull=True,
+            ).count(),
+            1,
+        )
+
+        uid, token = self._request_reset_and_get_uid_token()
+
+        response = self.client.post(
+            reverse("password-reset-confirm"),
+            {
+                "uid": uid,
+                "token": token,
+                "password": "NewPassword123",
+                "password_confirm": "NewPassword123",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertTrue(BlacklistedToken.objects.filter(token=outstanding).exists())
+        self.assertEqual(
+            TokenLoginLog.objects.filter(
+                user=self.user,
+                status=TokenLoginLog.REVOKED,
+                logout_at__isnull=False,
+            ).count(),
+            1,
+        )
 
 @override_settings(
     GOOGLE_OAUTH_CLIENT_ID="test-google-client-id.apps.googleusercontent.com",

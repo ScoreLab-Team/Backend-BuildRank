@@ -762,8 +762,9 @@ class EdificiViewSet(viewsets.ModelViewSet):
                 )
                 implementacions.append(impl)
 
-            simulacio.estatAplicacio = EstatAplicacioSimulacio.IMPLEMENTADA
-            simulacio.save(update_fields=['estatAplicacio'])
+            # La simulació NO passa a implementada en aquest punt.
+            # L'admin de finca només acredita i puja evidències.
+            # La validació final la fa l'admin de sistema a /millores-implementades/{id}/validar/.
 
         output = MilloraImplementadaSerializer(
             implementacions,
@@ -933,7 +934,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 class MilloraImplementadaViewSet(viewsets.GenericViewSet):
-    queryset = MilloraImplementada.objects.select_related("millora", "edifici")
+    queryset = MilloraImplementada.objects.select_related("millora", "edifici", "simulacio")
     serializer_class = MilloraImplementadaSerializer
     permission_classes = [IsAuthenticated, EsAdminMilloraImplementada]
 
@@ -957,8 +958,19 @@ class MilloraImplementadaViewSet(viewsets.GenericViewSet):
 
         millora_impl.estatValidacio = nou_estat
         millora_impl.observacionsAdmin = observacions
+        # El camp conserva el nom històric administradorFinca, però aquí desa
+        # l'usuari que ha fet la validació final. Per permisos, només pot ser admin sistema.
         millora_impl.administradorFinca = request.user
         millora_impl.save(update_fields=["estatValidacio", "observacionsAdmin", "administradorFinca"])
+
+        if nou_estat == EstatValidacio.VALIDADA and millora_impl.simulacio_id:
+            hi_ha_pendents_o_rebutjades = millora_impl.simulacio.implementacions_generades.exclude(
+                estatValidacio=EstatValidacio.VALIDADA
+            ).exists()
+
+            if not hi_ha_pendents_o_rebutjades:
+                millora_impl.simulacio.estatAplicacio = EstatAplicacioSimulacio.IMPLEMENTADA
+                millora_impl.simulacio.save(update_fields=["estatAplicacio"])
 
         output_serializer = MilloraImplementadaSerializer(millora_impl)
         return Response(output_serializer.data, status=status.HTTP_200_OK)

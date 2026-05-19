@@ -2045,6 +2045,69 @@ class DadesEnergetiquesViewTests(BaseTestData):
         self.assertNotIn("REF-DE-BUIT", refs)
  
  
+class TestDadesEnergetiquesValidacio(BaseTestData):
+    """
+    Comprova que el model/serializer rebutja valors fora de rang
+    o sense sentit físic a DadesEnergetiques.
+    """
+ 
+    @classmethod
+    def setUpTestData(cls):
+        cls.owner = cls._create_user("owner_val@example.com", RoleChoices.OWNER)
+        cls.grup = GrupComparable.objects.create(
+            idGrup=20, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-200"
+        )
+        cls.edifici = cls._create_edifici(cls.owner, cls.grup, numero=300)
+        cls.habitatge = Habitatge.objects.create(
+            referenciaCadastral="VAL001",
+            planta="1", porta="1", superficie=80.0,
+            edifici=cls.edifici,
+            usuari=cls.owner,
+        )
+ 
+    def _url(self):
+        return reverse("edifici-me-habitatge", args=[self.edifici.idEdifici, "VAL001"])
+ 
+    def test_consum_energia_negatiu_retorna_400(self):
+        """consumEnergiaPrimaria negatiu no té sentit físic → 400."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(),
+            {"dadesEnergetiques": {"consumEnergiaPrimaria": -50, "emissionsCO2": 25}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+ 
+    def test_emissions_co2_negatiu_retorna_400(self):
+        """emissionsCO2 negatiu no té sentit físic → 400."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(),
+            {"dadesEnergetiques": {"consumEnergiaPrimaria": 50, "emissionsCO2": -10}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+ 
+    def test_aillament_termic_negatiu_retorna_400(self):
+        """aillamentTermic negatiu no té sentit físic → 400."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(),
+            {"dadesEnergetiques": {"consumEnergiaPrimaria": 50, "emissionsCO2": 25, "aillamentTermic": -1}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+ 
+    def test_cost_anual_energia_negatiu_retorna_400(self):
+        """costAnualEnergia negatiu no té sentit econòmic → 400."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(),
+            {"dadesEnergetiques": {"consumEnergiaPrimaria": 50, "emissionsCO2": 25, "costAnualEnergia": -200}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+ 
 # ============================================================================
 # 6. AutocompleteCarrersTests
 # ============================================================================
@@ -3309,3 +3372,431 @@ class ThirdPartyServiceTests(APITestCase):
     def test_no_api_key_returns_401_or_403(self):
         response = self.client.post(self.url, {"points": []}, format="json")
         self.assertIn(response.status_code, [401, 403])
+
+
+# ============================================================================
+# TC-HR-001 a TC-HR-006 — Tests unitaris de calcular_heat_risk_index
+# ============================================================================
+
+from apps.buildings.scoring import calcular_heat_risk_index
+
+
+class TestCalcularHeatRiskIndex(BaseTestData):
+    """
+    Tests unitaris de la funció calcular_heat_risk_index (scoring.py).
+    No toquen la BD: utilitzen mocks per simular l'edifici i les seves dades.
+    """
+
+    def _edifici_mock(self, od=None, habitatges_data=None):
+        """
+        Crea un mock d'edifici amb dades open data i/o habitatges configurables.
+        habitatges_data: llista de dicts amb els camps de DadesEnergetiques.
+
+        Camps HRI rellevants:
+          - energiaRefrigeracio: float (0–100 kWh/m²a) — CRÍTIC
+          - aillamentTermic:     float (0.05–5.0 W/m²K) — CRÍTIC
+          - emissionsRefrigeracio: float (0–50 kgCO2/m²a) — opcional
+        """
+        edifici = MagicMock()
+        edifici.dades_energetiques_opendata = od
+        # FIX D: camps necessaris per a _calcular_hri_des_de_dades
+        edifici.anyConstruccio = 2000          # any neutre → risc mig-baix
+        edifici.orientacioPrincipal = "Est"    # orientació neutre → risc 0.6
+
+        habitatges = []
+        for data in (habitatges_data or []):
+            h = MagicMock()
+            dades = MagicMock(spec=DadesEnergetiques)
+            for k, v in data.items():
+                setattr(dades, k, v)
+            h.dadesEnergetiques = dades
+            habitatges.append(h)
+
+        # FIX C: configurar tant .all() com .filter() per retornar el mock_qs correcte.
+        # calcular_heat_risk_index usa:
+        #   edifici.habitatges.filter(dadesEnergetiques__isnull=False).select_related(...)
+        # Els habitatges del mock SEMPRE tenen dadesEnergetiques (o és None explícit),
+        # així que filter() retorna els que tenen dades != None.
+        habitatges_amb_dades = [h for h in habitatges if h.dadesEnergetiques is not None]
+
+        mock_qs_filtrat = MagicMock()
+        mock_qs_filtrat.exists.return_value = bool(habitatges_amb_dades)
+        mock_qs_filtrat.count.return_value = len(habitatges_amb_dades)
+        mock_qs_filtrat.__iter__ = lambda self: iter(habitatges_amb_dades)
+        mock_qs_filtrat.select_related.return_value = mock_qs_filtrat
+
+        mock_qs = MagicMock()
+        mock_qs.exists.return_value = bool(habitatges)
+        mock_qs.count.return_value = len(habitatges)
+        mock_qs.__iter__ = lambda self: iter(habitatges)
+        mock_qs.select_related.return_value = mock_qs
+        mock_qs.all.return_value = mock_qs
+        mock_qs.filter.return_value = mock_qs_filtrat  # FIX C
+
+        edifici.habitatges = mock_qs
+
+        return edifici
+
+    # ------------------------------------------------------------------
+    # TC-HR-001
+    # ------------------------------------------------------------------
+    def test_sense_habitatges_retorna_usuaris(self):
+        """TC-HR-001: Edifici sense habitatges → font None, index None."""
+        # Sense habitatges, filter() retorna queryset buit → va a la branca
+        # open data → od=None → retorna {index: None, font: None}
+        edifici = self._edifici_mock(od=None, habitatges_data=[])
+        resultat = calcular_heat_risk_index(edifici)
+
+        self.assertIsNone(resultat["index"])
+        # FIX A: la funció retorna font=None quan no hi ha habitatges ni od
+        self.assertIsNone(resultat["font"])
+
+    # ------------------------------------------------------------------
+    # TC-HR-002
+    # ------------------------------------------------------------------
+    def test_dades_critiques_absents_retorna_usuaris(self):
+        """TC-HR-002: Habitatge sense dades crítiques HRI → font 'usuaris', index None."""
+        # FIX B: els camps crítics del HRI són energiaRefrigeracio i aillamentTermic.
+        # Posem-los a None per simular dades insuficients.
+        edifici = self._edifici_mock(od=None, habitatges_data=[
+            {
+                "energiaRefrigeracio": None,
+                "aillamentTermic": None,
+                "emissionsRefrigeracio": None,
+            }
+        ])
+        resultat = calcular_heat_risk_index(edifici)
+
+        self.assertIsNone(resultat["index"])
+        # FIX A: la funció retorna la string "usuaris", no l'enum
+        self.assertEqual(resultat["font"], "usuaris")
+
+    # ------------------------------------------------------------------
+    # TC-HR-003
+    # ------------------------------------------------------------------
+    def test_index_alt_amb_dades_desfavorables(self):
+        """TC-HR-003: Refrigeració alta + aïllament baix → index >= 75 (risc alt)."""
+        # FIX B: usem els camps reals del HRI.
+        # energiaRefrigeracio alt (100 kWh) + aillamentTermic baix (0.1 W/m²K)
+        # + edifici antic (1920) + orientació Sud → risc molt alt.
+        edifici = self._edifici_mock(od=None, habitatges_data=[
+            {
+                "energiaRefrigeracio": 100.0,
+                "aillamentTermic": 0.1,
+                "emissionsRefrigeracio": 50.0,
+            }
+        ])
+        # Fem l'edifici antic i orientat al Sud per assegurar index >= 75
+        edifici.anyConstruccio = 1920
+        edifici.orientacioPrincipal = "Sud"
+
+        resultat = calcular_heat_risk_index(edifici)
+
+        self.assertIsNotNone(resultat["index"])
+        self.assertGreaterEqual(resultat["index"], 75)
+        # FIX A: la funció retorna la string "usuaris"
+        self.assertEqual(resultat["font"], "usuaris")
+
+    # ------------------------------------------------------------------
+    # TC-HR-004
+    # ------------------------------------------------------------------
+    def test_index_baix_amb_dades_favorables(self):
+        """TC-HR-004: Refrigeració baixa + aïllament alt + edifici nou → index < 25."""
+        # FIX B: energiaRefrigeracio baixa (5 kWh) + aillamentTermic alt (4.5 W/m²K)
+        # + edifici nou (2020) + orientació Nord → risc molt baix.
+        edifici = self._edifici_mock(od=None, habitatges_data=[
+            {
+                "energiaRefrigeracio": 5.0,
+                "aillamentTermic": 4.5,
+                "emissionsRefrigeracio": 2.0,
+            }
+        ])
+        edifici.anyConstruccio = 2020
+        edifici.orientacioPrincipal = "Nord"
+
+        resultat = calcular_heat_risk_index(edifici)
+
+        self.assertIsNotNone(resultat["index"])
+        self.assertLess(resultat["index"], 25)
+        # FIX A: la funció retorna la string "usuaris"
+        self.assertEqual(resultat["font"], "usuaris")
+
+    # ------------------------------------------------------------------
+    # TC-HR-005
+    # ------------------------------------------------------------------
+    def test_index_es_mitjana_de_habitatges(self):
+        """TC-HR-005: L'índex és la mitjana dels habitatges amb dades suficients."""
+        # FIX B: usem camps HRI vàlids
+        dades_h1 = {
+            "energiaRefrigeracio": 40.0,
+            "aillamentTermic": 2.0,
+            "emissionsRefrigeracio": 20.0,
+        }
+        dades_h2 = {
+            "energiaRefrigeracio": 70.0,
+            "aillamentTermic": 1.0,
+            "emissionsRefrigeracio": 35.0,
+        }
+
+        resultat_1 = calcular_heat_risk_index(
+            self._edifici_mock(od=None, habitatges_data=[dades_h1])
+        )
+        resultat_2 = calcular_heat_risk_index(
+            self._edifici_mock(od=None, habitatges_data=[dades_h2])
+        )
+        # FIX E: TC-HR-005 original fallava perquè els índexos eren None
+        # (camps incorrectes). Ara amb camps HRI correctes, han de ser floats.
+        self.assertIsNotNone(resultat_1["index"], "resultat_1 hauria de tenir index")
+        self.assertIsNotNone(resultat_2["index"], "resultat_2 hauria de tenir index")
+
+        edifici_dos = self._edifici_mock(od=None, habitatges_data=[dades_h1, dades_h2])
+        resultat = calcular_heat_risk_index(edifici_dos)
+
+        esperada = (resultat_1["index"] + resultat_2["index"]) / 2
+        self.assertAlmostEqual(resultat["index"], esperada, places=5)
+
+    # ------------------------------------------------------------------
+    # TC-HR-006
+    # ------------------------------------------------------------------
+    def test_habitatge_sense_dades_energetiques_es_ignora(self):
+        """TC-HR-006: Habitatge sense DadesEnergetiques es descarta sense error."""
+        # FIX B + C: usem camps HRI vàlids per a l'habitatge bo.
+        # L'habitatge sense dades (dadesEnergetiques=None) no passarà el filter()
+        # del mock, de manera que el filtre retornarà només l'habitatge vàlid.
+        edifici = self._edifici_mock(od=None, habitatges_data=[
+            {
+                "energiaRefrigeracio": 50.0,
+                "aillamentTermic": 2.5,
+                "emissionsRefrigeracio": 25.0,
+            },
+        ])
+
+        # Afegim manualment un habitatge sense dades al queryset complet,
+        # però el mock_qs_filtrat ja el filtra (perquè dadesEnergetiques=None).
+        h_sense_dades = MagicMock()
+        h_sense_dades.dadesEnergetiques = None
+
+        # Reconfigurem el mock per incloure l'habitatge buit al total
+        # però no al filtrat (comportament real del .filter(dadesEnergetiques__isnull=False))
+        habitatges_tots = list(edifici.habitatges) + [h_sense_dades]
+        habitatges_amb_dades = [h for h in habitatges_tots if h.dadesEnergetiques is not None]
+
+        mock_qs_filtrat = MagicMock()
+        mock_qs_filtrat.exists.return_value = bool(habitatges_amb_dades)
+        mock_qs_filtrat.count.return_value = len(habitatges_amb_dades)
+        mock_qs_filtrat.__iter__ = lambda self: iter(habitatges_amb_dades)
+        mock_qs_filtrat.select_related.return_value = mock_qs_filtrat
+
+        edifici.habitatges.count.return_value = len(habitatges_tots)
+        edifici.habitatges.__iter__ = lambda self: iter(habitatges_tots)
+        edifici.habitatges.filter.return_value = mock_qs_filtrat
+
+        resultat = calcular_heat_risk_index(edifici)
+
+        # Ha de calcular correctament amb l'habitatge vàlid
+        self.assertIsNotNone(resultat["index"])
+        self.assertEqual(resultat["font"], "usuaris")
+
+
+# ============================================================================
+# TC-HR-007 a TC-HR-010 — Tests d'integració: endpoint API
+# ============================================================================
+
+class TestHeatRiskSerializer(BaseTestData):
+    """
+    Tests d'integració: comprova que GET /buildings/{id}/ retorna
+    el camp heat_risk correctament formatat.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.owner = cls._create_user("owner_hr@example.com", RoleChoices.OWNER)
+        cls.grup = GrupComparable.objects.create(
+            idGrup=10, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-200"
+        )
+        cls.edifici = cls._create_edifici(cls.owner, cls.grup, numero=200)
+        cls.habitatge = Habitatge.objects.create(
+            referenciaCadastral="HR001",
+            planta="1", porta="1", superficie=80.0,
+            edifici=cls.edifici,
+            usuari=cls.owner,
+        )
+
+    def _url(self):
+        return reverse("edifici-detail", args=[self.edifici.idEdifici])
+
+    def test_heat_risk_present_en_resposta(self):
+        """TC-HR-007: El camp heat_risk és present a la resposta de detall d'edifici."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(self._url())
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("heat_risk", response.data)
+
+    def test_heat_risk_estructura_correcta(self):
+        """TC-HR-008: El camp heat_risk té les claus index, font, etiqueta i dades_insuficients."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(self._url())
+
+        hr = response.data["heat_risk"]
+        self.assertIn("index", hr)
+        self.assertIn("font", hr)
+        self.assertIn("etiqueta", hr)
+        self.assertIn("dades_insuficients", hr)
+
+    def test_heat_risk_etiqueta_sense_dades(self):
+        """TC-HR-009: Sense DadesEnergetiques → etiqueta 'Sense dades', index null."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(self._url())
+
+        hr = response.data["heat_risk"]
+        # L'habitatge de test no té DadesEnergetiques associades
+        self.assertIsNone(hr["index"])
+        self.assertEqual(hr["etiqueta"], "Sense dades")
+
+    def test_heat_risk_etiqueta_risc_alt(self):
+        """TC-HR-010: Amb dades desfavorables → etiqueta 'Risc alt'."""
+        # FIX D: afegir tots els camps NOT NULL de DadesEnergetiques.
+        # Els camps crítics del HRI (energiaRefrigeracio + aillamentTermic) han de
+        # tenir valors desfavorables. La resta de camps obligatoris s'omplen amb
+        # valors mínims vàlids.
+        dades = DadesEnergetiques.objects.create(
+            # Camps crítics HRI — valors de risc alt
+            energiaRefrigeracio=100.0,
+            aillamentTermic=0.1,
+            emissionsRefrigeracio=50.0,
+            # Resta de camps NOT NULL
+            consumEnergiaPrimaria=95.0,
+            consumEnergiaFinal=80.0,
+            emissionsCO2=48.0,
+            costAnualEnergia=2000.0,
+            energiaCalefaccio=60.0,
+            energiaACS=20.0,
+            energiaEnllumenament=10.0,
+            emissionsCalefaccio=30.0,
+            emissionsACS=10.0,
+            emissionsEnllumenament=5.0,
+            valorFinestres=2.0,
+            normativa="CTE-2006",
+            einaCertificacio="CE3X",
+            motiuCertificacio="Venda",
+            rehabilitacioEnergetica=False,
+            dataEntrada="2024-01-01",
+        )
+
+        self.habitatge.dadesEnergetiques = dades
+        self.habitatge.save()
+
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(self._url())
+
+        hr = response.data["heat_risk"]
+
+        self.assertIsNotNone(hr["index"])
+        self.assertGreaterEqual(hr["index"], 75)
+        self.assertEqual(hr["etiqueta"], "Risc alt")
+
+
+# ============================================================================
+# TC-HR-011 a TC-HR-012 — Tests de persistència via signal
+# ============================================================================
+
+class TestHeatRiskPersistencia(BaseTestData):
+    """
+    Comprova que el signal _recalcular_edifici persisteix
+    heatRiskIndex i heatRiskFont a l'edifici.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.owner = cls._create_user("owner_signal@example.com", RoleChoices.OWNER)
+        cls.grup = GrupComparable.objects.create(
+            idGrup=11, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-200"
+        )
+        cls.edifici = cls._create_edifici(cls.owner, cls.grup, numero=201)
+
+    def _crear_dades_energetiques(self, **kwargs):
+        """
+        Helper per crear DadesEnergetiques amb tots els camps NOT NULL.
+        Els kwargs sobreescriuen els valors per defecte.
+        FIX D: centralitza la creació per evitar duplicar camps NOT NULL.
+        """
+        defaults = {
+            "consumEnergiaPrimaria": 50.0,
+            "consumEnergiaFinal": 40.0,
+            "emissionsCO2": 25.0,
+            "costAnualEnergia": 1200.0,
+            "energiaCalefaccio": 30.0,
+            "energiaRefrigeracio": 50.0,   # camp crític HRI
+            "energiaACS": 15.0,
+            "energiaEnllumenament": 8.0,
+            "emissionsCalefaccio": 15.0,
+            "emissionsRefrigeracio": 25.0,
+            "emissionsACS": 8.0,
+            "emissionsEnllumenament": 4.0,
+            "aillamentTermic": 2.5,         # camp crític HRI (en W/m²K)
+            "valorFinestres": 2.0,
+            "normativa": "CTE-2006",
+            "einaCertificacio": "CE3X",
+            "motiuCertificacio": "Venda",
+            "rehabilitacioEnergetica": False,
+            "dataEntrada": "2024-01-01",
+        }
+        defaults.update(kwargs)
+        return DadesEnergetiques.objects.create(**defaults)
+
+    def test_signal_persisteix_heat_risk_en_crear_dades(self):
+        """TC-HR-011: Crear DadesEnergetiques dispara el signal i omple heatRiskIndex."""
+
+        habitatge = Habitatge.objects.create(
+            referenciaCadastral="SIGNAL001",
+            planta="1",
+            porta="1",
+            superficie=70.0,
+            edifici=self.edifici,
+            usuari=self.owner,
+        )
+
+        # FIX D: usem el helper amb tots els camps NOT NULL
+        dades = self._crear_dades_energetiques(
+            energiaRefrigeracio=50.0,
+            aillamentTermic=2.5,
+        )
+
+        habitatge.dadesEnergetiques = dades
+        habitatge.save()
+
+        self.edifici.refresh_from_db()
+
+        self.assertIsNotNone(self.edifici.heatRiskIndex)
+        self.assertIsNotNone(self.edifici.heatRiskFont)
+
+    def test_signal_persisteix_heat_risk_en_esborrar_habitatge(self):
+        """TC-HR-012: Esborrar un habitatge recalcula i persisteix el heat risk."""
+
+        habitatge = Habitatge.objects.create(
+            referenciaCadastral="SIGNAL002",
+            planta="2",
+            porta="1",
+            superficie=60.0,
+            edifici=self.edifici,
+            usuari=self.owner,
+        )
+
+        # FIX D: usem el helper amb tots els camps NOT NULL
+        dades = self._crear_dades_energetiques(
+            energiaRefrigeracio=40.0,
+            aillamentTermic=3.0,
+            rehabilitacioEnergetica=True,
+        )
+
+        habitatge.dadesEnergetiques = dades
+        habitatge.save()
+
+        self.edifici.refresh_from_db()
+        self.assertIsNotNone(self.edifici.heatRiskIndex)
+
+        habitatge.delete()
+
+        self.edifici.refresh_from_db()
+        self.assertIsNone(self.edifici.heatRiskIndex)

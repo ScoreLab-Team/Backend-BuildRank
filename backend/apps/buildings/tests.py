@@ -9,6 +9,7 @@ from django.utils import timezone
 from django.db import IntegrityError, transaction
 from decimal import Decimal
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 
 from apps.buildings.models import BadgeDefinition, BuildingBadge, BadgeScope, BadgeCategory, CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora, SimulacioMilloraItem, EstatAplicacioSimulacio, RolVinculacioHabitatge, TipusEdifici
 from apps.buildings.serializers import EdificiDetailSerializer, EdificiMapSerializer, LocalitzacioSerializer
@@ -1399,6 +1400,88 @@ class ImportarCeeCommandTests(TestCase):
                 e.classificacioFont, FontClassificacio.OFICIAL,
                 f"Edifici {e.idEdifici}: esperava 'oficial', obtingut '{e.classificacioFont}'"
             )
+
+    def _row_base_for_coord_tests(self):
+        import csv
+        import io
+
+        with open(self.csv_path, newline="", encoding="utf-8") as handle:
+            content = handle.read()
+
+        try:
+            dialect = csv.Sniffer().sniff(content[:4096], delimiters=",;")
+        except csv.Error:
+            dialect = csv.excel
+
+        reader = csv.DictReader(io.StringIO(content), dialect=dialect)
+        row = next(reader)
+        return dict(row)
+
+    def _write_csv_for_coord_tests(self, rows, filename):
+        import csv
+        import tempfile
+        from pathlib import Path
+
+        if not rows:
+            raise ValueError("Cal com a mínim una fila per escriure el CSV de test.")
+
+        # Conservem el mateix format que el CSV petit existent de la classe.
+        with open(self.csv_path, newline="", encoding="utf-8") as handle:
+            content = handle.read()
+
+        try:
+            dialect = csv.Sniffer().sniff(content[:4096], delimiters=",;")
+        except csv.Error:
+            dialect = csv.excel
+
+        output_path = Path(tempfile.gettempdir()) / filename
+        fieldnames = list(rows[0].keys())
+
+        with open(output_path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, dialect=dialect)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        return str(output_path)
+
+    def test_import_sense_coordenades_guarda_null(self):
+        row = self._row_base_for_coord_tests()
+        row["NUM_CAS"] = "NUL001"
+        row["LATITUD"] = ""
+        row["LONGITUD"] = ""
+
+        csv_path = self._write_csv_for_coord_tests([row], "cee_sense_coords.csv")
+        call_command("importar_cee", csv_path, limit=1)
+
+        edifici = Edifici.objects.get(num_cas_origen="NUL001")
+        self.assertIsNone(edifici.localitzacio.latitud)
+        self.assertIsNone(edifici.localitzacio.longitud)
+
+    def test_import_coordenada_parcial_guarda_null(self):
+        row = self._row_base_for_coord_tests()
+        row["NUM_CAS"] = "PARCIAL001"
+        row["LATITUD"] = ""
+        row["LONGITUD"] = "2,15899"
+
+        csv_path = self._write_csv_for_coord_tests([row], "cee_coords_parcials.csv")
+        call_command("importar_cee", csv_path, limit=1)
+
+        edifici = Edifici.objects.get(num_cas_origen="PARCIAL001")
+        self.assertIsNone(edifici.localitzacio.latitud)
+        self.assertIsNone(edifici.localitzacio.longitud)
+
+    def test_import_coordenades_zero_guarda_null(self):
+        row = self._row_base_for_coord_tests()
+        row["NUM_CAS"] = "ZERO001"
+        row["LATITUD"] = "0"
+        row["LONGITUD"] = "0"
+
+        csv_path = self._write_csv_for_coord_tests([row], "cee_zero_coords.csv")
+        call_command("importar_cee", csv_path, limit=1)
+
+        edifici = Edifici.objects.get(num_cas_origen="ZERO001")
+        self.assertIsNone(edifici.localitzacio.latitud)
+        self.assertIsNone(edifici.localitzacio.longitud)
 
     def test_incidencia_registrada_per_fila_invalida(self):
         """

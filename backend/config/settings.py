@@ -54,7 +54,7 @@ ENABLE_DEBUG_TOOLBAR = os.getenv("ENABLE_DEBUG_TOOLBAR", "False").lower() == "tr
 
 ALLOWED_HOSTS = env_list(
     "ALLOWED_HOSTS",
-    default="localhost,127.0.0.1,0.0.0.0",
+    default="localhost,127.0.0.1,0.0.0.0,10.0.2.2",
 )
 
 

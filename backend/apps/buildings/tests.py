@@ -6,9 +6,13 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.db import IntegrityError, transaction
+from decimal import Decimal
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 
-from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora, TipusEdifici
-from apps.buildings.serializers import EdificiDetailSerializer, LocalitzacioSerializer
+from apps.buildings.models import BadgeDefinition, BuildingBadge, BadgeScope, BadgeCategory, CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora, SimulacioMilloraItem, EstatAplicacioSimulacio, RolVinculacioHabitatge, TipusEdifici
+from apps.buildings.serializers import EdificiDetailSerializer, EdificiMapSerializer, LocalitzacioSerializer
 from apps.accounts.models import RoleChoices, ValidacioAdmin
 from .simulation.engine import simular_millores, clamp, UnitatBaseMillora
 
@@ -1397,6 +1401,88 @@ class ImportarCeeCommandTests(TestCase):
                 f"Edifici {e.idEdifici}: esperava 'oficial', obtingut '{e.classificacioFont}'"
             )
 
+    def _row_base_for_coord_tests(self):
+        import csv
+        import io
+
+        with open(self.csv_path, newline="", encoding="utf-8") as handle:
+            content = handle.read()
+
+        try:
+            dialect = csv.Sniffer().sniff(content[:4096], delimiters=",;")
+        except csv.Error:
+            dialect = csv.excel
+
+        reader = csv.DictReader(io.StringIO(content), dialect=dialect)
+        row = next(reader)
+        return dict(row)
+
+    def _write_csv_for_coord_tests(self, rows, filename):
+        import csv
+        import tempfile
+        from pathlib import Path
+
+        if not rows:
+            raise ValueError("Cal com a mínim una fila per escriure el CSV de test.")
+
+        # Conservem el mateix format que el CSV petit existent de la classe.
+        with open(self.csv_path, newline="", encoding="utf-8") as handle:
+            content = handle.read()
+
+        try:
+            dialect = csv.Sniffer().sniff(content[:4096], delimiters=",;")
+        except csv.Error:
+            dialect = csv.excel
+
+        output_path = Path(tempfile.gettempdir()) / filename
+        fieldnames = list(rows[0].keys())
+
+        with open(output_path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, dialect=dialect)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        return str(output_path)
+
+    def test_import_sense_coordenades_guarda_null(self):
+        row = self._row_base_for_coord_tests()
+        row["NUM_CAS"] = "NUL001"
+        row["LATITUD"] = ""
+        row["LONGITUD"] = ""
+
+        csv_path = self._write_csv_for_coord_tests([row], "cee_sense_coords.csv")
+        call_command("importar_cee", csv_path, limit=1)
+
+        edifici = Edifici.objects.get(num_cas_origen="NUL001")
+        self.assertIsNone(edifici.localitzacio.latitud)
+        self.assertIsNone(edifici.localitzacio.longitud)
+
+    def test_import_coordenada_parcial_guarda_null(self):
+        row = self._row_base_for_coord_tests()
+        row["NUM_CAS"] = "PARCIAL001"
+        row["LATITUD"] = ""
+        row["LONGITUD"] = "2,15899"
+
+        csv_path = self._write_csv_for_coord_tests([row], "cee_coords_parcials.csv")
+        call_command("importar_cee", csv_path, limit=1)
+
+        edifici = Edifici.objects.get(num_cas_origen="PARCIAL001")
+        self.assertIsNone(edifici.localitzacio.latitud)
+        self.assertIsNone(edifici.localitzacio.longitud)
+
+    def test_import_coordenades_zero_guarda_null(self):
+        row = self._row_base_for_coord_tests()
+        row["NUM_CAS"] = "ZERO001"
+        row["LATITUD"] = "0"
+        row["LONGITUD"] = "0"
+
+        csv_path = self._write_csv_for_coord_tests([row], "cee_zero_coords.csv")
+        call_command("importar_cee", csv_path, limit=1)
+
+        edifici = Edifici.objects.get(num_cas_origen="ZERO001")
+        self.assertIsNone(edifici.localitzacio.latitud)
+        self.assertIsNone(edifici.localitzacio.longitud)
+
     def test_incidencia_registrada_per_fila_invalida(self):
         """
         Una fila amb LATITUD invàlida genera una ImportacioIncidencia
@@ -2045,6 +2131,69 @@ class DadesEnergetiquesViewTests(BaseTestData):
         self.assertNotIn("REF-DE-BUIT", refs)
  
  
+class TestDadesEnergetiquesValidacio(BaseTestData):
+    """
+    Comprova que el model/serializer rebutja valors fora de rang
+    o sense sentit físic a DadesEnergetiques.
+    """
+ 
+    @classmethod
+    def setUpTestData(cls):
+        cls.owner = cls._create_user("owner_val@example.com", RoleChoices.OWNER)
+        cls.grup = GrupComparable.objects.create(
+            idGrup=20, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-200"
+        )
+        cls.edifici = cls._create_edifici(cls.owner, cls.grup, numero=300)
+        cls.habitatge = Habitatge.objects.create(
+            referenciaCadastral="VAL001",
+            planta="1", porta="1", superficie=80.0,
+            edifici=cls.edifici,
+            usuari=cls.owner,
+        )
+ 
+    def _url(self):
+        return reverse("edifici-me-habitatge", args=[self.edifici.idEdifici, "VAL001"])
+ 
+    def test_consum_energia_negatiu_retorna_400(self):
+        """consumEnergiaPrimaria negatiu no té sentit físic → 400."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(),
+            {"dadesEnergetiques": {"consumEnergiaPrimaria": -50, "emissionsCO2": 25}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+ 
+    def test_emissions_co2_negatiu_retorna_400(self):
+        """emissionsCO2 negatiu no té sentit físic → 400."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(),
+            {"dadesEnergetiques": {"consumEnergiaPrimaria": 50, "emissionsCO2": -10}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+ 
+    def test_aillament_termic_negatiu_retorna_400(self):
+        """aillamentTermic negatiu no té sentit físic → 400."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(),
+            {"dadesEnergetiques": {"consumEnergiaPrimaria": 50, "emissionsCO2": 25, "aillamentTermic": -1}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+ 
+    def test_cost_anual_energia_negatiu_retorna_400(self):
+        """costAnualEnergia negatiu no té sentit econòmic → 400."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.patch(
+            self._url(),
+            {"dadesEnergetiques": {"consumEnergiaPrimaria": 50, "emissionsCO2": 25, "costAnualEnergia": -200}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+ 
 # ============================================================================
 # 6. AutocompleteCarrersTests
 # ============================================================================
@@ -2605,12 +2754,11 @@ class ValidacioMilloraImplementadaTests(BaseTestData):
 
     # --- permisos ---
 
-    def test_admin_propi_pot_validar(self):
+    def test_admin_finca_no_pot_validar(self):
         mi = self._crear_millora_impl()
         self.client.force_authenticate(user=self.admin)
         resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp.data["estatValidacio"], "Validada")
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_superuser_pot_validar(self):
         mi = self._crear_millora_impl()
@@ -2642,19 +2790,19 @@ class ValidacioMilloraImplementadaTests(BaseTestData):
 
     def test_validar_des_de_pendent_documentacio(self):
         mi = self._crear_millora_impl(estat=EstatValidacio.PENDENT_DOCUMENTACIO)
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
 
     def test_no_es_pot_validar_una_millora_ja_validada(self):
         mi = self._crear_millora_impl(estat=EstatValidacio.VALIDADA)
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Rebutjada"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_no_es_pot_validar_una_millora_ja_rebutjada(self):
         mi = self._crear_millora_impl(estat=EstatValidacio.REBUTJADA)
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         resp = self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
@@ -2662,34 +2810,113 @@ class ValidacioMilloraImplementadaTests(BaseTestData):
 
     def test_estat_invalid_retorna_400(self):
         mi = self._crear_millora_impl()
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         resp = self.client.post(self._url(mi.pk), {"estatValidacio": "EnRevisió"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_estat_absent_retorna_400(self):
         mi = self._crear_millora_impl()
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         resp = self.client.post(self._url(mi.pk), {}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     # --- efectes secundaris ---
 
-    def test_validar_desa_administrador_finca(self):
+    def test_validar_desa_admin_sistema(self):
         mi = self._crear_millora_impl()
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         self.client.post(self._url(mi.pk), {"estatValidacio": "Validada"}, format="json")
         mi.refresh_from_db()
-        self.assertEqual(mi.administradorFinca, self.admin)
+        self.assertEqual(mi.administradorFinca, self.superuser)
 
-    def test_admin_pot_validar_multiples_millores(self):
-        """Un admin pot validar més d'una millora (ForeignKey, no OneToOneField)."""
+    def test_admin_sistema_pot_validar_multiples_millores(self):
+        """Un admin de sistema pot validar més d'una millora."""
         mi1 = self._crear_millora_impl()
         mi2 = self._crear_millora_impl()
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.superuser)
         r1 = self.client.post(self._url(mi1.pk), {"estatValidacio": "Validada"}, format="json")
         r2 = self.client.post(self._url(mi2.pk), {"estatValidacio": "Rebutjada"}, format="json")
         self.assertEqual(r1.status_code, status.HTTP_200_OK)
         self.assertEqual(r2.status_code, status.HTTP_200_OK)
+
+    def test_acreditar_implementacio_no_marca_simulacio_com_implementada(self):
+        simulacio = SimulacioMillora.objects.create(
+            edifici=self.edifici,
+            creadaPer=self.admin,
+            estatAplicacio=EstatAplicacioSimulacio.APROVADA,
+        )
+        SimulacioMilloraItem.objects.create(
+            simulacio=simulacio,
+            millora=self.cataleg,
+            coberturaPercent=100,
+        )
+
+        document = SimpleUploadedFile(
+            "evidencia.pdf",
+            b"%PDF-1.4 evidencia de prova",
+            content_type="application/pdf",
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        url = reverse(
+            "edifici-acreditar-implementacio-simulacio",
+            args=[self.edifici.pk, simulacio.pk],
+        )
+        resp = self.client.post(
+            url,
+            {
+                "dataExecucio": "2025-06-01",
+                "costReal": 1500.0,
+                "documentacioAdjunta": document,
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        simulacio.refresh_from_db()
+        self.assertEqual(simulacio.estatAplicacio, EstatAplicacioSimulacio.APROVADA)
+        self.assertEqual(
+            MilloraImplementada.objects.filter(
+                simulacio=simulacio,
+                estatValidacio=EstatValidacio.EN_REVISIO,
+            ).count(),
+            1,
+        )
+
+    def test_simulacio_passa_a_implementada_quan_totes_les_millores_estan_validades(self):
+        simulacio = SimulacioMillora.objects.create(
+            edifici=self.edifici,
+            creadaPer=self.admin,
+            estatAplicacio=EstatAplicacioSimulacio.APROVADA,
+        )
+        mi1 = MilloraImplementada.objects.create(
+            dataExecucio="2025-06-01",
+            costReal=1500.0,
+            estatValidacio=EstatValidacio.EN_REVISIO,
+            millora=self.cataleg,
+            edifici=self.edifici,
+            simulacio=simulacio,
+        )
+        mi2 = MilloraImplementada.objects.create(
+            dataExecucio="2025-06-02",
+            costReal=1700.0,
+            estatValidacio=EstatValidacio.EN_REVISIO,
+            millora=self.cataleg,
+            edifici=self.edifici,
+            simulacio=simulacio,
+        )
+
+        self.client.force_authenticate(user=self.superuser)
+
+        r1 = self.client.post(self._url(mi1.pk), {"estatValidacio": "Validada"}, format="json")
+        self.assertEqual(r1.status_code, status.HTTP_200_OK)
+        simulacio.refresh_from_db()
+        self.assertEqual(simulacio.estatAplicacio, EstatAplicacioSimulacio.APROVADA)
+
+        r2 = self.client.post(self._url(mi2.pk), {"estatValidacio": "Validada"}, format="json")
+        self.assertEqual(r2.status_code, status.HTTP_200_OK)
+        simulacio.refresh_from_db()
+        self.assertEqual(simulacio.estatAplicacio, EstatAplicacioSimulacio.IMPLEMENTADA)
 
 class TestAdminFincaAltaEdifici(BaseTestData):
     # US-AF1: Validació de permisos, bloquejos i creació d'edificis per a Administradors de Finca
@@ -2854,6 +3081,64 @@ class HabitatgeFluxTests(BaseTestData):
         self.assertTrue(Habitatge.objects.filter(pk=habitatge.pk).exists())
         self.assertEqual(habitatge.estatValidacio, EstatValidacio.REBUTJADA)
         self.assertIsNone(habitatge.solicitant)
+
+    def test_creacio_habitatge_guarda_rol_solicitat_owner(self):
+        self.client.force_authenticate(user=self.usuari)
+        payload = {
+            "referenciaCadastral": "BCN-ROL-OWNER",
+            "edifici": self.edifici.idEdifici,
+            "planta": "4",
+            "porta": "2",
+            "superficie": 75.0,
+        }
+
+        response = self.client.post(self.url_list, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        habitatge = Habitatge.objects.get(referenciaCadastral="BCN-ROL-OWNER")
+        self.assertEqual(habitatge.estatValidacio, EstatValidacio.EN_REVISIO)
+        self.assertEqual(habitatge.solicitant, self.usuari)
+        self.assertEqual(habitatge.rolSolicitat, RolVinculacioHabitatge.OWNER)
+
+    def test_habitatge_permet_propietari_i_llogater_alhora(self):
+        tenant = self._create_user("tenant_habitatge@test.com", RoleChoices.TENANT)
+
+        habitatge = Habitatge.objects.create(
+            referenciaCadastral="OWNER-TENANT-001",
+            edifici=self.edifici,
+            superficie=80.0,
+            planta="1",
+            porta="1",
+            estatValidacio=EstatValidacio.VALIDADA,
+            usuari=self.usuari,
+            propietari=self.usuari,
+        )
+
+        self.client.force_authenticate(user=tenant)
+        url_solicitar = reverse('habitatge-solicitar-acces', kwargs={'pk': habitatge.pk})
+        response = self.client.post(url_solicitar, {}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        habitatge.refresh_from_db()
+        self.assertEqual(habitatge.estatValidacio, EstatValidacio.EN_REVISIO)
+        self.assertEqual(habitatge.solicitant, tenant)
+        self.assertEqual(habitatge.rolSolicitat, RolVinculacioHabitatge.TENANT)
+        self.assertEqual(habitatge.propietari, self.usuari)
+        self.assertIsNone(habitatge.llogater)
+
+        self.client.force_authenticate(user=self.admin_finca)
+        url_validar = reverse('habitatge-validar-acces', kwargs={'pk': habitatge.pk})
+        response = self.client.post(url_validar, {"estat": "Validada"}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        habitatge.refresh_from_db()
+        self.assertEqual(habitatge.estatValidacio, EstatValidacio.VALIDADA)
+        self.assertEqual(habitatge.propietari, self.usuari)
+        self.assertEqual(habitatge.llogater, tenant)
+        self.assertEqual(habitatge.usuari, self.usuari)
+        self.assertIsNone(habitatge.solicitant)
+        self.assertIsNone(habitatge.rolSolicitat)
+
 
 class TestFluxSolicitudHabitatge(BaseTestData):
     """
@@ -3309,3 +3594,1036 @@ class ThirdPartyServiceTests(APITestCase):
     def test_no_api_key_returns_401_or_403(self):
         response = self.client.post(self.url, {"points": []}, format="json")
         self.assertIn(response.status_code, [401, 403])
+
+
+# ============================================================================
+# TC-HR-001 a TC-HR-006 — Tests unitaris de calcular_heat_risk_index
+# ============================================================================
+
+from apps.buildings.scoring import calcular_heat_risk_index
+
+
+class TestCalcularHeatRiskIndex(BaseTestData):
+    """
+    Tests unitaris de la funció calcular_heat_risk_index (scoring.py).
+    No toquen la BD: utilitzen mocks per simular l'edifici i les seves dades.
+    """
+
+    def _edifici_mock(self, od=None, habitatges_data=None):
+        """
+        Crea un mock d'edifici amb dades open data i/o habitatges configurables.
+        habitatges_data: llista de dicts amb els camps de DadesEnergetiques.
+
+        Camps HRI rellevants:
+          - energiaRefrigeracio: float (0–100 kWh/m²a) — CRÍTIC
+          - aillamentTermic:     float (0.05–5.0 W/m²K) — CRÍTIC
+          - emissionsRefrigeracio: float (0–50 kgCO2/m²a) — opcional
+        """
+        edifici = MagicMock()
+        edifici.dades_energetiques_opendata = od
+        # FIX D: camps necessaris per a _calcular_hri_des_de_dades
+        edifici.anyConstruccio = 2000          # any neutre → risc mig-baix
+        edifici.orientacioPrincipal = "Est"    # orientació neutre → risc 0.6
+
+        habitatges = []
+        for data in (habitatges_data or []):
+            h = MagicMock()
+            dades = MagicMock(spec=DadesEnergetiques)
+            for k, v in data.items():
+                setattr(dades, k, v)
+            h.dadesEnergetiques = dades
+            habitatges.append(h)
+
+        # FIX C: configurar tant .all() com .filter() per retornar el mock_qs correcte.
+        # calcular_heat_risk_index usa:
+        #   edifici.habitatges.filter(dadesEnergetiques__isnull=False).select_related(...)
+        # Els habitatges del mock SEMPRE tenen dadesEnergetiques (o és None explícit),
+        # així que filter() retorna els que tenen dades != None.
+        habitatges_amb_dades = [h for h in habitatges if h.dadesEnergetiques is not None]
+
+        mock_qs_filtrat = MagicMock()
+        mock_qs_filtrat.exists.return_value = bool(habitatges_amb_dades)
+        mock_qs_filtrat.count.return_value = len(habitatges_amb_dades)
+        mock_qs_filtrat.__iter__ = lambda self: iter(habitatges_amb_dades)
+        mock_qs_filtrat.select_related.return_value = mock_qs_filtrat
+
+        mock_qs = MagicMock()
+        mock_qs.exists.return_value = bool(habitatges)
+        mock_qs.count.return_value = len(habitatges)
+        mock_qs.__iter__ = lambda self: iter(habitatges)
+        mock_qs.select_related.return_value = mock_qs
+        mock_qs.all.return_value = mock_qs
+        mock_qs.filter.return_value = mock_qs_filtrat  # FIX C
+
+        edifici.habitatges = mock_qs
+
+        return edifici
+
+    # ------------------------------------------------------------------
+    # TC-HR-001
+    # ------------------------------------------------------------------
+    def test_sense_habitatges_retorna_usuaris(self):
+        """TC-HR-001: Edifici sense habitatges → font None, index None."""
+        # Sense habitatges, filter() retorna queryset buit → va a la branca
+        # open data → od=None → retorna {index: None, font: None}
+        edifici = self._edifici_mock(od=None, habitatges_data=[])
+        resultat = calcular_heat_risk_index(edifici)
+
+        self.assertIsNone(resultat["index"])
+        # FIX A: la funció retorna font=None quan no hi ha habitatges ni od
+        self.assertIsNone(resultat["font"])
+
+    # ------------------------------------------------------------------
+    # TC-HR-002
+    # ------------------------------------------------------------------
+    def test_dades_critiques_absents_retorna_usuaris(self):
+        """TC-HR-002: Habitatge sense dades crítiques HRI → font 'usuaris', index None."""
+        # FIX B: els camps crítics del HRI són energiaRefrigeracio i aillamentTermic.
+        # Posem-los a None per simular dades insuficients.
+        edifici = self._edifici_mock(od=None, habitatges_data=[
+            {
+                "energiaRefrigeracio": None,
+                "aillamentTermic": None,
+                "emissionsRefrigeracio": None,
+            }
+        ])
+        resultat = calcular_heat_risk_index(edifici)
+
+        self.assertIsNone(resultat["index"])
+        # FIX A: la funció retorna la string "usuaris", no l'enum
+        self.assertEqual(resultat["font"], "usuaris")
+
+    # ------------------------------------------------------------------
+    # TC-HR-003
+    # ------------------------------------------------------------------
+    def test_index_alt_amb_dades_desfavorables(self):
+        """TC-HR-003: Refrigeració alta + aïllament baix → index >= 75 (risc alt)."""
+        # FIX B: usem els camps reals del HRI.
+        # energiaRefrigeracio alt (100 kWh) + aillamentTermic baix (0.1 W/m²K)
+        # + edifici antic (1920) + orientació Sud → risc molt alt.
+        edifici = self._edifici_mock(od=None, habitatges_data=[
+            {
+                "energiaRefrigeracio": 100.0,
+                "aillamentTermic": 0.1,
+                "emissionsRefrigeracio": 50.0,
+            }
+        ])
+        # Fem l'edifici antic i orientat al Sud per assegurar index >= 75
+        edifici.anyConstruccio = 1920
+        edifici.orientacioPrincipal = "Sud"
+
+        resultat = calcular_heat_risk_index(edifici)
+
+        self.assertIsNotNone(resultat["index"])
+        self.assertGreaterEqual(resultat["index"], 75)
+        # FIX A: la funció retorna la string "usuaris"
+        self.assertEqual(resultat["font"], "usuaris")
+
+    # ------------------------------------------------------------------
+    # TC-HR-004
+    # ------------------------------------------------------------------
+    def test_index_baix_amb_dades_favorables(self):
+        """TC-HR-004: Refrigeració baixa + aïllament alt + edifici nou → index < 25."""
+        # FIX B: energiaRefrigeracio baixa (5 kWh) + aillamentTermic alt (4.5 W/m²K)
+        # + edifici nou (2020) + orientació Nord → risc molt baix.
+        edifici = self._edifici_mock(od=None, habitatges_data=[
+            {
+                "energiaRefrigeracio": 5.0,
+                "aillamentTermic": 4.5,
+                "emissionsRefrigeracio": 2.0,
+            }
+        ])
+        edifici.anyConstruccio = 2020
+        edifici.orientacioPrincipal = "Nord"
+
+        resultat = calcular_heat_risk_index(edifici)
+
+        self.assertIsNotNone(resultat["index"])
+        self.assertLess(resultat["index"], 25)
+        # FIX A: la funció retorna la string "usuaris"
+        self.assertEqual(resultat["font"], "usuaris")
+
+    # ------------------------------------------------------------------
+    # TC-HR-005
+    # ------------------------------------------------------------------
+    def test_index_es_mitjana_de_habitatges(self):
+        """TC-HR-005: L'índex és la mitjana dels habitatges amb dades suficients."""
+        # FIX B: usem camps HRI vàlids
+        dades_h1 = {
+            "energiaRefrigeracio": 40.0,
+            "aillamentTermic": 2.0,
+            "emissionsRefrigeracio": 20.0,
+        }
+        dades_h2 = {
+            "energiaRefrigeracio": 70.0,
+            "aillamentTermic": 1.0,
+            "emissionsRefrigeracio": 35.0,
+        }
+
+        resultat_1 = calcular_heat_risk_index(
+            self._edifici_mock(od=None, habitatges_data=[dades_h1])
+        )
+        resultat_2 = calcular_heat_risk_index(
+            self._edifici_mock(od=None, habitatges_data=[dades_h2])
+        )
+        # FIX E: TC-HR-005 original fallava perquè els índexos eren None
+        # (camps incorrectes). Ara amb camps HRI correctes, han de ser floats.
+        self.assertIsNotNone(resultat_1["index"], "resultat_1 hauria de tenir index")
+        self.assertIsNotNone(resultat_2["index"], "resultat_2 hauria de tenir index")
+
+        edifici_dos = self._edifici_mock(od=None, habitatges_data=[dades_h1, dades_h2])
+        resultat = calcular_heat_risk_index(edifici_dos)
+
+        esperada = (resultat_1["index"] + resultat_2["index"]) / 2
+        self.assertAlmostEqual(resultat["index"], esperada, places=5)
+
+    # ------------------------------------------------------------------
+    # TC-HR-006
+    # ------------------------------------------------------------------
+    def test_habitatge_sense_dades_energetiques_es_ignora(self):
+        """TC-HR-006: Habitatge sense DadesEnergetiques es descarta sense error."""
+        # FIX B + C: usem camps HRI vàlids per a l'habitatge bo.
+        # L'habitatge sense dades (dadesEnergetiques=None) no passarà el filter()
+        # del mock, de manera que el filtre retornarà només l'habitatge vàlid.
+        edifici = self._edifici_mock(od=None, habitatges_data=[
+            {
+                "energiaRefrigeracio": 50.0,
+                "aillamentTermic": 2.5,
+                "emissionsRefrigeracio": 25.0,
+            },
+        ])
+
+        # Afegim manualment un habitatge sense dades al queryset complet,
+        # però el mock_qs_filtrat ja el filtra (perquè dadesEnergetiques=None).
+        h_sense_dades = MagicMock()
+        h_sense_dades.dadesEnergetiques = None
+
+        # Reconfigurem el mock per incloure l'habitatge buit al total
+        # però no al filtrat (comportament real del .filter(dadesEnergetiques__isnull=False))
+        habitatges_tots = list(edifici.habitatges) + [h_sense_dades]
+        habitatges_amb_dades = [h for h in habitatges_tots if h.dadesEnergetiques is not None]
+
+        mock_qs_filtrat = MagicMock()
+        mock_qs_filtrat.exists.return_value = bool(habitatges_amb_dades)
+        mock_qs_filtrat.count.return_value = len(habitatges_amb_dades)
+        mock_qs_filtrat.__iter__ = lambda self: iter(habitatges_amb_dades)
+        mock_qs_filtrat.select_related.return_value = mock_qs_filtrat
+
+        edifici.habitatges.count.return_value = len(habitatges_tots)
+        edifici.habitatges.__iter__ = lambda self: iter(habitatges_tots)
+        edifici.habitatges.filter.return_value = mock_qs_filtrat
+
+        resultat = calcular_heat_risk_index(edifici)
+
+        # Ha de calcular correctament amb l'habitatge vàlid
+        self.assertIsNotNone(resultat["index"])
+        self.assertEqual(resultat["font"], "usuaris")
+
+
+# ============================================================================
+# TC-HR-007 a TC-HR-010 — Tests d'integració: endpoint API
+# ============================================================================
+
+class TestHeatRiskSerializer(BaseTestData):
+    """
+    Tests d'integració: comprova que GET /buildings/{id}/ retorna
+    el camp heat_risk correctament formatat.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.owner = cls._create_user("owner_hr@example.com", RoleChoices.OWNER)
+        cls.grup = GrupComparable.objects.create(
+            idGrup=10, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-200"
+        )
+        cls.edifici = cls._create_edifici(cls.owner, cls.grup, numero=200)
+        cls.habitatge = Habitatge.objects.create(
+            referenciaCadastral="HR001",
+            planta="1", porta="1", superficie=80.0,
+            edifici=cls.edifici,
+            usuari=cls.owner,
+        )
+
+    def _url(self):
+        return reverse("edifici-detail", args=[self.edifici.idEdifici])
+
+    def test_heat_risk_present_en_resposta(self):
+        """TC-HR-007: El camp heat_risk és present a la resposta de detall d'edifici."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(self._url())
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("heat_risk", response.data)
+
+    def test_heat_risk_estructura_correcta(self):
+        """TC-HR-008: El camp heat_risk té les claus index, font, etiqueta i dades_insuficients."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(self._url())
+
+        hr = response.data["heat_risk"]
+        self.assertIn("index", hr)
+        self.assertIn("font", hr)
+        self.assertIn("etiqueta", hr)
+        self.assertIn("dades_insuficients", hr)
+
+    def test_heat_risk_etiqueta_sense_dades(self):
+        """TC-HR-009: Sense DadesEnergetiques → etiqueta 'Sense dades', index null."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(self._url())
+
+        hr = response.data["heat_risk"]
+        # L'habitatge de test no té DadesEnergetiques associades
+        self.assertIsNone(hr["index"])
+        self.assertEqual(hr["etiqueta"], "Sense dades")
+
+    def test_heat_risk_etiqueta_risc_alt(self):
+        """TC-HR-010: Amb dades desfavorables → etiqueta 'Risc alt'."""
+        # FIX D: afegir tots els camps NOT NULL de DadesEnergetiques.
+        # Els camps crítics del HRI (energiaRefrigeracio + aillamentTermic) han de
+        # tenir valors desfavorables. La resta de camps obligatoris s'omplen amb
+        # valors mínims vàlids.
+        dades = DadesEnergetiques.objects.create(
+            # Camps crítics HRI — valors de risc alt
+            energiaRefrigeracio=100.0,
+            aillamentTermic=0.1,
+            emissionsRefrigeracio=50.0,
+            # Resta de camps NOT NULL
+            consumEnergiaPrimaria=95.0,
+            consumEnergiaFinal=80.0,
+            emissionsCO2=48.0,
+            costAnualEnergia=2000.0,
+            energiaCalefaccio=60.0,
+            energiaACS=20.0,
+            energiaEnllumenament=10.0,
+            emissionsCalefaccio=30.0,
+            emissionsACS=10.0,
+            emissionsEnllumenament=5.0,
+            valorFinestres=2.0,
+            normativa="CTE-2006",
+            einaCertificacio="CE3X",
+            motiuCertificacio="Venda",
+            rehabilitacioEnergetica=False,
+            dataEntrada="2024-01-01",
+        )
+
+        self.habitatge.dadesEnergetiques = dades
+        self.habitatge.save()
+
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(self._url())
+
+        hr = response.data["heat_risk"]
+
+        self.assertIsNotNone(hr["index"])
+        self.assertGreaterEqual(hr["index"], 75)
+        self.assertEqual(hr["etiqueta"], "Risc alt")
+
+
+# ============================================================================
+# TC-HR-011 a TC-HR-012 — Tests de persistència via signal
+# ============================================================================
+
+class TestHeatRiskPersistencia(BaseTestData):
+    """
+    Comprova que el signal _recalcular_edifici persisteix
+    heatRiskIndex i heatRiskFont a l'edifici.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.owner = cls._create_user("owner_signal@example.com", RoleChoices.OWNER)
+        cls.grup = GrupComparable.objects.create(
+            idGrup=11, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-200"
+        )
+        cls.edifici = cls._create_edifici(cls.owner, cls.grup, numero=201)
+
+    def _crear_dades_energetiques(self, **kwargs):
+        """
+        Helper per crear DadesEnergetiques amb tots els camps NOT NULL.
+        Els kwargs sobreescriuen els valors per defecte.
+        FIX D: centralitza la creació per evitar duplicar camps NOT NULL.
+        """
+        defaults = {
+            "consumEnergiaPrimaria": 50.0,
+            "consumEnergiaFinal": 40.0,
+            "emissionsCO2": 25.0,
+            "costAnualEnergia": 1200.0,
+            "energiaCalefaccio": 30.0,
+            "energiaRefrigeracio": 50.0,   # camp crític HRI
+            "energiaACS": 15.0,
+            "energiaEnllumenament": 8.0,
+            "emissionsCalefaccio": 15.0,
+            "emissionsRefrigeracio": 25.0,
+            "emissionsACS": 8.0,
+            "emissionsEnllumenament": 4.0,
+            "aillamentTermic": 2.5,         # camp crític HRI (en W/m²K)
+            "valorFinestres": 2.0,
+            "normativa": "CTE-2006",
+            "einaCertificacio": "CE3X",
+            "motiuCertificacio": "Venda",
+            "rehabilitacioEnergetica": False,
+            "dataEntrada": "2024-01-01",
+        }
+        defaults.update(kwargs)
+        return DadesEnergetiques.objects.create(**defaults)
+
+    def test_signal_persisteix_heat_risk_en_crear_dades(self):
+        """TC-HR-011: Crear DadesEnergetiques dispara el signal i omple heatRiskIndex."""
+
+        habitatge = Habitatge.objects.create(
+            referenciaCadastral="SIGNAL001",
+            planta="1",
+            porta="1",
+            superficie=70.0,
+            edifici=self.edifici,
+            usuari=self.owner,
+        )
+
+        # FIX D: usem el helper amb tots els camps NOT NULL
+        dades = self._crear_dades_energetiques(
+            energiaRefrigeracio=50.0,
+            aillamentTermic=2.5,
+        )
+
+        habitatge.dadesEnergetiques = dades
+        habitatge.save()
+
+        self.edifici.refresh_from_db()
+
+        self.assertIsNotNone(self.edifici.heatRiskIndex)
+        self.assertIsNotNone(self.edifici.heatRiskFont)
+
+    def test_signal_persisteix_heat_risk_en_esborrar_habitatge(self):
+        """TC-HR-012: Esborrar un habitatge recalcula i persisteix el heat risk."""
+
+        habitatge = Habitatge.objects.create(
+            referenciaCadastral="SIGNAL002",
+            planta="2",
+            porta="1",
+            superficie=60.0,
+            edifici=self.edifici,
+            usuari=self.owner,
+        )
+
+        # FIX D: usem el helper amb tots els camps NOT NULL
+        dades = self._crear_dades_energetiques(
+            energiaRefrigeracio=40.0,
+            aillamentTermic=3.0,
+            rehabilitacioEnergetica=True,
+        )
+
+        habitatge.dadesEnergetiques = dades
+        habitatge.save()
+
+        self.edifici.refresh_from_db()
+        self.assertIsNotNone(self.edifici.heatRiskIndex)
+
+        habitatge.delete()
+
+        self.edifici.refresh_from_db()
+        self.assertIsNone(self.edifici.heatRiskIndex)
+
+class LocalitzacioCoordinatesTests(APITestCase):
+    def test_localitzacio_without_coordinates_keeps_null_values(self):
+        localitzacio = Localitzacio.objects.create(
+            carrer="Carrer Sense Coordenades Reals",
+            numero=10,
+            codiPostal="08001",
+            barri="Centre",
+        )
+
+        self.assertIsNone(localitzacio.latitud)
+        self.assertIsNone(localitzacio.longitud)
+
+
+
+class BadgeModelTests(BaseTestData):
+    def setUp(self):
+        super().setUp()
+        self.admin_badges = get_user_model().objects.create_user(
+            email="admin.badges@test.com",
+            password="TestPassword123",
+        )
+        self.localitzacio_badges = Localitzacio.objects.create(
+            carrer="Carrer Badges",
+            numero=1,
+            codiPostal="08001",
+        )
+        self.edifici = Edifici.objects.create(
+            localitzacio=self.localitzacio_badges,
+            anyConstruccio=2000,
+            superficieTotal=500,
+            administradorFinca=self.admin_badges,
+        )
+
+    def test_crear_badge_definition(self):
+        badge = BadgeDefinition.objects.create(
+            code="OR_BHS",
+            nom="Or BHS",
+            descripcio="Edifici amb puntuació alta durant la temporada.",
+            categoria=BadgeCategory.SCORE,
+            scope=BadgeScope.SEASONAL,
+            criteris={"bhs_min": 85},
+        )
+
+        self.assertEqual(badge.code, "OR_BHS")
+        self.assertTrue(badge.activa)
+        self.assertEqual(str(badge), "OR_BHS - Or BHS")
+
+    def test_assignar_badge_permanent_unic_per_edifici(self):
+        badge = BadgeDefinition.objects.create(
+            code="DADES_VERIFICADES",
+            nom="Dades verificades",
+            categoria=BadgeCategory.DATA_QUALITY,
+            scope=BadgeScope.PERMANENT,
+        )
+
+        BuildingBadge.objects.create(
+            edifici=self.edifici,
+            badge=badge,
+            valor_snapshot=Decimal("100.00"),
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                BuildingBadge.objects.create(
+                    edifici=self.edifici,
+                    badge=badge,
+                    valor_snapshot=Decimal("100.00"),
+                )
+
+    def test_assignar_badge_estacional_amb_temporada(self):
+        from apps.seasons.models import Temporada
+        from datetime import date
+
+        temporada = Temporada.objects.create(
+            nom="Temporada Test",
+            dataInici=date(2026, 1, 1),
+            dataFi=date(2026, 12, 31),
+        )
+        badge = BadgeDefinition.objects.create(
+            code="BRONZE_BHS",
+            nom="Bronze BHS",
+            categoria=BadgeCategory.SCORE,
+            scope=BadgeScope.SEASONAL,
+            criteris={"bhs_min": 50},
+        )
+
+        assignacio = BuildingBadge.objects.create(
+            edifici=self.edifici,
+            temporada=temporada,
+            badge=badge,
+            valor_snapshot=Decimal("62.50"),
+            metadata={"font": "test"},
+        )
+
+        self.assertEqual(assignacio.temporada, temporada)
+        self.assertEqual(assignacio.valor_snapshot, Decimal("62.50"))
+        self.assertEqual(assignacio.metadata["font"], "test")
+
+
+
+class BadgeServiceTests(BaseTestData):
+    def setUp(self):
+        super().setUp()
+        self.admin_badges = get_user_model().objects.create_user(
+            email="admin.badges.service@test.com",
+            password="TestPassword123",
+        )
+        self.localitzacio_badges = Localitzacio.objects.create(
+            carrer="Carrer Badges Service",
+            numero=2,
+            codiPostal="08002",
+        )
+        self.edifici = Edifici.objects.create(
+            localitzacio=self.localitzacio_badges,
+            anyConstruccio=2005,
+            superficieTotal=700,
+            administradorFinca=self.admin_badges,
+        )
+
+        from apps.seasons.models import Temporada
+        from datetime import date
+
+        self.temporada = Temporada.objects.create(
+            nom="Temporada Badges Service",
+            dataInici=date(2026, 1, 1),
+            dataFi=date(2026, 12, 31),
+        )
+
+    def test_crear_definicions_base_es_idempotent(self):
+        from apps.buildings.services.badges import crear_definicions_badges_base
+
+        primera = crear_definicions_badges_base()
+        segona = crear_definicions_badges_base()
+
+        self.assertIn("OR_BHS", primera)
+        self.assertIn("DADES_VERIFICADES", segona)
+        self.assertEqual(BadgeDefinition.objects.filter(code="OR_BHS").count(), 1)
+
+    def test_assigna_medalla_or_bhs_per_temporada(self):
+        from apps.buildings.services.badges import assignar_insignies_edifici
+
+        assignades = assignar_insignies_edifici(
+            self.edifici,
+            temporada=self.temporada,
+            metrics={"bhs": 91},
+        )
+
+        self.assertEqual(len(assignades), 1)
+        self.assertTrue(
+            BuildingBadge.objects.filter(
+                edifici=self.edifici,
+                temporada=self.temporada,
+                badge__code="OR_BHS",
+            ).exists()
+        )
+
+    def test_millor_medalla_bhs_substitueix_l_anterior(self):
+        from apps.buildings.services.badges import assignar_insignies_edifici
+
+        assignar_insignies_edifici(
+            self.edifici,
+            temporada=self.temporada,
+            metrics={"bhs": 72},
+        )
+        assignar_insignies_edifici(
+            self.edifici,
+            temporada=self.temporada,
+            metrics={"bhs": 90},
+        )
+
+        self.assertFalse(
+            BuildingBadge.objects.filter(
+                edifici=self.edifici,
+                temporada=self.temporada,
+                badge__code="PLATA_BHS",
+            ).exists()
+        )
+        self.assertTrue(
+            BuildingBadge.objects.filter(
+                edifici=self.edifici,
+                temporada=self.temporada,
+                badge__code="OR_BHS",
+            ).exists()
+        )
+
+    def test_assigna_badge_permanent_dades_verificades_sense_temporada(self):
+        from apps.buildings.services.badges import assignar_insignies_edifici
+
+        assignar_insignies_edifici(
+            self.edifici,
+            temporada=self.temporada,
+            metrics={"dades_verificades": True},
+        )
+        assignar_insignies_edifici(
+            self.edifici,
+            temporada=self.temporada,
+            metrics={"dades_verificades": True},
+        )
+
+        self.assertEqual(
+            BuildingBadge.objects.filter(
+                edifici=self.edifici,
+                temporada__isnull=True,
+                badge__code="DADES_VERIFICADES",
+            ).count(),
+            1,
+        )
+
+    def test_assigna_multiples_badges_temporada(self):
+        from apps.buildings.services.badges import assignar_insignies_edifici
+
+        assignar_insignies_edifici(
+            self.edifici,
+            temporada=self.temporada,
+            metrics={
+                "bhs": 88,
+                "emissions": 8,
+                "millores_validades": 2,
+                "progres_bhs": 12,
+                "dades_verificades": True,
+            },
+        )
+
+        codis = set(
+            BuildingBadge.objects.filter(edifici=self.edifici)
+            .values_list("badge__code", flat=True)
+        )
+
+        self.assertIn("OR_BHS", codis)
+        self.assertIn("BAIXES_EMISSIONS", codis)
+        self.assertIn("MILLORA_IMPLEMENTADA", codis)
+        self.assertIn("PROGRES_DESTACAT", codis)
+        self.assertIn("DADES_VERIFICADES", codis)
+
+
+
+class BadgeEndpointTests(BaseTestData):
+    def setUp(self):
+        super().setUp()
+        self.admin_badges = get_user_model().objects.create_user(
+            email="admin.badges.endpoint@test.com",
+            password="TestPassword123",
+        )
+        self.admin_badges.profile.role = RoleChoices.ADMIN
+        self.admin_badges.profile.save(update_fields=["role"])
+
+        self.localitzacio_badges = Localitzacio.objects.create(
+            carrer="Carrer Badges Endpoint",
+            numero=3,
+            codiPostal="08003",
+        )
+        self.edifici = Edifici.objects.create(
+            localitzacio=self.localitzacio_badges,
+            anyConstruccio=2010,
+            superficieTotal=900,
+            administradorFinca=self.admin_badges,
+        )
+
+        from apps.seasons.models import Temporada
+        from datetime import date
+
+        self.temporada = Temporada.objects.create(
+            nom="Temporada Endpoint",
+            dataInici=date(2026, 1, 1),
+            dataFi=date(2026, 12, 31),
+        )
+
+        self.badge_or = BadgeDefinition.objects.create(
+            code="OR_BHS_ENDPOINT",
+            nom="Or BHS Endpoint",
+            categoria=BadgeCategory.SCORE,
+            scope=BadgeScope.SEASONAL,
+        )
+        self.badge_dades = BadgeDefinition.objects.create(
+            code="DADES_VERIFICADES_ENDPOINT",
+            nom="Dades verificades Endpoint",
+            categoria=BadgeCategory.DATA_QUALITY,
+            scope=BadgeScope.PERMANENT,
+        )
+
+        BuildingBadge.objects.create(
+            edifici=self.edifici,
+            temporada=self.temporada,
+            badge=self.badge_or,
+            valor_snapshot=Decimal("91.00"),
+            metadata={"font": "endpoint-test"},
+        )
+        BuildingBadge.objects.create(
+            edifici=self.edifici,
+            badge=self.badge_dades,
+            metadata={"font": "endpoint-test"},
+        )
+
+    def test_admin_finca_pot_consultar_badges_edifici(self):
+        self.client.force_authenticate(user=self.admin_badges)
+
+        response = self.client.get(
+            reverse("edifici-badges", kwargs={"pk": self.edifici.pk})
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["edifici"], self.edifici.idEdifici)
+
+        codis = {item["code"] for item in response.data["results"]}
+        self.assertIn("OR_BHS_ENDPOINT", codis)
+        self.assertIn("DADES_VERIFICADES_ENDPOINT", codis)
+
+    def test_filtre_temporada_inclou_estacionals_i_permanents(self):
+        self.client.force_authenticate(user=self.admin_badges)
+
+        response = self.client.get(
+            reverse("edifici-badges", kwargs={"pk": self.edifici.pk}),
+            {"temporada": self.temporada.pk},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        codis = {item["code"] for item in response.data["results"]}
+        self.assertIn("OR_BHS_ENDPOINT", codis)
+        self.assertIn("DADES_VERIFICADES_ENDPOINT", codis)
+
+    def test_badges_endpoint_inclou_summary(self):
+        self.client.force_authenticate(user=self.admin_badges)
+
+        response = self.client.get(
+            reverse("edifici-badges", kwargs={"pk": self.edifici.pk}),
+            {"temporada": self.temporada.pk},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("summary", response.data)
+        self.assertGreaterEqual(len(response.data["summary"]), 1)
+
+    def test_admin_finca_pot_recalcular_badges_dinamicament(self):
+        self.client.force_authenticate(user=self.admin_badges)
+
+        self.edifici.puntuacioBase = 91
+        self.edifici.save(update_fields=["puntuacioBase"])
+
+        response = self.client.post(
+            reverse("edifici-recalcular-badges", kwargs={"pk": self.edifici.pk}),
+            {"temporada": self.temporada.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        codis = {
+            item["code"]
+            for item in response.data["summary"]
+        }
+        self.assertIn("OR_BHS", codis)
+
+    def test_usuari_sense_relacio_no_pot_recalcular_badges(self):
+        outsider = get_user_model().objects.create_user(
+            email="outsider.recalc.badges@test.com",
+            password="TestPassword123",
+        )
+        outsider.profile.role = RoleChoices.OWNER
+        outsider.profile.save(update_fields=["role"])
+
+        self.client.force_authenticate(user=outsider)
+
+        response = self.client.post(
+            reverse("edifici-recalcular-badges", kwargs={"pk": self.edifici.pk}),
+            {"temporada": self.temporada.pk},
+            format="json",
+        )
+
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+
+    def test_usuari_sense_relacio_no_pot_consultar_badges(self):
+        outsider = get_user_model().objects.create_user(
+            email="outsider.badges@test.com",
+            password="TestPassword123",
+        )
+        outsider.profile.role = RoleChoices.OWNER
+        outsider.profile.save(update_fields=["role"])
+
+        self.client.force_authenticate(user=outsider)
+
+        response = self.client.get(
+            reverse("edifici-badges", kwargs={"pk": self.edifici.pk})
+        )
+
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+
+
+
+class EdificiMapSerializerEnrichedTests(APITestCase):
+    def setUp(self):
+        self.admin = get_user_model().objects.create_user(
+            email="admin.map.enriched@test.com",
+            password="TestPassword123",
+        )
+        self.admin.profile.role = RoleChoices.ADMIN
+        self.admin.profile.save(update_fields=["role"])
+
+        self.localitzacio = Localitzacio.objects.create(
+            carrer="Carrer Mapa Enriquit",
+            numero=10,
+            codiPostal="08010",
+            latitud=41.3902,
+            longitud=2.1540,
+        )
+
+        self.edifici = Edifici.objects.create(
+            localitzacio=self.localitzacio,
+            anyConstruccio=2012,
+            superficieTotal=1200,
+            administradorFinca=self.admin,
+            puntuacioBase=72.5,
+            font_open_data=True,
+            heatRiskIndex=42.0,
+            heatRiskFont="usuaris",
+        )
+
+        badge = BadgeDefinition.objects.create(
+            code="MAPA_BADGE_TEST",
+            nom="Badge mapa test",
+            categoria=BadgeCategory.GENERAL,
+            scope=BadgeScope.PERMANENT,
+        )
+        BuildingBadge.objects.create(
+            edifici=self.edifici,
+            badge=badge,
+            metadata={"font": "test"},
+        )
+
+    def test_map_serializer_inclou_card_publica_enriquida(self):
+        data = EdificiMapSerializer(self.edifici).data
+        properties = data["properties"]
+
+        self.assertIn("procedenciaDades", properties)
+        self.assertIn("bhs", properties)
+        self.assertIn("heatRisk", properties)
+        self.assertIn("badgesSummary", properties)
+
+        self.assertEqual(properties["bhs"]["score"], 72.5)
+        self.assertEqual(properties["bhs"]["font"], "usuaris")
+        self.assertEqual(properties["heatRisk"]["index"], 42.0)
+        self.assertGreaterEqual(len(properties["badgesSummary"]), 1)
+
+    def test_map_serializer_no_exposa_dades_privades(self):
+        data = EdificiMapSerializer(self.edifici).data
+        properties = data["properties"]
+
+        self.assertNotIn("habitatges", properties)
+        self.assertNotIn("usuari", properties)
+        self.assertNotIn("administradorFinca", properties)
+        self.assertNotIn("email", properties)
+
+    def test_map_serializer_indica_dades_insuficients_quan_no_hi_ha_score(self):
+        edifici_sense_score = Edifici.objects.create(
+            localitzacio=Localitzacio.objects.create(
+                carrer="Carrer Sense Score",
+                numero=11,
+                codiPostal="08011",
+                latitud=41.4000,
+                longitud=2.1600,
+            ),
+            anyConstruccio=1990,
+            superficieTotal=900,
+            administradorFinca=self.admin,
+        )
+
+        properties = EdificiMapSerializer(edifici_sense_score).data["properties"]
+
+        self.assertEqual(properties["bhs"]["score"], None)
+        self.assertEqual(properties["bhs"]["font"], "sense_dades")
+        self.assertFalse(properties["bhs"]["rankejable"])
+        self.assertEqual(properties["procedenciaDades"]["tipus"], "insuficient")
+
+
+
+class NormalitzarCeeCommandTests(TestCase):
+    """Tests del command normalitzar_cee."""
+
+    def setUp(self):
+        self.output_paths = []
+
+    def tearDown(self):
+        for path in self.output_paths:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def _output_path(self, filename):
+        path = os.path.join(tempfile.gettempdir(), filename)
+        self.output_paths.append(path)
+        return path
+
+    def _read_output(self, path):
+        with open(path, newline="", encoding="utf-8") as handle:
+            return list(csv.DictReader(handle))
+
+    def test_normalitzar_cee_genera_csv_lleuger(self):
+        csv_path = _csv_amb_files([
+            _fila_base(**{
+                "NUM_CAS": "NORM001",
+                "ADREÇA": "Carrer Normalitzat",
+                "NUMERO": "1",
+                "METRES_CADASTRE": "80,5",
+            }),
+            _fila_base(**{
+                "NUM_CAS": "NORM002",
+                "ADREÇA": "Carrer Normalitzat",
+                "NUMERO": "1",
+                "PORTA": "B",
+                "METRES_CADASTRE": "70,5",
+            }),
+        ])
+        output_path = self._output_path("cee_normalitzat_test.csv")
+
+        try:
+            call_command("normalitzar_cee", csv_path, output=output_path)
+            rows = self._read_output(output_path)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["carrer"], "Carrer Normalitzat")
+            self.assertEqual(rows[0]["numero"], "1")
+            self.assertEqual(rows[0]["num_certificats"], "2")
+            self.assertEqual(rows[0]["coord_estat"], "ok")
+            self.assertEqual(rows[0]["necessita_geocodificacio"], "false")
+            self.assertEqual(rows[0]["font_dades"], "open_data_cee")
+        finally:
+            os.unlink(csv_path)
+
+    def test_normalitzar_cee_marca_sense_coordenades(self):
+        csv_path = _csv_amb_files([
+            _fila_base(**{
+                "NUM_CAS": "NORM-NOCOORDS",
+                "LATITUD": "",
+                "LONGITUD": "",
+            }),
+        ])
+        output_path = self._output_path("cee_normalitzat_sense_coords.csv")
+
+        try:
+            call_command("normalitzar_cee", csv_path, output=output_path)
+            rows = self._read_output(output_path)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["latitud"], "")
+            self.assertEqual(rows[0]["longitud"], "")
+            self.assertEqual(rows[0]["coord_estat"], "sense_coordenades")
+            self.assertEqual(rows[0]["necessita_geocodificacio"], "true")
+        finally:
+            os.unlink(csv_path)
+
+    def test_normalitzar_cee_filtra_only_with_coords(self):
+        csv_path = _csv_amb_files([
+            _fila_base(**{
+                "NUM_CAS": "NORM-OK",
+                "ADREÇA": "Carrer Amb Coordenades",
+                "NUMERO": "1",
+                "LATITUD": "41,38879",
+                "LONGITUD": "2,15899",
+            }),
+            _fila_base(**{
+                "NUM_CAS": "NORM-SENSE",
+                "ADREÇA": "Carrer Sense Coordenades",
+                "NUMERO": "2",
+                "LATITUD": "",
+                "LONGITUD": "",
+            }),
+        ])
+        output_path = self._output_path("cee_normalitzat_only_coords.csv")
+
+        try:
+            call_command(
+                "normalitzar_cee",
+                csv_path,
+                output=output_path,
+                only_with_coords=True,
+            )
+            rows = self._read_output(output_path)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["num_cas_origen"], "NORM-OK")
+            self.assertEqual(rows[0]["coord_estat"], "ok")
+        finally:
+            os.unlink(csv_path)
+
+    def test_normalitzar_cee_respecta_limit(self):
+        csv_path = _csv_amb_files([
+            _fila_base(**{"NUM_CAS": "LIM001", "ADREÇA": "Carrer Limit", "NUMERO": "1"}),
+            _fila_base(**{"NUM_CAS": "LIM002", "ADREÇA": "Carrer Limit", "NUMERO": "2"}),
+            _fila_base(**{"NUM_CAS": "LIM003", "ADREÇA": "Carrer Limit", "NUMERO": "3"}),
+        ])
+        output_path = self._output_path("cee_normalitzat_limit.csv")
+
+        try:
+            call_command("normalitzar_cee", csv_path, output=output_path, limit=2)
+            rows = self._read_output(output_path)
+
+            self.assertEqual(len(rows), 2)
+        finally:
+            os.unlink(csv_path)

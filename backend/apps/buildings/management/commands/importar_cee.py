@@ -106,6 +106,33 @@ def _construir_dades_energetiques(grup: list[dict]):
     )
 
 
+
+def _parse_coord(row, key, min_value, max_value):
+    raw = row.get(key, None)
+
+    if raw is None:
+        return None
+
+    raw = str(raw).strip()
+    if raw == "":
+        return None
+
+    try:
+        value = float(raw.replace(",", "."))
+    except (ValueError, TypeError):
+        raise ValueError(f"{key} invàlida: {raw}")
+
+    # Evitem coordenades sentinella o punts falsos 0.0 / 0.0.
+    # En el context de Barcelona, 0 no és una coordenada vàlida.
+    if value == 0:
+        return None
+
+    if value < min_value or value > max_value:
+        raise ValueError(f"{key} fora de rang: {raw}")
+
+    return value
+
+
 class Command(BaseCommand):
     help = 'Importa dades obertes CEE — crea Edificis i Localitzacions'
 
@@ -156,18 +183,22 @@ class Command(BaseCommand):
                         # print(f"  → Edifici construït: tipologia={edifici.tipologia}, any={edifici.anyConstruccio}, qualificacio={edifici.classificacioEstimada}")
 
                         if not dry_run:
-                            lat_raw = (primera.get('LATITUD') or '0').replace(',', '.')
-                            lon_raw = (primera.get('LONGITUD') or '0').replace(',', '.')
+                            latitud = _parse_coord(primera, 'LATITUD', -90, 90)
+                            longitud = _parse_coord(primera, 'LONGITUD', -180, 180)
 
-                            # print(f"  → Localitzacio: carrer='{clau[0].title()}' num={clau[1]} cp={clau[2]} lat={lat_raw} lon={lon_raw}")
+                            if latitud is None or longitud is None:
+                                latitud = None
+                                longitud = None
+
+                            # print(f"  → Localitzacio: carrer='{clau[0].title()}' num={clau[1]} cp={clau[2]} lat={latitud} lon={longitud}")
 
                             loc = Localitzacio.objects.create(
                                 carrer=clau[0].title(),
                                 numero=int(clau[1]) if clau[1].isdigit() else 0,
                                 codiPostal=clau[2],
                                 barri='',
-                                latitud=float(lat_raw),
-                                longitud=float(lon_raw),
+                                latitud=latitud,
+                                longitud=longitud,
                                 zonaClimatica=primera.get('ZONA CLIMATICA', '') or '',
                             )
                             edifici.localitzacio = loc

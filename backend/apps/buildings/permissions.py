@@ -71,14 +71,19 @@ class EsAdminOPropietariEdifici(BasePermission):
         # ABAC + RBAC combinats
         if role == RoleChoices.ADMIN and obj.administradorFinca == user:
             return True
-        if role == RoleChoices.OWNER:
-            if obj.habitatges.filter(usuari=user).exists():
-                return True
+        te_vinculacio_edifici = (
+            obj.habitatges.filter(usuari=user).exists()
+            or obj.habitatges.filter(propietari=user).exists()
+            or obj.habitatges.filter(llogater=user).exists()
+        )
+
+        if role == RoleChoices.OWNER and te_vinculacio_edifici:
+            return True
+
         if role == RoleChoices.TENANT:
-            # Tenant: només lectura per matriu de permisos
-            if request.method in ('GET', 'HEAD', 'OPTIONS'):
-                if obj.habitatges.filter(usuari=user).exists():
-                    return True
+            # Tenant: només lectura per matriu de permisos.
+            if request.method in ('GET', 'HEAD', 'OPTIONS') and te_vinculacio_edifici:
+                return True
 
         log_denial(request, view.action, 'Sense relació amb l\'edifici', obj.idEdifici)
         return False
@@ -107,7 +112,7 @@ class EsAdminOPropietariHabitatge(BasePermission):
 
         if role == RoleChoices.ADMIN and obj.edifici.administradorFinca == user:
             return True
-        if role in (RoleChoices.OWNER, RoleChoices.TENANT) and obj.usuari == user:
+        if role in (RoleChoices.OWNER, RoleChoices.TENANT) and obj.te_vinculacio(user):
             return True
 
         log_denial(request, view.action, 'Sense relació amb l\'habitatge',
@@ -137,7 +142,7 @@ class EsOwnerOAdminHabitatge(BasePermission):
 
         if role == RoleChoices.ADMIN and obj.edifici.administradorFinca == user:
             return True
-        if role == RoleChoices.OWNER and obj.usuari == user:
+        if role == RoleChoices.OWNER and obj.es_propietari(user):
             return True
 
         log_denial(request, view.action, 'Sense relació owner/admin amb l\'habitatge', obj.edifici.idEdifici)
@@ -174,7 +179,7 @@ class EsOwnerOAdminDadesEnergetiques(BasePermission):
 
         if role == RoleChoices.ADMIN and habitatge.edifici.administradorFinca == user:
             return True
-        if role == RoleChoices.OWNER and habitatge.usuari == user:
+        if role == RoleChoices.OWNER and habitatge.es_propietari(user):
             return True
 
         log_denial(request, view.action, 'Sense relació owner/admin amb dades energètiques', habitatge.edifici.idEdifici)
@@ -184,31 +189,25 @@ class EsOwnerOAdminDadesEnergetiques(BasePermission):
 
 class EsAdminMilloraImplementada(BasePermission):
     """
-    RBAC: rol 'admin' o superuser
-    ABAC: ha de ser l'administrador de finca de l'edifici de la millora
+    Només l'administrador de sistema pot validar o rebutjar millores implementades.
+
+    L'administrador de finca pot acreditar que ha executat una millora i pujar documentació,
+    però la validació final és una acció sensible perquè pot afectar l'estat de la simulació
+    i la puntuació de l'edifici. Per això queda reservada al superuser / admin de sistema.
     """
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
             log_denial(request, view.action, 'Usuari no autenticat')
             return False
-        if request.user.is_superuser:
-            return True
-        if not hasattr(request.user, 'profile'):
+
+        if not request.user.is_superuser:
+            log_denial(request, view.action, 'Només admin sistema pot validar millores implementades')
             return False
-        if request.user.profile.role != RoleChoices.ADMIN:
-            log_denial(request, view.action, 'Rol insuficient (requerit: admin)')
-            return False
+
         return True
 
     def has_object_permission(self, request, view, obj):
-        if request.user.is_superuser:
-            return True
-        if obj.edifici.administradorFinca != request.user:
-            log_denial(request, view.action,
-                       'No és admin de l\'edifici d\'aquesta millora',
-                       obj.edifici.idEdifici)
-            return False
-        return True
+        return self.has_permission(request, view)
 
 
 class HasAPIKey(BasePermission):

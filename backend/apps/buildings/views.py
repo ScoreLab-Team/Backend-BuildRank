@@ -14,13 +14,14 @@ from rest_framework.exceptions import PermissionDenied
 
 from apps.accounts.permissions import ABACMixin, IsAdminSistema, IsAdminFinca
 from apps.accounts.models import RoleChoices, ValidacioAdmin
+from apps.buildings.services.badges import get_badges_resum_edifici, recalcular_insignies_edifici
  
 from .models import (
     Edifici, Habitatge, Localitzacio, DadesEnergetiques,
-    carrersBarcelona, EstatValidacio, AccioAudit, EdificiAuditLog,
+    carrersBarcelona, EstatValidacio, RolVinculacioHabitatge, AccioAudit, EdificiAuditLog,
     CatalegMillora, SimulacioMillora, SimulacioMilloraItem, MilloraImplementada,
     EstatAplicacioSimulacio, EstatVotacioSimulacio, SentitVotSimulacio,
-    VotacioSimulacioMillora, VotSimulacioMillora,
+    VotacioSimulacioMillora, VotSimulacioMillora, BuildingBadge,
 )
 from .serializers import (
     EdificiDetailSerializer, EdificiListSerializer, EdificiMapSerializer,
@@ -161,9 +162,17 @@ class EdificiViewSet(viewsets.ModelViewSet):
         if role == RoleChoices.ADMIN:
             return qs.filter(administradorFinca=user)
         if role == RoleChoices.OWNER:
-            return qs.filter(habitatges__usuari=user).distinct()
+            return qs.filter(
+                Q(habitatges__usuari=user) |
+                Q(habitatges__propietari=user) |
+                Q(habitatges__llogater=user)
+            ).distinct()
         if role == RoleChoices.TENANT:
-            return qs.filter(habitatges__usuari=user).distinct()
+            return qs.filter(
+                Q(habitatges__usuari=user) |
+                Q(habitatges__propietari=user) |
+                Q(habitatges__llogater=user)
+            ).distinct()
         return Edifici.objects.none()
 
     def get_serializer_class(self):
@@ -322,7 +331,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         if request.user.profile.role == RoleChoices.ADMIN:
             habitatges = edifici.habitatges.all()
         else:
-            habitatges = edifici.habitatges.filter(usuari=request.user)
+            habitatges = edifici.habitatges.filter(Q(usuari=request.user) | Q(propietari=request.user) | Q(llogater=request.user))
         
         serializer = HabitatgeResumSerializer(habitatges, many=True)
         return Response(serializer.data)
@@ -339,7 +348,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         # Propietari només pot veure el seu
         if edifici.administradorFinca != request.user:
-            if habitatge.usuari != request.user:
+            if not habitatge.te_vinculacio(request.user):
                 return Response({"detail": "No tens permisos."}, status=403)
 
         serializer = HabitatgeDetailSerializer(habitatge, context={'request': request})
@@ -353,7 +362,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         if edifici.administradorFinca == request.user:
             habitatges = edifici.habitatges.select_related('dadesEnergetiques').all()
         else:
-            habitatges = edifici.habitatges.select_related('dadesEnergetiques').filter(usuari=request.user)
+            habitatges = edifici.habitatges.select_related('dadesEnergetiques').filter(Q(usuari=request.user) | Q(propietari=request.user) | Q(llogater=request.user))
 
         dades = []
         for habitatge in habitatges:
@@ -438,7 +447,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         if user.profile.role != RoleChoices.OWNER:
             return False
 
-        return edifici.habitatges.filter(usuari=user).exists()
+        return edifici.habitatges.filter(Q(usuari=user) | Q(propietari=user)).exists()
 
     def _electors_votacio_count(self, edifici):
         admin_count = 1 if edifici.administradorFinca_id else 0
@@ -762,8 +771,9 @@ class EdificiViewSet(viewsets.ModelViewSet):
                 )
                 implementacions.append(impl)
 
-            simulacio.estatAplicacio = EstatAplicacioSimulacio.IMPLEMENTADA
-            simulacio.save(update_fields=['estatAplicacio'])
+            # La simulació NO passa a implementada en aquest punt.
+            # L'admin de finca només acredita i puja evidències.
+            # La validació final la fa l'admin de sistema a /millores-implementades/{id}/validar/.
 
         output = MilloraImplementadaSerializer(
             implementacions,
@@ -932,8 +942,105 @@ class EdificiViewSet(viewsets.ModelViewSet):
         serializer = EdificiCercaSerializer(edificis[:15], many=True)
         return Response(serializer.data)
 
+    @action(detail=True, methods=['get'], url_path='badges')
+    def badges(self, request, pk=None):
+        """
+        Retorna les insígnies assignades a l'edifici.
+
+        Si s'indica ?temporada=<id>, es retornen:
+        - insígnies permanents de l'edifici
+        - insígnies estacionals d'aquella temporada
+
+        Sense filtre de temporada, es retornen totes les assignacions visibles.
+        """
+        edifici = self.get_object()
+        temporada_id = request.query_params.get('temporada')
+
+        queryset = (
+            BuildingBadge.objects
+            .filter(edifici=edifici, badge__activa=True)
+            .select_related('badge', 'temporada')
+            .order_by('badge__categoria', 'badge__code', '-awarded_at')
+        )
+
+        if temporada_id:
+            queryset = queryset.filter(
+                Q(temporada_id=temporada_id) |
+                Q(temporada__isnull=True)
+            )
+
+        resultats = []
+        for assignacio in queryset:
+            resultats.append({
+                "id": assignacio.id,
+                "code": assignacio.badge.code,
+                "nom": assignacio.badge.nom,
+                "descripcio": assignacio.badge.descripcio,
+                "categoria": assignacio.badge.categoria,
+                "scope": assignacio.badge.scope,
+                "temporada": assignacio.temporada_id,
+                "temporadaNom": assignacio.temporada.nom if assignacio.temporada_id else None,
+                "valorSnapshot": (
+                    str(assignacio.valor_snapshot)
+                    if assignacio.valor_snapshot is not None
+                    else None
+                ),
+                "metadata": assignacio.metadata,
+                "awardedAt": assignacio.awarded_at,
+            })
+
+        return Response({
+            "edifici": edifici.idEdifici,
+            "temporada": temporada_id,
+            "count": len(resultats),
+            "summary": get_badges_resum_edifici(edifici, temporada=temporada_id, limit=3),
+            "results": resultats,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='badges/recalcular')
+    def recalcular_badges(self, request, pk=None):
+        """
+        Recalcula les insígnies de l'edifici.
+
+        Només ho pot fer:
+        - administrador de sistema / staff / superuser
+        - administrador de finca de l'edifici
+        """
+        edifici = self.get_object()
+        user = request.user
+
+        is_system_admin = bool(user.is_staff or user.is_superuser)
+        is_finca_admin = bool(edifici.administradorFinca_id == user.id)
+
+        if not (is_system_admin or is_finca_admin):
+            return Response(
+                {"detail": "No tens permisos per recalcular les insígnies d'aquest edifici."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        temporada = None
+        temporada_id = request.data.get("temporada") or request.query_params.get("temporada")
+
+        if temporada_id:
+            from apps.seasons.models import Temporada
+            temporada = get_object_or_404(Temporada, pk=temporada_id)
+
+        assignades = recalcular_insignies_edifici(edifici, temporada=temporada)
+
+        return Response(
+            {
+                "edifici": edifici.idEdifici,
+                "temporada": getattr(temporada, "pk", None),
+                "count": len(assignades),
+                "summary": get_badges_resum_edifici(edifici, temporada=temporada, limit=5),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
 class MilloraImplementadaViewSet(viewsets.GenericViewSet):
-    queryset = MilloraImplementada.objects.select_related("millora", "edifici")
+    queryset = MilloraImplementada.objects.select_related("millora", "edifici", "simulacio")
     serializer_class = MilloraImplementadaSerializer
     permission_classes = [IsAuthenticated, EsAdminMilloraImplementada]
 
@@ -957,11 +1064,31 @@ class MilloraImplementadaViewSet(viewsets.GenericViewSet):
 
         millora_impl.estatValidacio = nou_estat
         millora_impl.observacionsAdmin = observacions
+        # El camp conserva el nom històric administradorFinca, però aquí desa
+        # l'usuari que ha fet la validació final. Per permisos, només pot ser admin sistema.
         millora_impl.administradorFinca = request.user
         millora_impl.save(update_fields=["estatValidacio", "observacionsAdmin", "administradorFinca"])
 
+        if nou_estat == EstatValidacio.VALIDADA and millora_impl.simulacio_id:
+            hi_ha_pendents_o_rebutjades = millora_impl.simulacio.implementacions_generades.exclude(
+                estatValidacio=EstatValidacio.VALIDADA
+            ).exists()
+
+            if not hi_ha_pendents_o_rebutjades:
+                millora_impl.simulacio.estatAplicacio = EstatAplicacioSimulacio.IMPLEMENTADA
+                millora_impl.simulacio.save(update_fields=["estatAplicacio"])
+
         output_serializer = MilloraImplementadaSerializer(millora_impl)
+        try:
+            millora_validada = getattr(output_serializer, "instance", None)
+            if millora_validada and getattr(millora_validada, "edifici_id", None):
+                recalcular_insignies_edifici(millora_validada.edifici)
+        except Exception:
+            # El recalcul de badges no ha de bloquejar la validació d'una millora.
+            pass
+
         return Response(output_serializer.data, status=status.HTTP_200_OK)
+
 
 
 class HabitatgeViewSet(viewsets.ModelViewSet):
@@ -972,16 +1099,22 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         if not user.is_authenticated or not hasattr(user, 'profile'):
             return Habitatge.objects.none()
 
-        # Excepció per US-H2
-        # Permetem que qualsevol usuari trobi l'habitatge si el que vol és sol·licitar-hi accés
+        # Excepció per US-H2:
+        # Permetem trobar l'habitatge si l'acció és sol·licitar-hi accés.
         if self.action == 'solicitar_acces':
             return Habitatge.objects.all()
 
         role = user.profile.role
         if role == RoleChoices.ADMIN:
             return Habitatge.objects.filter(edifici__administradorFinca=user)
+
         if role in (RoleChoices.OWNER, RoleChoices.TENANT):
-            return Habitatge.objects.filter(usuari=user)
+            return Habitatge.objects.filter(
+                Q(usuari=user) |
+                Q(propietari=user) |
+                Q(llogater=user)
+            ).distinct()
+
         return Habitatge.objects.none()
 
     def get_serializer_class(self):
@@ -1004,13 +1137,38 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
 
         if not refCadastral:
             return Response({"error": "La referència cadastral és obligatòria."}, status=status.HTTP_400_BAD_REQUEST)
-        
+
+        if not hasattr(request.user, 'profile'):
+            return Response({"error": "Usuari sense perfil funcional."}, status=status.HTTP_403_FORBIDDEN)
+
+        role = request.user.profile.role
+        if role not in (RoleChoices.OWNER, RoleChoices.TENANT):
+            return Response(
+                {"error": "Només propietaris i llogaters poden sol·licitar accés a un habitatge."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        rol_solicitat = (
+            RolVinculacioHabitatge.OWNER
+            if role == RoleChoices.OWNER
+            else RolVinculacioHabitatge.TENANT
+        )
+
         habitatge = Habitatge.objects.filter(referenciaCadastral=refCadastral).first()
 
         if habitatge:
-            if habitatge.estatValidacio == EstatValidacio.VALIDADA:
-                return Response({"error": "Aquest habitatge ja està validat per un altre usuari."}, status=status.HTTP_400_BAD_REQUEST)
-            
+            ocupant_actual_id = (
+                habitatge.propietari_id or habitatge.usuari_id
+                if rol_solicitat == RolVinculacioHabitatge.OWNER
+                else habitatge.llogater_id
+            )
+
+            if ocupant_actual_id and ocupant_actual_id != request.user.id:
+                return Response(
+                    {"error": "Aquest rol ja està validat per a aquest habitatge."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             if habitatge.solicitant and habitatge.solicitant != request.user:
                 return Response(
                     {"error": "Aquest habitatge ja té una sol·licitud d'accés pendent de revisió per part d'un altre usuari."},
@@ -1018,20 +1176,38 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
                 )
 
             habitatge.solicitant = request.user
+            habitatge.rolSolicitat = rol_solicitat
             habitatge.estatValidacio = EstatValidacio.EN_REVISIO
-            habitatge.idEdifici = edificiID
-            habitatge.save()
-            
+
+            if edificiID:
+                habitatge.edifici_id = edificiID
+
+            habitatge.save(update_fields=['solicitant', 'rolSolicitat', 'estatValidacio', 'edifici'])
             serializer = self.get_serializer(habitatge)
             return Response(serializer.data, status=status.HTTP_200_OK)
-        
+
         return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         if self.request.user.profile.role == RoleChoices.ADMIN:
             raise PermissionDenied("Els administradors de finca no poden crear habitatges.")
+
+        role = self.request.user.profile.role
+        if role not in (RoleChoices.OWNER, RoleChoices.TENANT):
+            raise PermissionDenied("Només propietaris i llogaters poden sol·licitar habitatges.")
+
+        rol_solicitat = (
+            RolVinculacioHabitatge.OWNER
+            if role == RoleChoices.OWNER
+            else RolVinculacioHabitatge.TENANT
+        )
+
         try:
-            serializer.save(solicitant=self.request.user)
+            serializer.save(
+                solicitant=self.request.user,
+                rolSolicitat=rol_solicitat,
+                estatValidacio=EstatValidacio.EN_REVISIO,
+            )
         except IntegrityError:
             raise serializers.ValidationError(
                 {"referenciaCadastral": "Ja existeix un habitatge amb aquesta referència cadastral."}
@@ -1039,87 +1215,138 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='solicitar-acces')
     def solicitar_acces(self, request, pk=None):
-        # Sol·licitud de vincular-se a aquest habitatge
+        # Sol·licitud de vincular-se a aquest habitatge com a propietari o llogater.
         habitatge = self.get_object()
 
-        # Comprovar si l'habitatge ja està ocupat per un usuari validat
-        if habitatge.usuari:
+        if not hasattr(request.user, 'profile'):
+            return Response({"error": "Usuari sense perfil funcional."}, status=status.HTTP_403_FORBIDDEN)
+
+        role = request.user.profile.role
+        if role not in (RoleChoices.OWNER, RoleChoices.TENANT):
             return Response(
-                {"detail": "Aquest habitatge ja té un resident assignat."},
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": "Només propietaris i llogaters poden sol·licitar accés a un habitatge."},
+                status=status.HTTP_403_FORBIDDEN,
             )
-        
-        # Bloquejar si l'estat ja és 'Validada'
-        if habitatge.estatValidacio == EstatValidacio.VALIDADA:
+
+        rol_solicitat = (
+            RolVinculacioHabitatge.OWNER
+            if role == RoleChoices.OWNER
+            else RolVinculacioHabitatge.TENANT
+        )
+
+        ocupant_actual_id = (
+            habitatge.propietari_id or habitatge.usuari_id
+            if rol_solicitat == RolVinculacioHabitatge.OWNER
+            else habitatge.llogater_id
+        )
+
+        if ocupant_actual_id and ocupant_actual_id != request.user.id:
             return Response(
-                {"error": "Aquest habitatge ja ha estat validat prèviament."},
-                status=status.HTTP_400_BAD_REQUEST
+                {"detail": "Aquest rol ja està validat per a aquest habitatge."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        
-        # Evitar trepitjar una sol·licitud pendent d'un altre usuari
+
         if habitatge.solicitant and habitatge.solicitant != request.user:
             return Response(
                 {"error": "Ja hi ha una sol·licitud pendent per aquest habitatge."},
                 status=status.HTTP_409_CONFLICT
             )
-        
-        # Guardem la sol·licitud, posem l'estat en revisió i guardem qui és l'usuari que ho demana
+
         habitatge.estatValidacio = EstatValidacio.EN_REVISIO
         habitatge.solicitant = request.user
-        habitatge.save(update_fields=['estatValidacio', 'solicitant'])
+        habitatge.rolSolicitat = rol_solicitat
+        habitatge.save(update_fields=['estatValidacio', 'solicitant', 'rolSolicitat'])
 
         return Response(
-            {"detail": "Sol·licitud enviada correctament."},
+            {
+                "detail": "Sol·licitud enviada correctament.",
+                "rolSolicitat": rol_solicitat,
+            },
             status=status.HTTP_200_OK
         )
-    
+
     @action(detail=True, methods=['post'], url_path='validar-acces')
     def validar_acces(self, request, pk=None):
-        # L'Administrador de finca aprova o rebutja la sol·licitud
+        # L'administrador de finca aprova o rebutja la sol·licitud.
         habitatge = self.get_object()
 
-        if habitatge.usuari is not None:
-            return Response(
-                {"error": "Aquest habitatge ja té un resident vinculat."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-
-        # Només l'admin d'aquest edifici pot validar-ho
         if habitatge.edifici.administradorFinca != request.user:
             return Response(
                 {"error": "No tens permisos per validar accessos en aquest edifici."},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
-        # Comprovem que realment hi hagi algú pendent
+
         if habitatge.estatValidacio != EstatValidacio.EN_REVISIO or not habitatge.solicitant:
             return Response(
                 {"error": "Aquest habitatge no té cap sol·licitud pendent de revisió."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         nouEstat = request.data.get('estat')
-        
+
+        rol_solicitat = habitatge.rolSolicitat
+        if not rol_solicitat and hasattr(habitatge.solicitant, 'profile'):
+            if habitatge.solicitant.profile.role == RoleChoices.OWNER:
+                rol_solicitat = RolVinculacioHabitatge.OWNER
+            elif habitatge.solicitant.profile.role == RoleChoices.TENANT:
+                rol_solicitat = RolVinculacioHabitatge.TENANT
+
+        if rol_solicitat not in (RolVinculacioHabitatge.OWNER, RolVinculacioHabitatge.TENANT):
+            return Response(
+                {"error": "No es pot determinar si la sol·licitud és de propietari o llogater."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if nouEstat == EstatValidacio.VALIDADA:
-            habitatge.usuari = habitatge.solicitant
+            ocupant_actual_id = (
+                habitatge.propietari_id or habitatge.usuari_id
+                if rol_solicitat == RolVinculacioHabitatge.OWNER
+                else habitatge.llogater_id
+            )
+
+            if ocupant_actual_id and ocupant_actual_id != habitatge.solicitant_id:
+                return Response(
+                    {"error": "Aquest rol ja està ocupat per un altre usuari."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            habitatge.rolSolicitat = rol_solicitat
+            habitatge.assignar_solicitant_validat()
             habitatge.estatValidacio = EstatValidacio.VALIDADA
             habitatge.solicitant = None
-            habitatge.save(update_fields=['usuari', 'estatValidacio', 'solicitant'])
+            habitatge.rolSolicitat = None
+            habitatge.save(update_fields=[
+                'usuari',
+                'propietari',
+                'llogater',
+                'estatValidacio',
+                'solicitant',
+                'rolSolicitat',
+            ])
 
             return Response(
-                {"message": "Sol·licitud aprovada. Resident assignat."},
+                {"message": "Sol·licitud aprovada. Vinculació assignada correctament."},
                 status=status.HTTP_200_OK
             )
-        
+
         elif nouEstat == EstatValidacio.REBUTJADA:
-            habitatge.estatValidacio = EstatValidacio.REBUTJADA
+            te_vinculacio_validada = bool(
+                habitatge.usuari_id or habitatge.propietari_id or habitatge.llogater_id
+            )
+
+            habitatge.estatValidacio = (
+                EstatValidacio.VALIDADA
+                if te_vinculacio_validada
+                else EstatValidacio.REBUTJADA
+            )
             habitatge.solicitant = None
-            habitatge.save()
+            habitatge.rolSolicitat = None
+            habitatge.save(update_fields=['estatValidacio', 'solicitant', 'rolSolicitat'])
+
             return Response({"detail": "Sol·licitud rebutjada."}, status=status.HTTP_200_OK)
-        
+
         return Response({"error": "Estat no vàlid."}, status=status.HTTP_400_BAD_REQUEST)
-        
+
     @action(detail=False, methods=['get'])
     def pendents(self, request):
         # Retorna només els habitatges que estan pendents de validació
@@ -1158,7 +1385,11 @@ class DadesEnergetiquesViewSet(viewsets.ModelViewSet):
         if role == RoleChoices.ADMIN:
             return DadesEnergetiques.objects.filter(dades_energetiques__edifici__administradorFinca=user).distinct()
         if role in (RoleChoices.OWNER, RoleChoices.TENANT):
-            return DadesEnergetiques.objects.filter(dades_energetiques__usuari=user).distinct()
+            return DadesEnergetiques.objects.filter(
+            Q(dades_energetiques__usuari=user) |
+            Q(dades_energetiques__propietari=user) |
+            Q(dades_energetiques__llogater=user)
+        ).distinct()
         return DadesEnergetiques.objects.none()
 
     def get_permissions(self):

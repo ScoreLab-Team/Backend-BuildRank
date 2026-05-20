@@ -11,8 +11,13 @@ def _get_membres(votacio):
     edifici = votacio.edifici
     if edifici.administradorFinca_id:
         ids.add(edifici.administradorFinca_id)
-    for h in edifici.habitatges.filter(usuari__isnull=False):
-        ids.add(h.usuari_id)
+    for h in edifici.habitatges.all():
+        if h.usuari_id:
+            ids.add(h.usuari_id)
+        if getattr(h, "propietari_id", None):
+            ids.add(h.propietari_id)
+        if getattr(h, "llogater_id", None):
+            ids.add(h.llogater_id)
     return User.objects.filter(pk__in=ids)
 
 

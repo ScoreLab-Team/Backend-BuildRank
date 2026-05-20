@@ -1,8 +1,10 @@
 # apps/buildings/models.py
 from django.db import models
+from django.db.models import Q
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import Avg
+from django.core.validators import MinValueValidator, MaxValueValidator
 
 class TipusEdifici(models.TextChoices):
     RESIDENCIAL = 'Residencial', 'Residencial'
@@ -45,6 +47,11 @@ class EstatValidacio(models.TextChoices):
     EN_REVISIO = 'EnRevisió', 'En revisió'
     VALIDADA = 'Validada', 'Validada'
     REBUTJADA = 'Rebutjada', 'Rebutjada'
+
+
+class RolVinculacioHabitatge(models.TextChoices):
+    OWNER = 'owner', 'Propietari'
+    TENANT = 'tenant', 'Llogater'
 
 class EstatAplicacioSimulacio(models.TextChoices):
     ESBORRANY = 'esborrany', 'Esborrany'
@@ -120,18 +127,14 @@ class Localitzacio(models.Model):
     def __str__(self):
         return f"{self.carrer}, {self.numero} ({self.codiPostal})"
     def save(self, *args, **kwargs):
-        # Si la zona climática no está definida, poner un valor por defecto
+        # Si la zona climàtica no està definida, posem un valor per defecte.
         if not self.zonaClimatica:
             self.zonaClimatica = "N/A"
 
-        # Si latitud o longitud no están definidas, poner 0.0
-        if self.latitud is None:
-            self.latitud = 0.0
-        if self.longitud is None:
-            self.longitud = 0.0
-
+        # No inventem coordenades.
+        # Si no tenim latitud/longitud, es guarden com a NULL.
+        # El GeoJSON del mapa ja filtra edificis sense coordenades vàlides.
         super().save(*args, **kwargs)
-
 
 class GrupComparable(models.Model):
     idGrup = models.IntegerField()
@@ -332,23 +335,55 @@ class DadesEnergetiques(models.Model):
         null=True,   # ← permet NULL a la BD
         blank=True   # ← permet formularis buits
     )
-    consumEnergiaPrimaria = models.FloatField()
-    consumEnergiaFinal = models.FloatField()
-    emissionsCO2 = models.FloatField()
-    costAnualEnergia = models.FloatField()
+    consumEnergiaPrimaria = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(600.0)]
+    )
+    consumEnergiaFinal = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(450.0)]
+    )
+    emissionsCO2 = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(150.0)]
+    )
+    costAnualEnergia = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(15000.0)]
+    )
 
-    energiaCalefaccio = models.FloatField()
-    energiaRefrigeracio = models.FloatField()
-    energiaACS = models.FloatField()
-    energiaEnllumenament = models.FloatField()
 
-    emissionsCalefaccio = models.FloatField()
-    emissionsRefrigeracio = models.FloatField()
-    emissionsACS = models.FloatField()
-    emissionsEnllumenament = models.FloatField()
+    energiaCalefaccio = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(250.0)]
+    )
+    energiaRefrigeracio = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(120.0)]
+    )
+    energiaACS = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(80.0)]
+    )
+    energiaEnllumenament = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(50.0)]
+    )
 
-    aillamentTermic = models.FloatField()
-    valorFinestres = models.FloatField()
+
+    emissionsCalefaccio = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(100.0)]
+    )
+    emissionsRefrigeracio = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(50.0)]
+    )
+    emissionsACS = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(40.0)]
+    )
+    emissionsEnllumenament = models.FloatField(
+        validators=[MinValueValidator(0.0), MaxValueValidator(25.0)]
+    )
+
+
+    aillamentTermic = models.FloatField(
+        validators=[MinValueValidator(0.05), MaxValueValidator(5.0)]
+    )
+    valorFinestres = models.FloatField(
+        validators=[MinValueValidator(0.5), MaxValueValidator(8.0)]
+    )
+
 
     normativa = models.CharField(max_length=255)
     einaCertificacio = models.CharField(max_length=255)
@@ -358,6 +393,7 @@ class DadesEnergetiques(models.Model):
 
     def __str__(self):
         return f"Qualificacio {self.qualificacioGlobal} - Data entrada: {self.dataEntrada}"
+    
 class DadesEnergetiquesOpenData(models.Model):
     """
     US13 — Dades energètiques agregades provinents de l'open data CEE.
@@ -442,6 +478,31 @@ class Habitatge(models.Model):
     )
 
     # relacio amb DadesEnergetiques (relacio 1 a 1)
+    # Nous camps explícits de vinculació residencial.
+    # Es manté usuari com a camp legacy per compatibilitat amb endpoints existents.
+    propietari = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='habitatges_com_propietari'
+    )
+
+    llogater = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='habitatges_com_llogater'
+    )
+
+    # Rol que està demanant el solicitant pendent de validació.
+    rolSolicitat = models.CharField(
+        max_length=10,
+        choices=RolVinculacioHabitatge.choices,
+        null=True,
+        blank=True
+    )
     dadesEnergetiques = models.OneToOneField(
         DadesEnergetiques, 
         on_delete=models.CASCADE, 
@@ -465,6 +526,47 @@ class Habitatge(models.Model):
         blank=True,
         related_name="solicituds_habitatge"
     )
+
+    def te_vinculacio(self, user):
+        if not user or not getattr(user, "is_authenticated", False):
+            return False
+        return user.id in {
+            self.usuari_id,
+            self.propietari_id,
+            self.llogater_id,
+        }
+
+    def es_propietari(self, user):
+        if not user or not getattr(user, "is_authenticated", False):
+            return False
+        return user.id == self.propietari_id or user.id == self.usuari_id
+
+    def es_llogater(self, user):
+        if not user or not getattr(user, "is_authenticated", False):
+            return False
+        return user.id == self.llogater_id
+
+    def slot_ocupat(self, rol):
+        if rol == RolVinculacioHabitatge.OWNER:
+            return self.propietari_id is not None
+        if rol == RolVinculacioHabitatge.TENANT:
+            return self.llogater_id is not None
+        return True
+
+    def assignar_solicitant_validat(self):
+        if not self.solicitant_id:
+            return
+
+        if self.rolSolicitat == RolVinculacioHabitatge.OWNER:
+            self.propietari = self.solicitant
+            # Compatibilitat amb el model anterior: el propietari queda com a resident principal.
+            self.usuari = self.solicitant
+
+        elif self.rolSolicitat == RolVinculacioHabitatge.TENANT:
+            self.llogater = self.solicitant
+            # Si encara no hi havia resident legacy, el tenant manté compatibilitat amb codi antic.
+            if self.usuari_id is None:
+                self.usuari = self.solicitant
 
     def __str__(self):
         return f"{self.edifici} - {self.planta}, {self.porta}"
@@ -884,3 +986,95 @@ class ImportacioIncidencia(models.Model):
 
     class Meta:
         ordering = ['id']
+
+
+
+class BadgeScope(models.TextChoices):
+    SEASONAL = 'seasonal', 'Per temporada'
+    PERMANENT = 'permanent', 'Permanent'
+
+
+class BadgeCategory(models.TextChoices):
+    SCORE = 'score', 'Puntuació'
+    EMISSIONS = 'emissions', 'Emissions'
+    DATA_QUALITY = 'data_quality', 'Qualitat de dades'
+    IMPROVEMENT = 'improvement', 'Millores'
+    PROGRESS = 'progress', 'Progrés'
+    GENERAL = 'general', 'General'
+
+
+class BadgeDefinition(models.Model):
+    code = models.CharField(max_length=50, unique=True)
+    nom = models.CharField(max_length=100)
+    descripcio = models.TextField(blank=True)
+    categoria = models.CharField(
+        max_length=30,
+        choices=BadgeCategory.choices,
+        default=BadgeCategory.GENERAL,
+    )
+    scope = models.CharField(
+        max_length=20,
+        choices=BadgeScope.choices,
+        default=BadgeScope.SEASONAL,
+    )
+    criteris = models.JSONField(default=dict, blank=True)
+    activa = models.BooleanField(default=True)
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['categoria', 'code']
+        verbose_name = 'Definició d’insígnia'
+        verbose_name_plural = 'Definicions d’insígnies'
+
+    def __str__(self):
+        return f"{self.code} - {self.nom}"
+
+
+class BuildingBadge(models.Model):
+    edifici = models.ForeignKey(
+        Edifici,
+        on_delete=models.CASCADE,
+        related_name='badges',
+    )
+    temporada = models.ForeignKey(
+        'seasons.Temporada',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='building_badges',
+    )
+    badge = models.ForeignKey(
+        BadgeDefinition,
+        on_delete=models.CASCADE,
+        related_name='assignacions',
+    )
+    awarded_at = models.DateTimeField(auto_now_add=True)
+    valor_snapshot = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['-awarded_at']
+        verbose_name = 'Insígnia d’edifici'
+        verbose_name_plural = 'Insígnies d’edificis'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['edifici', 'temporada', 'badge'],
+                condition=Q(temporada__isnull=False),
+                name='unique_badge_per_edifici_temporada',
+            ),
+            models.UniqueConstraint(
+                fields=['edifici', 'badge'],
+                condition=Q(temporada__isnull=True),
+                name='unique_permanent_badge_per_edifici',
+            ),
+        ]
+
+    def __str__(self):
+        temporada_label = self.temporada_id if self.temporada_id else 'permanent'
+        return f"{self.edifici_id} · {self.badge.code} · {temporada_label}"

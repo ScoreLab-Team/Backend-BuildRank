@@ -1,179 +1,105 @@
-from django.test import TestCase
-from rest_framework.test import APIClient, APITestCase
 from django.contrib.auth import get_user_model
+from django.test import override_settings
 from rest_framework import status
+from rest_framework.test import APITestCase, APIClient
 
-from apps.leagues.models import Lliga
+from apps.buildings.models import Edifici, GrupComparable, Localitzacio
+from apps.leagues.models import RankingHistorico
 from apps.seasons.models import Temporada
-from apps.buildings.models import Edifici, GrupComparable
-from apps.participations.models import Participacio
-from apps.accounts.models import RoleChoices
+
 
 User = get_user_model()
 
-class RankingSegmentationTest(APITestCase):
 
+def make_user(email="leagues@example.com"):
+    return User.objects.create_user(
+        email=email,
+        password="Password123",
+        first_name="User",
+    )
+
+
+@override_settings(REST_FRAMEWORK={
+    "DEFAULT_AUTHENTICATION_CLASSES": (),
+    "DEFAULT_PERMISSION_CLASSES": (),
+    "DEFAULT_THROTTLE_CLASSES": (),
+})
+class EvolucioRankingHistoricoAPITest(APITestCase):
     def setUp(self):
         self.client = APIClient()
-        self.user = User.objects.create_user(
-            email="admin@example.com",
-            password="Password123",
-            first_name="Test"
-        )
-        self.user.profile.role = RoleChoices.ADMIN
-        self.user.profile.save()
+        self.client.force_authenticate(user=make_user())
 
-        self.client.force_authenticate(user=self.user)
-
-
-        self.season = Temporada.objects.create(
-            nom="Test Season",
-            dataInici="2026-01-01",
-            dataFi="2026-12-31",
-            estat='ACTIVA'
-        )
-
-        self.league = Lliga.objects.create(
-            nom="Test League",
-            categoria="EFICIENCIA",
-            divisio="Bronze",
-            temporada=self.season
-        )
-
-        self.group_a = GrupComparable.objects.create(
-            idGrup=1,
+        self.group = GrupComparable.objects.create(
+            idGrup=50,
             zonaClimatica="A",
             tipologia="Residencial",
-            rangSuperficie="0-100"
+            rangSuperficie="0-100",
         )
-
-        self.group_b = GrupComparable.objects.create(
-            idGrup=2,
-            zonaClimatica="B",
-            tipologia="Residencial",
-            rangSuperficie="0-100"
+        self.localitzacio = Localitzacio.objects.create(
+            carrer="Carrer Test",
+            numero=1,
+            codiPostal="08001",
+            barri="Centre",
         )
-
-        self.building_a1 = Edifici.objects.create(
+        self.edifici = Edifici.objects.create(
             anyConstruccio=2000,
             tipologia="Residencial",
-            superficieTotal=80,
+            superficieTotal=100,
             nombrePlantes=1,
-            reglament="test",
+            reglament="CTE",
             orientacioPrincipal="Nord",
-            grupComparable=self.group_a
+            grupComparable=self.group,
+            localitzacio=self.localitzacio,
         )
 
-        self.building_a2 = Edifici.objects.create(
-            anyConstruccio=2005,
-            tipologia="Residencial",
-            superficieTotal=90,
-            nombrePlantes=1,
-            reglament="test",
-            orientacioPrincipal="Sud",
-            grupComparable=self.group_a
-        )
+        self.temporades = [
+            Temporada.objects.create(
+                nom=f"Temporada {year}",
+                dataInici=f"{year}-01-01",
+                dataFi=f"{year}-12-31",
+            )
+            for year in [2023, 2024, 2025]
+        ]
 
-        self.building_b1 = Edifici.objects.create(
-            anyConstruccio=2010,
-            tipologia="Residencial",
-            superficieTotal=85,
-            nombrePlantes=1,
-            reglament="test",
-            orientacioPrincipal="Est",
-            grupComparable=self.group_b
-        )
+        for index, temporada in enumerate(self.temporades, start=1):
+            RankingHistorico.objects.create(
+                edifici=self.edifici,
+                temporada=temporada,
+                categoria="PROGRES",
+                puntuacio=index * 10,
+                posicio=index,
+                divisio="Bronze",
+            )
 
-        self.p1 = Participacio.objects.create(
-            edifici=self.building_a1,
-            lliga=self.league,
-            puntuacio=90,
-            posicio=0,
-            divisio="Bronze"
-        )
-
-        self.p2 = Participacio.objects.create(
-            edifici=self.building_a2,
-            lliga=self.league,
-            puntuacio=80,
-            posicio=0,
-            divisio="Bronze"
-        )
-
-        self.p3 = Participacio.objects.create(
-            edifici=self.building_b1,
-            lliga=self.league,
-            puntuacio=100,
-            posicio=0,
-            divisio="Bronze"
-        )
-
-    """Comprobar funcionament del ranking global"""
-    def test_ranking_global_includes_all_segments(self):
-        ranking = self.league.participations.order_by("-puntuacio")
-
-        self.assertEqual(ranking.count(), 3)
-
-        self.assertEqual(ranking[0].edifici, self.building_b1)  # 100 puntos
-
-    """Comprobar segmentacio correcta"""
-    def test_ranking_segment_group_a(self):
-        ranking = self.league.participations.filter(
-            edifici__grupComparable=self.group_a
-        ).order_by("-puntuacio")
-
-        self.assertEqual(ranking.count(), 2)
-
-        edificios = [p.edifici for p in ranking]
-
-        self.assertIn(self.building_a1, edificios)
-        self.assertIn(self.building_a2, edificios)
-        self.assertNotIn(self.building_b1, edificios)
-
-    """Comprovar segmentacio correcta d'una altra manera"""
-    def test_ranking_segment_group_b(self):
-        ranking = self.league.participations.filter(
-            edifici__grupComparable=self.group_b
-        ).order_by("-puntuacio")
-
-        self.assertEqual(ranking.count(), 1)
-        self.assertEqual(ranking[0].edifici, self.building_b1)
-
-    """Test de endpoint real"""
-    def test_api_segmented_ranking(self):
-
+    def test_evolucio_sense_limit_mante_historial_complet(self):
         response = self.client.get(
-            f"/api/leagues/{self.league.pk}/ranking/?group={self.group_a.idGrup}"
+            "/api/leagues/evolucio/"
+            f"?edifici={self.edifici.idEdifici}&categoria=PROGRES"
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data["results"]), 2)
-
-    """Test grup no valid"""
-    def test_ranking_invalid_group_returns_404(self):
-        invalid_group_id = 999  # no existe
-
-        response = self.client.get(
-            f"/api/leagues/{self.league.pk}/ranking/?group={invalid_group_id}"
+        self.assertEqual(
+            [item["nom_temporada"] for item in response.data],
+            ["Temporada 2023", "Temporada 2024", "Temporada 2025"],
         )
 
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-
-    """Test ranking segmentat normal, comprobar que el grup correcte s'utilitza automaticament"""
-    def test_ranking_segmentado_auto(self):
+    def test_evolucio_limit_retorna_ultimes_temporades_en_ordre_cronologic(self):
         response = self.client.get(
-            f"/api/leagues/{self.league.pk}/posicio_edifici/"
-            f"?edifici={self.building_a1.pk}&segment=true"
+            "/api/leagues/evolucio/"
+            f"?edifici={self.edifici.idEdifici}&categoria=PROGRES&limit=2"
         )
+
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["segmentat"], True)
-        self.assertEqual(response.data["grup_utilitzat"], self.group_a.idGrup)
-
-    """Test per comprovar que la versio sense segmentar tambe funciona"""
-    def test_ranking_sin_segmentacion(self):
-        response = self.client.get(
-            f"/api/leagues/{self.league.pk}/posicio_edifici/"
-            f"?edifici={self.building_a1.pk}"
+        self.assertEqual(
+            [item["nom_temporada"] for item in response.data],
+            ["Temporada 2024", "Temporada 2025"],
         )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["segmentat"], False)
+
+    def test_evolucio_limit_invalid_retorna_400(self):
+        response = self.client.get(
+            "/api/leagues/evolucio/"
+            f"?edifici={self.edifici.idEdifici}&categoria=PROGRES&limit=abc"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["error"], "limit must be a positive integer")

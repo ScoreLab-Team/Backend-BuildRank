@@ -1,6 +1,6 @@
 from datetime import date
 
-from django.test import TestCase, RequestFactory
+from django.test import TestCase, RequestFactory, override_settings
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.contrib.admin.sites import AdminSite
 from rest_framework import status
@@ -9,7 +9,7 @@ from django.contrib.auth import get_user_model
 
 from .models import Temporada, EstatTemporada
 from .admin import TemporadaAdmin
-from apps.leagues.models import Lliga
+from apps.leagues.models import Lliga, RankingHistorico
 from apps.participations.models import Participacio
 from apps.buildings.models import Edifici, GrupComparable, Localitzacio
 
@@ -441,6 +441,7 @@ class TemporadaRankingAPITest(APITestCase):
             edifici=self.edifici_1,
             lliga=self.lliga_bronze,
             puntuacio=80,
+            puntuacio_inicial=30,
             posicio=1,
             divisio='Bronze'
         )
@@ -449,6 +450,7 @@ class TemporadaRankingAPITest(APITestCase):
             edifici=self.edifici_2,
             lliga=self.lliga_gold,
             puntuacio=95,
+            puntuacio_inicial=50,
             posicio=1,
             divisio='Gold'
         )
@@ -457,6 +459,7 @@ class TemporadaRankingAPITest(APITestCase):
             edifici=self.edifici_3,
             lliga=self.lliga_gold,
             puntuacio=70,
+            puntuacio_inicial=10,
             posicio=2,
             divisio='Gold'
         )
@@ -799,3 +802,122 @@ class TemporadaRankingAPITest(APITestCase):
         posicions = [r["posicio"] for r in results]
 
         self.assertEqual(posicions, [1, 2, 3])
+
+
+@override_settings(REST_FRAMEWORK={
+    "DEFAULT_AUTHENTICATION_CLASSES": (),
+    "DEFAULT_PERMISSION_CLASSES": (),
+    "DEFAULT_THROTTLE_CLASSES": (),
+})
+class TemporadaRankingProgresAPITest(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = make_user(email="ranking-progres@example.com")
+        self.client.force_authenticate(user=self.user)
+
+        self.group = GrupComparable.objects.create(
+            idGrup=10,
+            zonaClimatica='A',
+            tipologia='Residencial',
+            rangSuperficie='0-100'
+        )
+
+        self.temporada_2023 = Temporada.objects.create(
+            nom='2023',
+            dataInici='2023-01-01',
+            dataFi='2023-12-31',
+        )
+        self.temporada_2024 = Temporada.objects.create(
+            nom='2024',
+            dataInici='2024-01-01',
+            dataFi='2024-12-31',
+        )
+        self.temporada_2025 = Temporada.objects.create(
+            nom='2025',
+            dataInici='2025-01-01',
+            dataFi='2025-12-31',
+        )
+
+        self.edificis = []
+        for index, carrer in enumerate(['Aragó', 'Diagonal', 'Gran Via'], start=1):
+            localitzacio = Localitzacio.objects.create(
+                carrer=carrer,
+                numero=index,
+                codiPostal=f'0800{index}',
+                barri='Centre'
+            )
+            self.edificis.append(Edifici.objects.create(
+                anyConstruccio=2000 + index,
+                tipologia='Residencial',
+                superficieTotal=100 + index,
+                nombrePlantes=1,
+                reglament='CTE',
+                orientacioPrincipal='Nord',
+                grupComparable=self.group,
+                localitzacio=localitzacio
+            ))
+
+        self._snapshot(self.edificis[0], self.temporada_2023, 40, 3, 'Bronze')
+        self._snapshot(self.edificis[0], self.temporada_2024, 50, 2, 'Silver')
+        self._snapshot(self.edificis[0], self.temporada_2025, 80, 1, 'Gold')
+
+        self._snapshot(self.edificis[1], self.temporada_2023, 20, 2, 'Bronze')
+        self._snapshot(self.edificis[1], self.temporada_2024, 65, 1, 'Silver')
+        self._snapshot(self.edificis[1], self.temporada_2025, 75, 2, 'Silver')
+
+        self._snapshot(self.edificis[2], self.temporada_2023, 35, 1, 'Bronze')
+        self._snapshot(self.edificis[2], self.temporada_2024, 45, 3, 'Bronze')
+        self._snapshot(self.edificis[2], self.temporada_2025, 75, 3, 'Silver')
+
+    def _snapshot(self, edifici, temporada, puntuacio, posicio, divisio):
+        return RankingHistorico.objects.create(
+            edifici=edifici,
+            temporada=temporada,
+            categoria='PROGRES',
+            puntuacio=puntuacio,
+            posicio=posicio,
+            divisio=divisio,
+        )
+
+    def test_ranking_progres_ordena_per_delta_i_desempata_establement(self):
+        response = self.client.get(
+            f'/api/seasons/{self.temporada_2025.pk}/ranking/progres/?window=3'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(
+            [item['edifici'] for item in response.data],
+            [
+                self.edificis[1].idEdifici,
+                self.edificis[0].idEdifici,
+                self.edificis[2].idEdifici,
+            ]
+        )
+        self.assertEqual([item['delta'] for item in response.data], [55, 40, 40])
+        self.assertEqual([item['posicio'] for item in response.data], [1, 2, 3])
+        self.assertEqual(response.data[0]['puntuacio_inicial'], 20)
+        self.assertEqual(response.data[0]['puntuacio_actual'], 75)
+        self.assertEqual(response.data[0]['divisio_actual'], 'Silver')
+        self.assertEqual(len(response.data[0]['serie_temporal']), 3)
+
+    def test_ranking_progres_window_limita_finestra_de_temporades(self):
+        response = self.client.get(
+            f'/api/seasons/{self.temporada_2025.pk}/ranking/progres/?window=2'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data[0]['edifici'], self.edificis[0].idEdifici)
+        self.assertEqual(response.data[0]['delta'], 30)
+        self.assertEqual(
+            [item['nom_temporada'] for item in response.data[0]['serie_temporal']],
+            ['2024', '2025']
+        )
+
+    def test_ranking_progres_window_invalid_retorna_400(self):
+        response = self.client.get(
+            f'/api/seasons/{self.temporada_2025.pk}/ranking/progres/?window=0'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['error'], 'window must be a positive integer')

@@ -4173,3 +4173,109 @@ class BadgeServiceTests(BaseTestData):
         self.assertIn("MILLORA_IMPLEMENTADA", codis)
         self.assertIn("PROGRES_DESTACAT", codis)
         self.assertIn("DADES_VERIFICADES", codis)
+
+
+
+class BadgeEndpointTests(BaseTestData):
+    def setUp(self):
+        super().setUp()
+        self.admin_badges = get_user_model().objects.create_user(
+            email="admin.badges.endpoint@test.com",
+            password="TestPassword123",
+        )
+        self.admin_badges.profile.role = RoleChoices.ADMIN
+        self.admin_badges.profile.save(update_fields=["role"])
+
+        self.localitzacio_badges = Localitzacio.objects.create(
+            carrer="Carrer Badges Endpoint",
+            numero=3,
+            codiPostal="08003",
+        )
+        self.edifici = Edifici.objects.create(
+            localitzacio=self.localitzacio_badges,
+            anyConstruccio=2010,
+            superficieTotal=900,
+            administradorFinca=self.admin_badges,
+        )
+
+        from apps.seasons.models import Temporada
+        from datetime import date
+
+        self.temporada = Temporada.objects.create(
+            nom="Temporada Endpoint",
+            dataInici=date(2026, 1, 1),
+            dataFi=date(2026, 12, 31),
+        )
+
+        self.badge_or = BadgeDefinition.objects.create(
+            code="OR_BHS_ENDPOINT",
+            nom="Or BHS Endpoint",
+            categoria=BadgeCategory.SCORE,
+            scope=BadgeScope.SEASONAL,
+        )
+        self.badge_dades = BadgeDefinition.objects.create(
+            code="DADES_VERIFICADES_ENDPOINT",
+            nom="Dades verificades Endpoint",
+            categoria=BadgeCategory.DATA_QUALITY,
+            scope=BadgeScope.PERMANENT,
+        )
+
+        BuildingBadge.objects.create(
+            edifici=self.edifici,
+            temporada=self.temporada,
+            badge=self.badge_or,
+            valor_snapshot=Decimal("91.00"),
+            metadata={"font": "endpoint-test"},
+        )
+        BuildingBadge.objects.create(
+            edifici=self.edifici,
+            badge=self.badge_dades,
+            metadata={"font": "endpoint-test"},
+        )
+
+    def test_admin_finca_pot_consultar_badges_edifici(self):
+        self.client.force_authenticate(user=self.admin_badges)
+
+        response = self.client.get(
+            reverse("edifici-badges", kwargs={"pk": self.edifici.pk})
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["edifici"], self.edifici.idEdifici)
+
+        codis = {item["code"] for item in response.data["results"]}
+        self.assertIn("OR_BHS_ENDPOINT", codis)
+        self.assertIn("DADES_VERIFICADES_ENDPOINT", codis)
+
+    def test_filtre_temporada_inclou_estacionals_i_permanents(self):
+        self.client.force_authenticate(user=self.admin_badges)
+
+        response = self.client.get(
+            reverse("edifici-badges", kwargs={"pk": self.edifici.pk}),
+            {"temporada": self.temporada.pk},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        codis = {item["code"] for item in response.data["results"]}
+        self.assertIn("OR_BHS_ENDPOINT", codis)
+        self.assertIn("DADES_VERIFICADES_ENDPOINT", codis)
+
+    def test_usuari_sense_relacio_no_pot_consultar_badges(self):
+        outsider = get_user_model().objects.create_user(
+            email="outsider.badges@test.com",
+            password="TestPassword123",
+        )
+        outsider.profile.role = RoleChoices.OWNER
+        outsider.profile.save(update_fields=["role"])
+
+        self.client.force_authenticate(user=outsider)
+
+        response = self.client.get(
+            reverse("edifici-badges", kwargs={"pk": self.edifici.pk})
+        )
+
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )

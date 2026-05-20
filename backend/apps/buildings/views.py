@@ -20,7 +20,7 @@ from .models import (
     carrersBarcelona, EstatValidacio, RolVinculacioHabitatge, AccioAudit, EdificiAuditLog,
     CatalegMillora, SimulacioMillora, SimulacioMilloraItem, MilloraImplementada,
     EstatAplicacioSimulacio, EstatVotacioSimulacio, SentitVotSimulacio,
-    VotacioSimulacioMillora, VotSimulacioMillora,
+    VotacioSimulacioMillora, VotSimulacioMillora, BuildingBadge,
 )
 from .serializers import (
     EdificiDetailSerializer, EdificiListSerializer, EdificiMapSerializer,
@@ -941,6 +941,62 @@ class EdificiViewSet(viewsets.ModelViewSet):
         serializer = EdificiCercaSerializer(edificis[:15], many=True)
         return Response(serializer.data)
 
+    @action(detail=True, methods=['get'], url_path='badges')
+    def badges(self, request, pk=None):
+        """
+        Retorna les insígnies assignades a l'edifici.
+
+        Si s'indica ?temporada=<id>, es retornen:
+        - insígnies permanents de l'edifici
+        - insígnies estacionals d'aquella temporada
+
+        Sense filtre de temporada, es retornen totes les assignacions visibles.
+        """
+        edifici = self.get_object()
+        temporada_id = request.query_params.get('temporada')
+
+        queryset = (
+            BuildingBadge.objects
+            .filter(edifici=edifici, badge__activa=True)
+            .select_related('badge', 'temporada')
+            .order_by('badge__categoria', 'badge__code', '-awarded_at')
+        )
+
+        if temporada_id:
+            queryset = queryset.filter(
+                Q(temporada_id=temporada_id) |
+                Q(temporada__isnull=True)
+            )
+
+        resultats = []
+        for assignacio in queryset:
+            resultats.append({
+                "id": assignacio.id,
+                "code": assignacio.badge.code,
+                "nom": assignacio.badge.nom,
+                "descripcio": assignacio.badge.descripcio,
+                "categoria": assignacio.badge.categoria,
+                "scope": assignacio.badge.scope,
+                "temporada": assignacio.temporada_id,
+                "temporadaNom": assignacio.temporada.nom if assignacio.temporada_id else None,
+                "valorSnapshot": (
+                    str(assignacio.valor_snapshot)
+                    if assignacio.valor_snapshot is not None
+                    else None
+                ),
+                "metadata": assignacio.metadata,
+                "awardedAt": assignacio.awarded_at,
+            })
+
+        return Response({
+            "edifici": edifici.idEdifici,
+            "temporada": temporada_id,
+            "count": len(resultats),
+            "results": resultats,
+        }, status=status.HTTP_200_OK)
+
+
+
 class MilloraImplementadaViewSet(viewsets.GenericViewSet):
     queryset = MilloraImplementada.objects.select_related("millora", "edifici", "simulacio")
     serializer_class = MilloraImplementadaSerializer
@@ -982,6 +1038,7 @@ class MilloraImplementadaViewSet(viewsets.GenericViewSet):
 
         output_serializer = MilloraImplementadaSerializer(millora_impl)
         return Response(output_serializer.data, status=status.HTTP_200_OK)
+
 
 
 class HabitatgeViewSet(viewsets.ModelViewSet):

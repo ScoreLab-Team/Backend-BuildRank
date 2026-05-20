@@ -26,6 +26,16 @@ class User(AbstractUser):
     first_name = models.CharField(max_length=150, blank=True)
     last_name = models.CharField(max_length=150, blank=True)
 
+    class AuthProvider(models.TextChoices):
+        PASSWORD = "password", "Password"
+        GOOGLE = "google", "Google"
+
+    auth_provider = models.CharField(
+        max_length=20,
+        choices=AuthProvider.choices,
+        default=AuthProvider.PASSWORD,
+    )
+
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
 

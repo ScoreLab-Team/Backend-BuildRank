@@ -4261,6 +4261,59 @@ class BadgeEndpointTests(BaseTestData):
         self.assertIn("OR_BHS_ENDPOINT", codis)
         self.assertIn("DADES_VERIFICADES_ENDPOINT", codis)
 
+    def test_badges_endpoint_inclou_summary(self):
+        self.client.force_authenticate(user=self.admin_badges)
+
+        response = self.client.get(
+            reverse("edifici-badges", kwargs={"pk": self.edifici.pk}),
+            {"temporada": self.temporada.pk},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("summary", response.data)
+        self.assertGreaterEqual(len(response.data["summary"]), 1)
+
+    def test_admin_finca_pot_recalcular_badges_dinamicament(self):
+        self.client.force_authenticate(user=self.admin_badges)
+
+        self.edifici.puntuacioBase = 91
+        self.edifici.save(update_fields=["puntuacioBase"])
+
+        response = self.client.post(
+            reverse("edifici-recalcular-badges", kwargs={"pk": self.edifici.pk}),
+            {"temporada": self.temporada.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        codis = {
+            item["code"]
+            for item in response.data["summary"]
+        }
+        self.assertIn("OR_BHS", codis)
+
+    def test_usuari_sense_relacio_no_pot_recalcular_badges(self):
+        outsider = get_user_model().objects.create_user(
+            email="outsider.recalc.badges@test.com",
+            password="TestPassword123",
+        )
+        outsider.profile.role = RoleChoices.OWNER
+        outsider.profile.save(update_fields=["role"])
+
+        self.client.force_authenticate(user=outsider)
+
+        response = self.client.post(
+            reverse("edifici-recalcular-badges", kwargs={"pk": self.edifici.pk}),
+            {"temporada": self.temporada.pk},
+            format="json",
+        )
+
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+
     def test_usuari_sense_relacio_no_pot_consultar_badges(self):
         outsider = get_user_model().objects.create_user(
             email="outsider.badges@test.com",

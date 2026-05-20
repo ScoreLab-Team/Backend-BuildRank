@@ -14,6 +14,7 @@ from rest_framework.exceptions import PermissionDenied
 
 from apps.accounts.permissions import ABACMixin, IsAdminSistema, IsAdminFinca
 from apps.accounts.models import RoleChoices, ValidacioAdmin
+from apps.buildings.services.badges import get_badges_resum_edifici, recalcular_insignies_edifici
  
 from .models import (
     Edifici, Habitatge, Localitzacio, DadesEnergetiques,
@@ -992,8 +993,49 @@ class EdificiViewSet(viewsets.ModelViewSet):
             "edifici": edifici.idEdifici,
             "temporada": temporada_id,
             "count": len(resultats),
+            "summary": get_badges_resum_edifici(edifici, temporada=temporada_id, limit=3),
             "results": resultats,
         }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='badges/recalcular')
+    def recalcular_badges(self, request, pk=None):
+        """
+        Recalcula les insígnies de l'edifici.
+
+        Només ho pot fer:
+        - administrador de sistema / staff / superuser
+        - administrador de finca de l'edifici
+        """
+        edifici = self.get_object()
+        user = request.user
+
+        is_system_admin = bool(user.is_staff or user.is_superuser)
+        is_finca_admin = bool(edifici.administradorFinca_id == user.id)
+
+        if not (is_system_admin or is_finca_admin):
+            return Response(
+                {"detail": "No tens permisos per recalcular les insígnies d'aquest edifici."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        temporada = None
+        temporada_id = request.data.get("temporada") or request.query_params.get("temporada")
+
+        if temporada_id:
+            from apps.seasons.models import Temporada
+            temporada = get_object_or_404(Temporada, pk=temporada_id)
+
+        assignades = recalcular_insignies_edifici(edifici, temporada=temporada)
+
+        return Response(
+            {
+                "edifici": edifici.idEdifici,
+                "temporada": getattr(temporada, "pk", None),
+                "count": len(assignades),
+                "summary": get_badges_resum_edifici(edifici, temporada=temporada, limit=5),
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 
@@ -1037,6 +1079,14 @@ class MilloraImplementadaViewSet(viewsets.GenericViewSet):
                 millora_impl.simulacio.save(update_fields=["estatAplicacio"])
 
         output_serializer = MilloraImplementadaSerializer(millora_impl)
+        try:
+            millora_validada = getattr(output_serializer, "instance", None)
+            if millora_validada and getattr(millora_validada, "edifici_id", None):
+                recalcular_insignies_edifici(millora_validada.edifici)
+        except Exception:
+            # El recalcul de badges no ha de bloquejar la validació d'una millora.
+            pass
+
         return Response(output_serializer.data, status=status.HTTP_200_OK)
 
 

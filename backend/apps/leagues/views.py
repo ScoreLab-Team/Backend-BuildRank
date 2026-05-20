@@ -1,4 +1,4 @@
-from rest_framework import viewsets
+from rest_framework import viewsets, status
 from rest_framework.decorators import action, permission_classes
 from rest_framework.response import Response
 from .pagination import RankingPagination
@@ -110,17 +110,36 @@ class LligaViewSet(viewsets.ModelViewSet):
     def evolucio(self, request):
         edifici_id = request.query_params.get("edifici")
         categoria = request.query_params.get("categoria")
+        limit = request.query_params.get("limit")
 
         if not edifici_id or not categoria:
             return Response(
                 {"error": "edifici and categoria are required"},
-                status=400
+                status=status.HTTP_400_BAD_REQUEST
             )
 
         historial = RankingHistorico.objects.filter(
             edifici_id=edifici_id,
             categoria=categoria.upper()
         ).select_related("temporada").order_by("temporada__dataInici")
+
+        if limit is not None:
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": "limit must be a positive integer"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if limit <= 0:
+                return Response(
+                    {"error": "limit must be a positive integer"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            historial = list(historial.order_by("-temporada__dataInici")[:limit])
+            historial.reverse()
 
         data = [
             {

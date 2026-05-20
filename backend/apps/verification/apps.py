@@ -5,3 +5,6 @@ class VerificationConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'apps.verification'
     verbose_name = 'Verificació de documents'
+
+    def ready(self):
+        import apps.verification.signals  

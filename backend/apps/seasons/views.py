@@ -16,7 +16,7 @@ from .serializers import TemporadaSerializer
 from .services import actualitzar_puntuacions_base_inici_temporada
 from apps.participations.models import Participacio
 from apps.participations.serializers import RankingSerializer
-from apps.leagues.models import Lliga
+from apps.leagues.models import Lliga, RankingHistorico
 from apps.buildings.models import GrupComparable
 from apps.leagues.pagination import RankingPagination
 
@@ -27,7 +27,7 @@ class TemporadaViewSet(viewsets.ModelViewSet):
     permission_classes=[IsAuthenticated]
 
     def get_permissions(self):
-        if self.action in ['list', 'retrieve', 'ranking', 'posicio_edifici']:
+        if self.action in ['list', 'retrieve', 'ranking', 'ranking_progres', 'posicio_edifici']:
             return [IsAuthenticated()]
         return [IsAdminSistema()]
 
@@ -112,6 +112,101 @@ class TemporadaViewSet(viewsets.ModelViewSet):
             item["posicio"] = participacio.posicio_calculada
 
         return paginator.get_paginated_response(data)
+
+    @action(detail=True, methods=["get"], url_path="ranking/progres")
+    def ranking_progres(self, request, pk=None):
+        temporada = self.get_object()
+        window = request.query_params.get("window", 5)
+
+        try:
+            window = int(window)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "window must be a positive integer"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if window <= 0:
+            return Response(
+                {"error": "window must be a positive integer"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        temporades = list(
+            Temporada.objects
+            .filter(dataInici__lte=temporada.dataInici)
+            .order_by("-dataInici")[:window]
+        )
+        temporades.reverse()
+        temporada_ids = [t.id_temporada for t in temporades]
+
+        snapshots_actuals = list(
+            RankingHistorico.objects
+            .select_related("edifici", "edifici__localitzacio", "temporada")
+            .filter(temporada=temporada, categoria="PROGRES")
+        )
+        edifici_ids = [snapshot.edifici_id for snapshot in snapshots_actuals]
+
+        historial = (
+            RankingHistorico.objects
+            .select_related("edifici", "edifici__localitzacio", "temporada")
+            .filter(
+                edifici_id__in=edifici_ids,
+                temporada_id__in=temporada_ids,
+                categoria="PROGRES",
+            )
+            .order_by("edifici_id", "temporada__dataInici")
+        )
+
+        series_per_edifici = {}
+        for snapshot in historial:
+            series_per_edifici.setdefault(snapshot.edifici_id, []).append(snapshot)
+
+        ranking = []
+        for snapshot_actual in snapshots_actuals:
+            serie = series_per_edifici.get(snapshot_actual.edifici_id, [])
+            if not serie:
+                continue
+
+            snapshot_inicial = serie[0]
+            puntuacio_actual = snapshot_actual.puntuacio
+            puntuacio_inicial = snapshot_inicial.puntuacio
+            delta = puntuacio_actual - puntuacio_inicial
+            edifici = snapshot_actual.edifici
+            localitzacio = edifici.localitzacio
+
+            ranking.append({
+                "edifici": edifici.idEdifici,
+                "nom": str(edifici),
+                "adreca": str(localitzacio) if localitzacio else None,
+                "puntuacio_inicial": puntuacio_inicial,
+                "puntuacio_actual": puntuacio_actual,
+                "delta": delta,
+                "divisio_actual": snapshot_actual.divisio,
+                "serie_temporal": [
+                    {
+                        "temporada": item.temporada.id_temporada,
+                        "nom_temporada": item.temporada.nom,
+                        "puntuacio": item.puntuacio,
+                        "posicio": item.posicio,
+                        "divisio": item.divisio,
+                    }
+                    for item in serie
+                ],
+            })
+
+        ranking.sort(
+            key=lambda item: (
+                -item["delta"],
+                -item["puntuacio_actual"],
+                item["edifici"],
+            )
+        )
+
+        for posicio, item in enumerate(ranking, start=1):
+            item["posicio"] = posicio
+
+        return Response(ranking)
 
     @action(detail=True, methods=["get"])
     def posicio_edifici(self, request, pk=None):

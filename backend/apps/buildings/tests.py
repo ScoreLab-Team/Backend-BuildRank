@@ -4037,3 +4037,139 @@ class BadgeModelTests(BaseTestData):
         self.assertEqual(assignacio.temporada, temporada)
         self.assertEqual(assignacio.valor_snapshot, Decimal("62.50"))
         self.assertEqual(assignacio.metadata["font"], "test")
+
+
+
+class BadgeServiceTests(BaseTestData):
+    def setUp(self):
+        super().setUp()
+        self.admin_badges = get_user_model().objects.create_user(
+            email="admin.badges.service@test.com",
+            password="TestPassword123",
+        )
+        self.localitzacio_badges = Localitzacio.objects.create(
+            carrer="Carrer Badges Service",
+            numero=2,
+            codiPostal="08002",
+        )
+        self.edifici = Edifici.objects.create(
+            localitzacio=self.localitzacio_badges,
+            anyConstruccio=2005,
+            superficieTotal=700,
+            administradorFinca=self.admin_badges,
+        )
+
+        from apps.seasons.models import Temporada
+        from datetime import date
+
+        self.temporada = Temporada.objects.create(
+            nom="Temporada Badges Service",
+            dataInici=date(2026, 1, 1),
+            dataFi=date(2026, 12, 31),
+        )
+
+    def test_crear_definicions_base_es_idempotent(self):
+        from apps.buildings.services.badges import crear_definicions_badges_base
+
+        primera = crear_definicions_badges_base()
+        segona = crear_definicions_badges_base()
+
+        self.assertIn("OR_BHS", primera)
+        self.assertIn("DADES_VERIFICADES", segona)
+        self.assertEqual(BadgeDefinition.objects.filter(code="OR_BHS").count(), 1)
+
+    def test_assigna_medalla_or_bhs_per_temporada(self):
+        from apps.buildings.services.badges import assignar_insignies_edifici
+
+        assignades = assignar_insignies_edifici(
+            self.edifici,
+            temporada=self.temporada,
+            metrics={"bhs": 91},
+        )
+
+        self.assertEqual(len(assignades), 1)
+        self.assertTrue(
+            BuildingBadge.objects.filter(
+                edifici=self.edifici,
+                temporada=self.temporada,
+                badge__code="OR_BHS",
+            ).exists()
+        )
+
+    def test_millor_medalla_bhs_substitueix_l_anterior(self):
+        from apps.buildings.services.badges import assignar_insignies_edifici
+
+        assignar_insignies_edifici(
+            self.edifici,
+            temporada=self.temporada,
+            metrics={"bhs": 72},
+        )
+        assignar_insignies_edifici(
+            self.edifici,
+            temporada=self.temporada,
+            metrics={"bhs": 90},
+        )
+
+        self.assertFalse(
+            BuildingBadge.objects.filter(
+                edifici=self.edifici,
+                temporada=self.temporada,
+                badge__code="PLATA_BHS",
+            ).exists()
+        )
+        self.assertTrue(
+            BuildingBadge.objects.filter(
+                edifici=self.edifici,
+                temporada=self.temporada,
+                badge__code="OR_BHS",
+            ).exists()
+        )
+
+    def test_assigna_badge_permanent_dades_verificades_sense_temporada(self):
+        from apps.buildings.services.badges import assignar_insignies_edifici
+
+        assignar_insignies_edifici(
+            self.edifici,
+            temporada=self.temporada,
+            metrics={"dades_verificades": True},
+        )
+        assignar_insignies_edifici(
+            self.edifici,
+            temporada=self.temporada,
+            metrics={"dades_verificades": True},
+        )
+
+        self.assertEqual(
+            BuildingBadge.objects.filter(
+                edifici=self.edifici,
+                temporada__isnull=True,
+                badge__code="DADES_VERIFICADES",
+            ).count(),
+            1,
+        )
+
+    def test_assigna_multiples_badges_temporada(self):
+        from apps.buildings.services.badges import assignar_insignies_edifici
+
+        assignar_insignies_edifici(
+            self.edifici,
+            temporada=self.temporada,
+            metrics={
+                "bhs": 88,
+                "emissions": 8,
+                "millores_validades": 2,
+                "progres_bhs": 12,
+                "dades_verificades": True,
+            },
+        )
+
+        codis = set(
+            BuildingBadge.objects.filter(edifici=self.edifici)
+            .values_list("badge__code", flat=True)
+        )
+
+        self.assertIn("OR_BHS", codis)
+        self.assertIn("BAIXES_EMISSIONS", codis)
+        self.assertIn("MILLORA_IMPLEMENTADA", codis)
+        self.assertIn("PROGRES_DESTACAT", codis)
+        self.assertIn("DADES_VERIFICADES", codis)

@@ -3,7 +3,7 @@
 from django.utils import timezone
 
 from django.contrib import admin
-from .models import Edifici, EdificiAuditLog, Habitatge, DadesEnergetiques, Localitzacio, GrupComparable, VotacioSimulacioMillora, VotSimulacioMillora
+from .models import BadgeDefinition, BuildingBadge, Edifici, EdificiAuditLog, Habitatge, DadesEnergetiques, Localitzacio, GrupComparable, VotacioSimulacioMillora, VotSimulacioMillora
 
 # ---------------------------------------------------------------------------
 # Edifici
@@ -199,3 +199,20 @@ class VotSimulacioMilloraAdmin(admin.ModelAdmin):
     list_display = ('id', 'votacio', 'usuari', 'sentit', 'data')
     list_filter = ('sentit',)
     search_fields = ('usuari__email',)
+
+
+@admin.register(BadgeDefinition)
+class BadgeDefinitionAdmin(admin.ModelAdmin):
+    list_display = ('code', 'nom', 'categoria', 'scope', 'activa')
+    list_filter = ('categoria', 'scope', 'activa')
+    search_fields = ('code', 'nom', 'descripcio')
+    ordering = ('categoria', 'code')
+
+
+@admin.register(BuildingBadge)
+class BuildingBadgeAdmin(admin.ModelAdmin):
+    list_display = ('edifici', 'badge', 'temporada', 'valor_snapshot', 'awarded_at')
+    list_filter = ('badge__categoria', 'badge__scope', 'temporada')
+    search_fields = ('edifici__nom', 'badge__code', 'badge__nom')
+    raw_id_fields = ('edifici', 'temporada', 'badge')
+    readonly_fields = ('awarded_at',)

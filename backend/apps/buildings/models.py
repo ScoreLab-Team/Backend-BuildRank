@@ -1,5 +1,6 @@
 # apps/buildings/models.py
 from django.db import models
+from django.db.models import Q
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import Avg
@@ -985,3 +986,95 @@ class ImportacioIncidencia(models.Model):
 
     class Meta:
         ordering = ['id']
+
+
+
+class BadgeScope(models.TextChoices):
+    SEASONAL = 'seasonal', 'Per temporada'
+    PERMANENT = 'permanent', 'Permanent'
+
+
+class BadgeCategory(models.TextChoices):
+    SCORE = 'score', 'Puntuació'
+    EMISSIONS = 'emissions', 'Emissions'
+    DATA_QUALITY = 'data_quality', 'Qualitat de dades'
+    IMPROVEMENT = 'improvement', 'Millores'
+    PROGRESS = 'progress', 'Progrés'
+    GENERAL = 'general', 'General'
+
+
+class BadgeDefinition(models.Model):
+    code = models.CharField(max_length=50, unique=True)
+    nom = models.CharField(max_length=100)
+    descripcio = models.TextField(blank=True)
+    categoria = models.CharField(
+        max_length=30,
+        choices=BadgeCategory.choices,
+        default=BadgeCategory.GENERAL,
+    )
+    scope = models.CharField(
+        max_length=20,
+        choices=BadgeScope.choices,
+        default=BadgeScope.SEASONAL,
+    )
+    criteris = models.JSONField(default=dict, blank=True)
+    activa = models.BooleanField(default=True)
+    createdAt = models.DateTimeField(auto_now_add=True)
+    updatedAt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['categoria', 'code']
+        verbose_name = 'Definició d’insígnia'
+        verbose_name_plural = 'Definicions d’insígnies'
+
+    def __str__(self):
+        return f"{self.code} - {self.nom}"
+
+
+class BuildingBadge(models.Model):
+    edifici = models.ForeignKey(
+        Edifici,
+        on_delete=models.CASCADE,
+        related_name='badges',
+    )
+    temporada = models.ForeignKey(
+        'seasons.Temporada',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='building_badges',
+    )
+    badge = models.ForeignKey(
+        BadgeDefinition,
+        on_delete=models.CASCADE,
+        related_name='assignacions',
+    )
+    awarded_at = models.DateTimeField(auto_now_add=True)
+    valor_snapshot = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['-awarded_at']
+        verbose_name = 'Insígnia d’edifici'
+        verbose_name_plural = 'Insígnies d’edificis'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['edifici', 'temporada', 'badge'],
+                condition=Q(temporada__isnull=False),
+                name='unique_badge_per_edifici_temporada',
+            ),
+            models.UniqueConstraint(
+                fields=['edifici', 'badge'],
+                condition=Q(temporada__isnull=True),
+                name='unique_permanent_badge_per_edifici',
+            ),
+        ]
+
+    def __str__(self):
+        temporada_label = self.temporada_id if self.temporada_id else 'permanent'
+        return f"{self.edifici_id} · {self.badge.code} · {temporada_label}"

@@ -6,9 +6,11 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.db import IntegrityError, transaction
+from decimal import Decimal
 from django.core.files.uploadedfile import SimpleUploadedFile
 
-from apps.buildings.models import CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora, SimulacioMilloraItem, EstatAplicacioSimulacio, RolVinculacioHabitatge, TipusEdifici
+from apps.buildings.models import BadgeDefinition, BuildingBadge, BadgeScope, BadgeCategory, CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora, SimulacioMilloraItem, EstatAplicacioSimulacio, RolVinculacioHabitatge, TipusEdifici
 from apps.buildings.serializers import EdificiDetailSerializer, LocalitzacioSerializer
 from apps.accounts.models import RoleChoices, ValidacioAdmin
 from .simulation.engine import simular_millores, clamp, UnitatBaseMillora
@@ -3949,3 +3951,89 @@ class LocalitzacioCoordinatesTests(APITestCase):
 
         self.assertIsNone(localitzacio.latitud)
         self.assertIsNone(localitzacio.longitud)
+
+
+
+class BadgeModelTests(BaseTestData):
+    def setUp(self):
+        super().setUp()
+        self.admin_badges = get_user_model().objects.create_user(
+            email="admin.badges@test.com",
+            password="TestPassword123",
+        )
+        self.localitzacio_badges = Localitzacio.objects.create(
+            carrer="Carrer Badges",
+            numero=1,
+            codiPostal="08001",
+        )
+        self.edifici = Edifici.objects.create(
+            localitzacio=self.localitzacio_badges,
+            anyConstruccio=2000,
+            superficieTotal=500,
+            administradorFinca=self.admin_badges,
+        )
+
+    def test_crear_badge_definition(self):
+        badge = BadgeDefinition.objects.create(
+            code="OR_BHS",
+            nom="Or BHS",
+            descripcio="Edifici amb puntuació alta durant la temporada.",
+            categoria=BadgeCategory.SCORE,
+            scope=BadgeScope.SEASONAL,
+            criteris={"bhs_min": 85},
+        )
+
+        self.assertEqual(badge.code, "OR_BHS")
+        self.assertTrue(badge.activa)
+        self.assertEqual(str(badge), "OR_BHS - Or BHS")
+
+    def test_assignar_badge_permanent_unic_per_edifici(self):
+        badge = BadgeDefinition.objects.create(
+            code="DADES_VERIFICADES",
+            nom="Dades verificades",
+            categoria=BadgeCategory.DATA_QUALITY,
+            scope=BadgeScope.PERMANENT,
+        )
+
+        BuildingBadge.objects.create(
+            edifici=self.edifici,
+            badge=badge,
+            valor_snapshot=Decimal("100.00"),
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                BuildingBadge.objects.create(
+                    edifici=self.edifici,
+                    badge=badge,
+                    valor_snapshot=Decimal("100.00"),
+                )
+
+    def test_assignar_badge_estacional_amb_temporada(self):
+        from apps.seasons.models import Temporada
+        from datetime import date
+
+        temporada = Temporada.objects.create(
+            nom="Temporada Test",
+            dataInici=date(2026, 1, 1),
+            dataFi=date(2026, 12, 31),
+        )
+        badge = BadgeDefinition.objects.create(
+            code="BRONZE_BHS",
+            nom="Bronze BHS",
+            categoria=BadgeCategory.SCORE,
+            scope=BadgeScope.SEASONAL,
+            criteris={"bhs_min": 50},
+        )
+
+        assignacio = BuildingBadge.objects.create(
+            edifici=self.edifici,
+            temporada=temporada,
+            badge=badge,
+            valor_snapshot=Decimal("62.50"),
+            metadata={"font": "test"},
+        )
+
+        self.assertEqual(assignacio.temporada, temporada)
+        self.assertEqual(assignacio.valor_snapshot, Decimal("62.50"))
+        self.assertEqual(assignacio.metadata["font"], "test")

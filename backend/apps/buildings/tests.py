@@ -4501,3 +4501,129 @@ class EdificiMapSerializerEnrichedTests(APITestCase):
         self.assertEqual(properties["bhs"]["font"], "sense_dades")
         self.assertFalse(properties["bhs"]["rankejable"])
         self.assertEqual(properties["procedenciaDades"]["tipus"], "insuficient")
+
+
+
+class NormalitzarCeeCommandTests(TestCase):
+    """Tests del command normalitzar_cee."""
+
+    def setUp(self):
+        self.output_paths = []
+
+    def tearDown(self):
+        for path in self.output_paths:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def _output_path(self, filename):
+        path = os.path.join(tempfile.gettempdir(), filename)
+        self.output_paths.append(path)
+        return path
+
+    def _read_output(self, path):
+        with open(path, newline="", encoding="utf-8") as handle:
+            return list(csv.DictReader(handle))
+
+    def test_normalitzar_cee_genera_csv_lleuger(self):
+        csv_path = _csv_amb_files([
+            _fila_base(**{
+                "NUM_CAS": "NORM001",
+                "ADREÇA": "Carrer Normalitzat",
+                "NUMERO": "1",
+                "METRES_CADASTRE": "80,5",
+            }),
+            _fila_base(**{
+                "NUM_CAS": "NORM002",
+                "ADREÇA": "Carrer Normalitzat",
+                "NUMERO": "1",
+                "PORTA": "B",
+                "METRES_CADASTRE": "70,5",
+            }),
+        ])
+        output_path = self._output_path("cee_normalitzat_test.csv")
+
+        try:
+            call_command("normalitzar_cee", csv_path, output=output_path)
+            rows = self._read_output(output_path)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["carrer"], "Carrer Normalitzat")
+            self.assertEqual(rows[0]["numero"], "1")
+            self.assertEqual(rows[0]["num_certificats"], "2")
+            self.assertEqual(rows[0]["coord_estat"], "ok")
+            self.assertEqual(rows[0]["necessita_geocodificacio"], "false")
+            self.assertEqual(rows[0]["font_dades"], "open_data_cee")
+        finally:
+            os.unlink(csv_path)
+
+    def test_normalitzar_cee_marca_sense_coordenades(self):
+        csv_path = _csv_amb_files([
+            _fila_base(**{
+                "NUM_CAS": "NORM-NOCOORDS",
+                "LATITUD": "",
+                "LONGITUD": "",
+            }),
+        ])
+        output_path = self._output_path("cee_normalitzat_sense_coords.csv")
+
+        try:
+            call_command("normalitzar_cee", csv_path, output=output_path)
+            rows = self._read_output(output_path)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["latitud"], "")
+            self.assertEqual(rows[0]["longitud"], "")
+            self.assertEqual(rows[0]["coord_estat"], "sense_coordenades")
+            self.assertEqual(rows[0]["necessita_geocodificacio"], "true")
+        finally:
+            os.unlink(csv_path)
+
+    def test_normalitzar_cee_filtra_only_with_coords(self):
+        csv_path = _csv_amb_files([
+            _fila_base(**{
+                "NUM_CAS": "NORM-OK",
+                "ADREÇA": "Carrer Amb Coordenades",
+                "NUMERO": "1",
+                "LATITUD": "41,38879",
+                "LONGITUD": "2,15899",
+            }),
+            _fila_base(**{
+                "NUM_CAS": "NORM-SENSE",
+                "ADREÇA": "Carrer Sense Coordenades",
+                "NUMERO": "2",
+                "LATITUD": "",
+                "LONGITUD": "",
+            }),
+        ])
+        output_path = self._output_path("cee_normalitzat_only_coords.csv")
+
+        try:
+            call_command(
+                "normalitzar_cee",
+                csv_path,
+                output=output_path,
+                only_with_coords=True,
+            )
+            rows = self._read_output(output_path)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["num_cas_origen"], "NORM-OK")
+            self.assertEqual(rows[0]["coord_estat"], "ok")
+        finally:
+            os.unlink(csv_path)
+
+    def test_normalitzar_cee_respecta_limit(self):
+        csv_path = _csv_amb_files([
+            _fila_base(**{"NUM_CAS": "LIM001", "ADREÇA": "Carrer Limit", "NUMERO": "1"}),
+            _fila_base(**{"NUM_CAS": "LIM002", "ADREÇA": "Carrer Limit", "NUMERO": "2"}),
+            _fila_base(**{"NUM_CAS": "LIM003", "ADREÇA": "Carrer Limit", "NUMERO": "3"}),
+        ])
+        output_path = self._output_path("cee_normalitzat_limit.csv")
+
+        try:
+            call_command("normalitzar_cee", csv_path, output=output_path, limit=2)
+            rows = self._read_output(output_path)
+
+            self.assertEqual(len(rows), 2)
+        finally:
+            os.unlink(csv_path)

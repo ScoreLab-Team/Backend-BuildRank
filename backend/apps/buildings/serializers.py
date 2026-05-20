@@ -24,6 +24,7 @@ from datetime import date
 
 from apps.accounts.models import RoleChoices
 from .scoring import calcular_classificacio_estimada, calcular_heat_risk_index
+from apps.buildings.services.badges import get_badges_resum_edifici
 from django.db import transaction
 from django.contrib.auth import get_user_model
 
@@ -317,6 +318,10 @@ class EdificiMapSerializer(serializers.ModelSerializer):
             "classificacioEstimada": obj.classificacioEstimada,
             "classificacioFont": obj.classificacioFont,
             "fontOpenData": obj.font_open_data,
+            "procedenciaDades": self.get_procedencia_dades(obj),
+            "bhs": self.get_bhs_summary(obj, score),
+            "heatRisk": self.get_heat_risk_summary(obj),
+            "badgesSummary": self.get_badges_summary(obj),
             "detailEndpoint": f"/api/buildings/edificis/{obj.idEdifici}/",
         }
 
@@ -331,6 +336,108 @@ class EdificiMapSerializer(serializers.ModelSerializer):
             return "MILLORABLE"
         return "PRIORITARI"
 
+    def _round_nullable(self, value):
+        if value is None:
+            return None
+        try:
+            return round(float(value), 2)
+        except (TypeError, ValueError):
+            return None
+
+    def _score_font(self, obj):
+        if getattr(obj, "puntuacioBase", None) is not None:
+            return "usuaris"
+        if getattr(obj, "puntuacioBaseOpenData", None) is not None:
+            return "open_data"
+        return "sense_dades"
+
+    def get_procedencia_dades(self, obj):
+        score_font = self._score_font(obj)
+
+        if getattr(obj, "font_open_data", False) or score_font == "open_data":
+            return {
+                "tipus": "open_data",
+                "label": "Open Data / registre oficial",
+                "descripcio": "Dades procedents de fonts obertes o registres oficials integrats al sistema.",
+                "esOficial": True,
+                "esEstimada": False,
+            }
+
+        if score_font == "usuaris":
+            return {
+                "tipus": "usuaris",
+                "label": "Dades aportades o validades per la comunitat",
+                "descripcio": "Informació calculada a partir de dades introduïdes o revisades dins de BuildRank.",
+                "esOficial": False,
+                "esEstimada": True,
+            }
+
+        return {
+            "tipus": "insuficient",
+            "label": "Dades insuficients",
+            "descripcio": "Encara no hi ha prou informació pública per calcular indicadors fiables.",
+            "esOficial": False,
+            "esEstimada": True,
+        }
+
+    def get_bhs_summary(self, obj, score=None):
+        font = self._score_font(obj)
+
+        if score is None:
+            score = (
+                getattr(obj, "puntuacioBase", None)
+                if getattr(obj, "puntuacioBase", None) is not None
+                else getattr(obj, "puntuacioBaseOpenData", None)
+            )
+
+        rounded_score = self._round_nullable(score)
+
+        if rounded_score is None:
+            label = "Sense puntuació"
+        elif rounded_score >= 85:
+            label = "Excel·lent"
+        elif rounded_score >= 70:
+            label = "Notable"
+        elif rounded_score >= 50:
+            label = "Correcte"
+        else:
+            label = "Millorable"
+
+        return {
+            "score": rounded_score,
+            "font": font,
+            "label": label,
+            "rankejable": rounded_score is not None,
+        }
+
+    def get_heat_risk_summary(self, obj):
+        index = self._round_nullable(getattr(obj, "heatRiskIndex", None))
+        font = getattr(obj, "heatRiskFont", None)
+
+        if index is None:
+            etiqueta = "Sense dades"
+        elif index >= 75:
+            etiqueta = "Risc alt"
+        elif index >= 50:
+            etiqueta = "Risc mitjà"
+        elif index >= 25:
+            etiqueta = "Risc moderat"
+        else:
+            etiqueta = "Risc baix"
+
+        return {
+            "index": index,
+            "font": font,
+            "etiqueta": etiqueta,
+        }
+
+    def get_badges_summary(self, obj):
+        try:
+            return get_badges_resum_edifici(obj, limit=3)
+        except Exception:
+            return []
+
+
 def _etiqueta_font(font: str | None) -> str:
     """Retorna una etiqueta llegible per a la UI segons l'origen de la classificació."""
     etiquetes = {
@@ -341,6 +448,7 @@ def _etiqueta_font(font: str | None) -> str:
     return etiquetes.get(font, '— Sense classificació')
 
 # Edifici 2. Detall públic (localitzacio anidada + camps extra)
+
 class EdificiDetailSerializer(serializers.ModelSerializer):
     localitzacio = LocalitzacioSerializer(read_only=True)
 

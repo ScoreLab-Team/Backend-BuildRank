@@ -11,7 +11,7 @@ from decimal import Decimal
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from apps.buildings.models import BadgeDefinition, BuildingBadge, BadgeScope, BadgeCategory, CatalegMillora, Edifici, EdificiAuditLog, EstatValidacio, Habitatge, Localitzacio, GrupComparable, MilloraImplementada, SimulacioMillora, SimulacioMilloraItem, EstatAplicacioSimulacio, RolVinculacioHabitatge, TipusEdifici
-from apps.buildings.serializers import EdificiDetailSerializer, LocalitzacioSerializer
+from apps.buildings.serializers import EdificiDetailSerializer, EdificiMapSerializer, LocalitzacioSerializer
 from apps.accounts.models import RoleChoices, ValidacioAdmin
 from .simulation.engine import simular_millores, clamp, UnitatBaseMillora
 
@@ -4332,3 +4332,89 @@ class BadgeEndpointTests(BaseTestData):
             response.status_code,
             [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
         )
+
+
+
+class EdificiMapSerializerEnrichedTests(APITestCase):
+    def setUp(self):
+        self.admin = get_user_model().objects.create_user(
+            email="admin.map.enriched@test.com",
+            password="TestPassword123",
+        )
+        self.admin.profile.role = RoleChoices.ADMIN
+        self.admin.profile.save(update_fields=["role"])
+
+        self.localitzacio = Localitzacio.objects.create(
+            carrer="Carrer Mapa Enriquit",
+            numero=10,
+            codiPostal="08010",
+            latitud=41.3902,
+            longitud=2.1540,
+        )
+
+        self.edifici = Edifici.objects.create(
+            localitzacio=self.localitzacio,
+            anyConstruccio=2012,
+            superficieTotal=1200,
+            administradorFinca=self.admin,
+            puntuacioBase=72.5,
+            font_open_data=True,
+            heatRiskIndex=42.0,
+            heatRiskFont="usuaris",
+        )
+
+        badge = BadgeDefinition.objects.create(
+            code="MAPA_BADGE_TEST",
+            nom="Badge mapa test",
+            categoria=BadgeCategory.GENERAL,
+            scope=BadgeScope.PERMANENT,
+        )
+        BuildingBadge.objects.create(
+            edifici=self.edifici,
+            badge=badge,
+            metadata={"font": "test"},
+        )
+
+    def test_map_serializer_inclou_card_publica_enriquida(self):
+        data = EdificiMapSerializer(self.edifici).data
+        properties = data["properties"]
+
+        self.assertIn("procedenciaDades", properties)
+        self.assertIn("bhs", properties)
+        self.assertIn("heatRisk", properties)
+        self.assertIn("badgesSummary", properties)
+
+        self.assertEqual(properties["bhs"]["score"], 72.5)
+        self.assertEqual(properties["bhs"]["font"], "usuaris")
+        self.assertEqual(properties["heatRisk"]["index"], 42.0)
+        self.assertGreaterEqual(len(properties["badgesSummary"]), 1)
+
+    def test_map_serializer_no_exposa_dades_privades(self):
+        data = EdificiMapSerializer(self.edifici).data
+        properties = data["properties"]
+
+        self.assertNotIn("habitatges", properties)
+        self.assertNotIn("usuari", properties)
+        self.assertNotIn("administradorFinca", properties)
+        self.assertNotIn("email", properties)
+
+    def test_map_serializer_indica_dades_insuficients_quan_no_hi_ha_score(self):
+        edifici_sense_score = Edifici.objects.create(
+            localitzacio=Localitzacio.objects.create(
+                carrer="Carrer Sense Score",
+                numero=11,
+                codiPostal="08011",
+                latitud=41.4000,
+                longitud=2.1600,
+            ),
+            anyConstruccio=1990,
+            superficieTotal=900,
+            administradorFinca=self.admin,
+        )
+
+        properties = EdificiMapSerializer(edifici_sense_score).data["properties"]
+
+        self.assertEqual(properties["bhs"]["score"], None)
+        self.assertEqual(properties["bhs"]["font"], "sense_dades")
+        self.assertFalse(properties["bhs"]["rankejable"])
+        self.assertEqual(properties["procedenciaDades"]["tipus"], "insuficient")

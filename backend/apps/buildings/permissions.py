@@ -41,7 +41,7 @@ class EsAdminEdifici(BasePermission):
 
     def has_object_permission(self, request, view, obj):
         # ABAC
-        if obj.administradorFinca != request.user:
+        if not _es_admin_finca_efectiu(request.user, obj):
             log_denial(request, view.action, 'No és admin d\'aquest edifici', obj.idEdifici)
             return False
         return True
@@ -69,7 +69,7 @@ class EsAdminOPropietariEdifici(BasePermission):
         role = user.profile.role
 
         # ABAC + RBAC combinats
-        if role == RoleChoices.ADMIN and obj.administradorFinca == user:
+        if role == RoleChoices.ADMIN and _es_admin_finca_efectiu(user, obj):
             return True
         te_vinculacio_edifici = (
             obj.habitatges.filter(usuari=user).exists()
@@ -110,7 +110,7 @@ class EsAdminOPropietariHabitatge(BasePermission):
         user = request.user
         role = user.profile.role
 
-        if role == RoleChoices.ADMIN and obj.edifici.administradorFinca == user:
+        if role == RoleChoices.ADMIN and _es_admin_finca_efectiu(user, obj.edifici):
             return True
         if role in (RoleChoices.OWNER, RoleChoices.TENANT) and obj.te_vinculacio(user):
             return True
@@ -140,7 +140,7 @@ class EsOwnerOAdminHabitatge(BasePermission):
         user = request.user
         role = user.profile.role
 
-        if role == RoleChoices.ADMIN and obj.edifici.administradorFinca == user:
+        if role == RoleChoices.ADMIN and _es_admin_finca_efectiu(user, obj.edifici):
             return True
         if role == RoleChoices.OWNER and obj.es_propietari(user):
             return True
@@ -208,6 +208,12 @@ class EsAdminMilloraImplementada(BasePermission):
 
     def has_object_permission(self, request, view, obj):
         return self.has_permission(request, view)
+
+
+
+def _es_admin_finca_efectiu(user, edifici):
+    from apps.verification.access import admin_assignment_is_effective
+    return admin_assignment_is_effective(user, edifici)
 
 
 class HasAPIKey(BasePermission):

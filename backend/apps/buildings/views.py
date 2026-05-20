@@ -160,7 +160,8 @@ class EdificiViewSet(viewsets.ModelViewSet):
         role = user.profile.role
         qs = Edifici.actius.all()
         if role == RoleChoices.ADMIN:
-            return qs.filter(administradorFinca=user)
+            from apps.verification.access import effective_admin_buildings_queryset
+            return effective_admin_buildings_queryset(qs, user)
         if role == RoleChoices.OWNER:
             return qs.filter(
                 Q(habitatges__usuari=user) |
@@ -182,11 +183,16 @@ class EdificiViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         """
-        Quan un administrador de finca crea un edifici, el backend el vincula
-        automàticament a l'usuari autenticat. El frontend no ha d'enviar
-        administradorFinca manualment.
+        Crear un edifici no concedeix gestió immediata a l'admin finca.
+
+        La vinculació efectiva s'ha de produir quan la verificació documental
+        passa a approved. Això evita que un usuari pugui accedir a l'edifici
+        mentre la documentació encara està pending/running/review.
         """
-        serializer.save(administradorFinca=self.request.user)
+        if self.request.user.is_superuser:
+            serializer.save()
+        else:
+            serializer.save(administradorFinca=None)
 
     def get_permissions(self):
         if self.action in ['destroy']:
@@ -430,18 +436,22 @@ class EdificiViewSet(viewsets.ModelViewSet):
         return items
 
     def _es_admin_de_finca_edifici(self, request, edifici):
-        return (
+        if not (
             request.user.is_authenticated
             and hasattr(request.user, 'profile')
             and request.user.profile.role == RoleChoices.ADMIN
-            and edifici.administradorFinca_id == request.user.id
-        )
+        ):
+            return False
+
+        from apps.verification.access import admin_assignment_is_effective
+        return admin_assignment_is_effective(request.user, edifici)
 
     def _pot_votar_votacio(self, user, edifici):
         if not user.is_authenticated or not hasattr(user, 'profile'):
             return False
 
-        if edifici.administradorFinca_id == user.id:
+        from apps.verification.access import admin_assignment_is_effective
+        if admin_assignment_is_effective(user, edifici):
             return True
 
         if user.profile.role != RoleChoices.OWNER:
@@ -1010,7 +1020,8 @@ class EdificiViewSet(viewsets.ModelViewSet):
         user = request.user
 
         is_system_admin = bool(user.is_staff or user.is_superuser)
-        is_finca_admin = bool(edifici.administradorFinca_id == user.id)
+        from apps.verification.access import admin_assignment_is_effective
+        is_finca_admin = admin_assignment_is_effective(user, edifici)
 
         if not (is_system_admin or is_finca_admin):
             return Response(
@@ -1713,10 +1724,18 @@ class AdminFincaEdificiAltaView(APIView):
                     status=status.HTTP_409_CONFLICT
                 )
             
-            # Assignar si existeix però no té admin
-            edifici.administradorFinca = request.user
-            edifici.save()
-            return Response({"message": "Edifici assignat correctament."}, status=status.HTTP_200_OK)
+            # No assignem encara: cal verificació documental approved.
+            return Response(
+                {
+                    "message": (
+                        "Edifici localitzat. Per administrar-lo cal completar "
+                        "i aprovar la verificació documental."
+                    ),
+                    "edifici_id": edifici.idEdifici,
+                    "requereix_verificacio": True,
+                },
+                status=status.HTTP_200_OK,
+            )
         
         # Si l'edifici no existeix, el creem i l'assignem
         if not loc:
@@ -1734,10 +1753,17 @@ class AdminFincaEdificiAltaView(APIView):
             superficieTotal=data.get('superficieTotal'),
             reglament=data.get('reglament'),
             orientacioPrincipal=data.get('orientacioPrincipal'),
-            administradorFinca=request.user,
+            administradorFinca=None,
         )
 
         return Response(
-            {"message": "Edifici creat i assignat correctament.", "edifici_id": nouEdifici.idEdifici}, 
+            {
+                "message": (
+                    "Edifici creat. Per administrar-lo cal completar "
+                    "i aprovar la verificació documental."
+                ),
+                "edifici_id": nouEdifici.idEdifici,
+                "requereix_verificacio": True,
+            },
             status=status.HTTP_201_CREATED
         )

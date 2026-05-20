@@ -91,12 +91,18 @@ class ABACMixin:
             return  # Accés total
 
         if role == RoleChoices.ADMIN:
-            te_acces = user.edificis_administrats.filter(idEdifici=edifici_id).exists()
+            from apps.buildings.models import Edifici
+            from apps.verification.access import effective_admin_buildings_queryset
+
+            te_acces = effective_admin_buildings_queryset(
+                Edifici.objects.filter(idEdifici=edifici_id),
+                user,
+            ).exists()
             if not te_acces:
                 _deny(
                     request,
                     accio,
-                    "L'edifici no pertany a la cartera de gestió de l'administrador."
+                    "L'edifici no pertany a la cartera de gestió aprovada de l'administrador."
                 )
         else:
             te_acces = user.habitatges_on_resideix.filter(edifici__idEdifici=edifici_id).exists()

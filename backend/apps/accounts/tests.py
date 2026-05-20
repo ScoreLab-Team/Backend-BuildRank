@@ -1598,3 +1598,103 @@ class GoogleOAuthTests(APITestCase):
                 email="invalid-role-google@example.com"
             ).exists()
         )
+
+
+class PendingAdminVerificationAccessTests(BaseTestData):
+    """Regressió: un admin finca no pot accedir a edificis amb verificació pendent."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin_finca = cls._create_user("pending-admin@example.com", RoleChoices.ADMIN)
+        cls.owner = cls._create_user("owner-pending@example.com", RoleChoices.OWNER)
+
+        cls.grup = GrupComparable.objects.create(
+            idGrup=909,
+            zonaClimatica="C2",
+            tipologia="Residencial",
+            rangSuperficie="100-200",
+        )
+
+        cls.edifici_pending = cls._create_edifici(
+            administrador=cls.admin_finca,
+            grup=cls.grup,
+            carrer="Carrer Pending",
+            numero=91,
+        )
+        cls.edifici_approved = cls._create_edifici(
+            administrador=cls.admin_finca,
+            grup=cls.grup,
+            carrer="Carrer Approved",
+            numero=92,
+        )
+        cls.edifici_legacy = cls._create_edifici(
+            administrador=cls.admin_finca,
+            grup=cls.grup,
+            carrer="Carrer Legacy",
+            numero=93,
+        )
+
+        Habitatge.objects.create(
+            referenciaCadastral="PENDING-OWNER-1",
+            planta="1",
+            porta="A",
+            superficie=80,
+            edifici=cls.edifici_pending,
+            usuari=cls.owner,
+            propietari=cls.owner,
+        )
+
+        from apps.verification.models import AdminFincaDocumentVerification
+
+        AdminFincaDocumentVerification.objects.create(
+            user=cls.admin_finca,
+            edifici=cls.edifici_pending,
+            status=AdminFincaDocumentVerification.Status.PENDING,
+        )
+        AdminFincaDocumentVerification.objects.create(
+            user=cls.admin_finca,
+            edifici=cls.edifici_approved,
+            status=AdminFincaDocumentVerification.Status.APPROVED,
+        )
+
+    def test_me_edificis_no_retorna_edifici_amb_verificacio_pending(self):
+        self.client.force_authenticate(user=self.admin_finca)
+
+        response = self.client.get(reverse("me-edificis"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = {item["idEdifici"] for item in response.data}
+
+        self.assertNotIn(self.edifici_pending.idEdifici, returned_ids)
+        self.assertIn(self.edifici_approved.idEdifici, returned_ids)
+        self.assertIn(self.edifici_legacy.idEdifici, returned_ids)
+
+    def test_admin_finca_pending_no_pot_accedir_detail_edifici(self):
+        self.client.force_authenticate(user=self.admin_finca)
+
+        response = self.client.get(
+            reverse("edifici-detail", args=[self.edifici_pending.idEdifici])
+        )
+
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+
+    def test_admin_finca_approved_pot_accedir_detail_edifici(self):
+        self.client.force_authenticate(user=self.admin_finca)
+
+        response = self.client.get(
+            reverse("edifici-detail", args=[self.edifici_approved.idEdifici])
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_owner_vinculat_no_es_bloqueja_per_verificacio_admin_pending(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(
+            reverse("edifici-detail", args=[self.edifici_pending.idEdifici])
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)

@@ -68,37 +68,44 @@ def flag_message(actor, message_id: str, channel_id: str, reason: str = "") -> N
     """Any channel member can flag a message. visible → flagged."""
     client = get_stream_client()
     actor_uid = get_stream_user_id(actor)
-    client.flag(message_id, user_id=actor_uid)
+    client.flag_message(message_id, user_id=actor_uid)
     _log(actor, "flag_message", channel_id, target_message_id=message_id,
          reason=reason, previous_state="visible", new_state="flagged")
 
 
 def hide_message(moderator, message_id: str, channel_id: str, reason: str = "") -> None:
-    """Moderator hides a message (soft-delete). flagged/visible → hidden."""
+    """Moderator hides a message: replaces content with a placeholder. visible → hidden."""
     client = get_stream_client()
-    channel_type, _, channel_name = _parse_channel(channel_id)
-    channel = client.channel(channel_type, channel_name)
-    channel.update_message({"id": message_id, "type": "hidden", "moderated": True})
+    # SDK v4: update_message exists on the client, not on the channel object.
+    # type:"hidden" is not a valid GetStream type; we replace the text instead so
+    # the message stays visible in the timeline as a placeholder (distinct from deleted).
+    client.update_message({
+        "id": message_id,
+        "text": "[Missatge ocult per moderació]",
+        "moderated": True,
+    })
     _log(moderator, "hide_message", channel_id, target_message_id=message_id,
          reason=reason, previous_state="visible", new_state="hidden")
 
 
 def delete_message(actor, message_id: str, channel_id: str, reason: str = "") -> None:
-    """Delete a message permanently."""
+    """Delete a message permanently (soft-delete in GetStream timeline)."""
     client = get_stream_client()
-    channel_type, _, channel_name = _parse_channel(channel_id)
-    channel = client.channel(channel_type, channel_name)
-    channel.delete_message(message_id)
+    # SDK v4: delete_message exists on the client, not on the channel object.
+    client.delete_message(message_id)
     _log(actor, "delete_message", channel_id, target_message_id=message_id,
          reason=reason, previous_state="visible", new_state="deleted")
 
 
 def restore_message(moderator, message_id: str, channel_id: str, reason: str = "") -> None:
-    """Restore a hidden message back to visible."""
+    """Clear moderation flag on a hidden message. hidden → visible.
+
+    Note: the original message text is not recoverable once overwritten by hide_message.
+    This call only clears the moderated:True custom field.
+    """
     client = get_stream_client()
-    channel_type, _, channel_name = _parse_channel(channel_id)
-    channel = client.channel(channel_type, channel_name)
-    channel.update_message({"id": message_id, "type": "regular", "moderated": False})
+    # SDK v4: update_message exists on the client, not on the channel object.
+    client.update_message({"id": message_id, "moderated": False})
     _log(moderator, "restore_message", channel_id, target_message_id=message_id,
          reason=reason, previous_state="hidden", new_state="visible")
 
@@ -107,7 +114,7 @@ def dismiss_flag(moderator, message_id: str, channel_id: str, reason: str = "") 
     """Dismiss a flag on a message, returning it to visible."""
     client = get_stream_client()
     moderator_uid = get_stream_user_id(moderator)
-    client.unflag(message_id, user_id=moderator_uid)
+    client.unflag_message(message_id, user_id=moderator_uid)
     _log(moderator, "dismiss_flag", channel_id, target_message_id=message_id,
          reason=reason, previous_state="flagged", new_state="visible")
 

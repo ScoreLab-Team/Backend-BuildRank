@@ -12,7 +12,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.exceptions import NotFound
 
 from apps.accounts.permissions import IsAdminSistema
-from .models import Temporada
+from .models import Temporada, EstatTemporada
 from .serializers import TemporadaSerializer
 from .services import actualitzar_puntuacions_base_inici_temporada
 from apps.participations.models import Participacio
@@ -161,6 +161,12 @@ class TemporadaViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["get"], url_path="ranking/progres")
     def ranking_progres(self, request, pk=None):
         temporada = self.get_object()
+
+        # Snapshot on demand: si es consulta el progrés de la temporada activa,
+        # actualitzem RankingHistorico abans de llegir-lo.
+        if temporada.estat == EstatTemporada.ACTIVA:
+            generar_snapshots_temporada(temporada)
+
         window = request.query_params.get("window", 5)
 
         try:

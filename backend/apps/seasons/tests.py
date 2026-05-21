@@ -57,13 +57,20 @@ class EstatTemporadaManagerTest(TestCase):
         with self.assertRaises(ValueError):
             Temporada.objects.iniciar(self.temporada)
 
-    def test_iniciar_quan_ja_existeix_activa_falla(self):
+    def test_iniciar_quan_ja_existeix_activa_tanca_anterior(self):
         Temporada.objects.iniciar(self.temporada)
         altra = Temporada.objects.create(
             nom='Altra temporada', dataInici='2027-01-01', dataFi='2027-12-31'
         )
-        with self.assertRaises(ValueError):
-            Temporada.objects.iniciar(altra)
+
+        Temporada.objects.iniciar(altra)
+
+        self.temporada.refresh_from_db()
+        altra.refresh_from_db()
+
+        self.assertEqual(self.temporada.estat, EstatTemporada.TANCADA)
+        self.assertEqual(altra.estat, EstatTemporada.ACTIVA)
+        self.assertEqual(Temporada.objects.filter(estat=EstatTemporada.ACTIVA).count(), 1)
 
     def test_tancar_temporada_activa(self):
         Temporada.objects.iniciar(self.temporada)
@@ -170,14 +177,21 @@ class TemporadaAPITest(APITestCase):
         response = self.client.post(f'/api/seasons/{self.temporada.pk}/iniciar/')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_iniciar_quan_ja_hi_ha_activa_retorna_400(self):
+    def test_iniciar_quan_ja_hi_ha_activa_tanca_anterior(self):
         self.client.force_authenticate(user=self.admin)
         self.client.post(f'/api/seasons/{self.temporada.pk}/iniciar/')
         altra = Temporada.objects.create(
             nom='Altra temporada', dataInici='2027-01-01', dataFi='2027-12-31'
         )
+
         response = self.client.post(f'/api/seasons/{altra.pk}/iniciar/')
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.temporada.refresh_from_db()
+        altra.refresh_from_db()
+        self.assertEqual(self.temporada.estat, EstatTemporada.TANCADA)
+        self.assertEqual(altra.estat, EstatTemporada.ACTIVA)
+        self.assertEqual(Temporada.objects.filter(estat=EstatTemporada.ACTIVA).count(), 1)
 
     def test_usuari_no_admin_no_pot_iniciar(self):
         self.client.force_authenticate(user=self.user)
@@ -1012,12 +1026,13 @@ class TemporadaOpenDataSnapshotsAPITest(APITestCase):
         self.assertEqual(participacio_od.puntuacio, 55)
         self.assertEqual(participacio_od.puntuacio_inicial, 55)
 
-        self.assertFalse(
-            Participacio.objects.filter(
-                edifici=edifici_sense_score,
-                lliga__temporada=temporada,
-            ).exists()
+        participacio_sense_score = Participacio.objects.get(
+            edifici=edifici_sense_score,
+            lliga__temporada=temporada,
         )
+
+        self.assertEqual(participacio_sense_score.puntuacio, 0)
+        self.assertEqual(participacio_sense_score.puntuacio_inicial, 0)
 
     def test_generar_snapshot_temporada_es_idempotent(self):
         temporada = Temporada.objects.create(
@@ -1137,3 +1152,83 @@ class TemporadaOpenDataSnapshotsAPITest(APITestCase):
             ).count(),
             1,
         )
+
+    def test_crear_i_iniciar_tanca_temporada_activa_anterior(self):
+        self._crear_edifici(
+            "Carrer Activa Anterior",
+            40,
+            puntuacio_base=71,
+        )
+        activa = Temporada.objects.create(
+            nom="Temporada Activa Anterior",
+            dataInici="2031-01-01",
+            dataFi="2031-12-31",
+        )
+        Temporada.objects.iniciar(activa)
+
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post("/api/seasons/crear-i-iniciar/", {
+            "nom": "Temporada Nova Activa",
+            "dataInici": "2032-01-01",
+            "dataFi": "2032-12-31",
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        activa.refresh_from_db()
+        self.assertEqual(activa.estat, EstatTemporada.TANCADA)
+        self.assertEqual(response.data["estat"], EstatTemporada.ACTIVA)
+        self.assertEqual(Temporada.objects.filter(estat=EstatTemporada.ACTIVA).count(), 1)
+
+    def test_ranking_progres_genera_snapshot_on_demand(self):
+        temporada = Temporada.objects.create(
+            nom="Temporada Ranking On Demand",
+            dataInici="2033-01-01",
+            dataFi="2033-12-31",
+        )
+        edifici = self._crear_edifici(
+            "Carrer Ranking Demand",
+            50,
+            puntuacio_base=73,
+        )
+
+        Temporada.objects.iniciar(temporada)
+        RankingHistorico.objects.filter(temporada=temporada).delete()
+
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get(f"/api/seasons/{temporada.pk}/ranking/progres/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            RankingHistorico.objects.filter(
+                edifici=edifici,
+                temporada=temporada,
+                categoria="PROGRES",
+            ).count(),
+            1,
+        )
+
+    def test_evolucio_genera_snapshot_on_demand(self):
+        temporada = Temporada.objects.create(
+            nom="Temporada Evolucio On Demand",
+            dataInici="2034-01-01",
+            dataFi="2034-12-31",
+        )
+        edifici = self._crear_edifici(
+            "Carrer Evolucio Demand",
+            60,
+            puntuacio_base=64,
+        )
+
+        Temporada.objects.iniciar(temporada)
+        RankingHistorico.objects.filter(temporada=temporada).delete()
+
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get(
+            f"/api/leagues/evolucio/?edifici={edifici.idEdifici}&categoria=PROGRES"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["temporada"], temporada.id_temporada)
+        self.assertEqual(response.data[0]["puntuacio"], 64)

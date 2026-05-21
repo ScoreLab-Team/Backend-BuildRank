@@ -132,17 +132,19 @@ class ParticipacioViewSet(viewsets.ModelViewSet):
         avui = timezone.now().date()
         fa_un_any = avui - timedelta(days=365)
 
-        participacions = (
+        participacions_qs = (
             Participacio.objects
             .select_related("lliga__temporada")
             .filter(
                 edifici_id=edifici_id,
                 lliga__temporada__dataInici__gte=fa_un_any
             )
-            .order_by("lliga__temporada__dataInici")
+            .order_by("lliga__temporada__dataInici", "lliga__temporada_id", "id")
         )
 
-        if not participacions.exists():
+        participacions = list(participacions_qs)
+
+        if not participacions:
             return Response(
                 {
                     "estat": "sense_dades",
@@ -151,11 +153,52 @@ class ParticipacioViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_200_OK
             )
 
+        # Pot existir més d'una participació del mateix edifici dins una mateixa
+        # temporada, especialment després d'afegir participacions automàtiques
+        # PROGRES per edificis sense puntuació inicial.
+        #
+        # Per calcular el progrés anual no volem que una participació automàtica
+        # amb puntuació 0 tapi una participació real ja existent de la mateixa
+        # temporada. Per això reduïm a una participació representativa per
+        # temporada i prioritzem la puntuació més alta.
+        participacions_per_temporada = {}
 
-        participacio_inicial = participacions.first()
+        for participacio in participacions:
+            temporada = participacio.lliga.temporada
+            temporada_id = temporada.id_temporada
+            actual = participacions_per_temporada.get(temporada_id)
 
+            if actual is None:
+                participacions_per_temporada[temporada_id] = participacio
+                continue
 
-        participacio_actual = participacions.last()
+            puntuacio_nova = participacio.puntuacio or 0
+            puntuacio_actual_guardada = actual.puntuacio or 0
+
+            if puntuacio_nova > puntuacio_actual_guardada:
+                participacions_per_temporada[temporada_id] = participacio
+                continue
+
+            # Si empaten en puntuació, preferim PROGRES perquè és la categoria
+            # de rànquing vigent del MVP. Si cap és PROGRES, mantenim l'existent.
+            if (
+                puntuacio_nova == puntuacio_actual_guardada
+                and participacio.lliga.categoria == "PROGRES"
+                and actual.lliga.categoria != "PROGRES"
+            ):
+                participacions_per_temporada[temporada_id] = participacio
+
+        participacions_representatives = sorted(
+            participacions_per_temporada.values(),
+            key=lambda p: (
+                p.lliga.temporada.dataInici,
+                p.lliga.temporada.id_temporada,
+                p.id,
+            )
+        )
+
+        participacio_inicial = participacions_representatives[0]
+        participacio_actual = participacions_representatives[-1]
 
         puntuacio_inicial = participacio_inicial.puntuacio
         puntuacio_actual = participacio_actual.puntuacio

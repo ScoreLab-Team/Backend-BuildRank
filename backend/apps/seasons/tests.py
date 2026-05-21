@@ -921,3 +921,219 @@ class TemporadaRankingProgresAPITest(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data['error'], 'window must be a positive integer')
+
+
+
+class TemporadaOpenDataSnapshotsAPITest(APITestCase):
+    """Regressió de temporada: Open Data, lligues de progrés i snapshots."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = make_superuser(email="season-opendata-admin@example.com")
+        self.user = make_user(email="season-opendata-user@example.com")
+
+        self.group = GrupComparable.objects.create(
+            idGrup=501,
+            zonaClimatica="C2",
+            tipologia="Residencial",
+            rangSuperficie="100-200",
+        )
+
+    def _crear_edifici(self, carrer, numero, puntuacio_base=None, puntuacio_od=None, font_open_data=False):
+        loc = Localitzacio.objects.create(
+            carrer=carrer,
+            numero=numero,
+            codiPostal="08001",
+            barri="Eixample",
+        )
+        return Edifici.objects.create(
+            anyConstruccio=1990,
+            tipologia="Residencial",
+            superficieTotal=120,
+            nombrePlantes=4,
+            reglament="Desconegut",
+            orientacioPrincipal="Sud",
+            grupComparable=self.group,
+            localitzacio=loc,
+            puntuacioBase=puntuacio_base,
+            puntuacioBaseOpenData=puntuacio_od,
+            font_open_data=font_open_data,
+        )
+
+    def test_iniciar_temporada_crea_només_lligues_progres_i_inclou_opendata(self):
+        temporada = Temporada.objects.create(
+            nom="Temporada Open Data",
+            dataInici="2027-01-01",
+            dataFi="2027-12-31",
+        )
+
+        edifici_manual = self._crear_edifici(
+            "Carrer Manual",
+            1,
+            puntuacio_base=80,
+        )
+        edifici_opendata = self._crear_edifici(
+            "Carrer CEE",
+            2,
+            puntuacio_od=55,
+            font_open_data=True,
+        )
+        edifici_sense_score = self._crear_edifici(
+            "Carrer Sense Score",
+            3,
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(f"/api/seasons/{temporada.pk}/iniciar/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(
+            Lliga.objects.filter(temporada=temporada, categoria="PROGRES").count(),
+            3,
+        )
+        self.assertEqual(
+            Lliga.objects.filter(temporada=temporada, categoria__in=["EFICIENCIA", "RESILIENCIA"]).count(),
+            0,
+        )
+
+        participacio_manual = Participacio.objects.get(
+            edifici=edifici_manual,
+            lliga__temporada=temporada,
+        )
+        participacio_od = Participacio.objects.get(
+            edifici=edifici_opendata,
+            lliga__temporada=temporada,
+        )
+
+        self.assertEqual(participacio_manual.puntuacio, 80)
+        self.assertEqual(participacio_manual.puntuacio_inicial, 80)
+
+        self.assertEqual(participacio_od.puntuacio, 55)
+        self.assertEqual(participacio_od.puntuacio_inicial, 55)
+
+        self.assertFalse(
+            Participacio.objects.filter(
+                edifici=edifici_sense_score,
+                lliga__temporada=temporada,
+            ).exists()
+        )
+
+    def test_generar_snapshot_temporada_es_idempotent(self):
+        temporada = Temporada.objects.create(
+            nom="Temporada Snapshot",
+            dataInici="2028-01-01",
+            dataFi="2028-12-31",
+        )
+        edifici = self._crear_edifici(
+            "Carrer Snapshot",
+            10,
+            puntuacio_base=70,
+        )
+
+        Temporada.objects.iniciar(temporada)
+
+        from apps.leagues.services import generar_snapshots_temporada
+
+        resum_1 = generar_snapshots_temporada(temporada)
+        resum_2 = generar_snapshots_temporada(temporada)
+
+        self.assertEqual(resum_1["items"], 1)
+        self.assertEqual(resum_2["items"], 1)
+        self.assertEqual(
+            RankingHistorico.objects.filter(
+                edifici=edifici,
+                temporada=temporada,
+                categoria="PROGRES",
+            ).count(),
+            1,
+        )
+
+    def test_tancar_temporada_genera_snapshot_automaticament(self):
+        temporada = Temporada.objects.create(
+            nom="Temporada Tancar Snapshot",
+            dataInici="2029-01-01",
+            dataFi="2029-12-31",
+        )
+        edifici = self._crear_edifici(
+            "Carrer Tancar",
+            20,
+            puntuacio_base=60,
+        )
+
+        Temporada.objects.iniciar(temporada)
+        participacio = Participacio.objects.get(
+            edifici=edifici,
+            lliga__temporada=temporada,
+        )
+        participacio.puntuacio = 88
+        participacio.save(update_fields=["puntuacio"])
+
+        Temporada.objects.tancar(temporada)
+
+        snapshot = RankingHistorico.objects.get(
+            edifici=edifici,
+            temporada=temporada,
+            categoria="PROGRES",
+        )
+
+        self.assertEqual(snapshot.puntuacio, 88)
+        self.assertEqual(snapshot.posicio, 1)
+        self.assertEqual(snapshot.divisio, participacio.divisio)
+
+    def test_endpoint_anteriors_retorna_només_temporades_tancades(self):
+        tancada = Temporada.objects.create(
+            nom="Temporada Tancada",
+            dataInici="2024-01-01",
+            dataFi="2024-12-31",
+            estat="TANCADA",
+        )
+        Temporada.objects.create(
+            nom="Temporada Pendent",
+            dataInici="2025-01-01",
+            dataFi="2025-12-31",
+            estat="PENDENT",
+        )
+
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get("/api/seasons/anteriors/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id_temporada"] for item in response.data], [tancada.id_temporada])
+
+    def test_admin_pot_crear_i_iniciar_temporada_en_un_sol_endpoint(self):
+        self._crear_edifici(
+            "Carrer Crear Iniciar",
+            30,
+            puntuacio_base=66,
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post("/api/seasons/crear-i-iniciar/", {
+            "nom": "Temporada Crear I Iniciar",
+            "dataInici": "2030-01-01",
+            "dataFi": "2030-12-31",
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["estat"], EstatTemporada.ACTIVA)
+        self.assertEqual(
+            Lliga.objects.filter(
+                temporada_id=response.data["id_temporada"],
+                categoria="PROGRES",
+            ).count(),
+            3,
+        )
+        self.assertEqual(
+            Participacio.objects.filter(
+                lliga__temporada_id=response.data["id_temporada"],
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            RankingHistorico.objects.filter(
+                temporada_id=response.data["id_temporada"],
+                categoria="PROGRES",
+            ).count(),
+            1,
+        )

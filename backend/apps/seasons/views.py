@@ -1,4 +1,5 @@
 from django.db.models import Q
+from django.db import transaction
 from django.db.models import F
 from django.db.models.functions import Rank
 from django.db.models.expressions import Window
@@ -17,6 +18,7 @@ from .services import actualitzar_puntuacions_base_inici_temporada
 from apps.participations.models import Participacio
 from apps.participations.serializers import RankingSerializer
 from apps.leagues.models import Lliga, RankingHistorico
+from apps.leagues.services import generar_snapshots_temporada
 from apps.buildings.models import GrupComparable
 from apps.leagues.pagination import RankingPagination
 
@@ -27,9 +29,50 @@ class TemporadaViewSet(viewsets.ModelViewSet):
     permission_classes=[IsAuthenticated]
 
     def get_permissions(self):
-        if self.action in ['list', 'retrieve', 'ranking', 'ranking_progres', 'posicio_edifici']:
+        if self.action in [
+            'list',
+            'retrieve',
+            'ranking',
+            'ranking_progres',
+            'posicio_edifici',
+            'anteriors',
+            'previous',
+        ]:
             return [IsAuthenticated()]
         return [IsAdminSistema()]
+
+    @action(detail=False, methods=['post'], url_path='crear-i-iniciar')
+    def crear_i_iniciar(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            with transaction.atomic():
+                temporada = serializer.save()
+                Temporada.objects.iniciar(temporada)
+                resum_puntuacions = actualitzar_puntuacions_base_inici_temporada(temporada)
+                resum_snapshot = generar_snapshots_temporada(temporada)
+                temporada.refresh_from_db()
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        data = TemporadaSerializer(temporada).data
+        data["resum_puntuacions_base"] = resum_puntuacions
+        data["resum_snapshot_ranking"] = resum_snapshot
+        return Response(data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'], url_path='anteriors')
+    def anteriors(self, request):
+        temporades = (
+            Temporada.objects
+            .filter(estat='TANCADA')
+            .order_by("-dataInici", "-id_temporada")
+        )
+        return Response(TemporadaSerializer(temporades, many=True).data)
+
+    @action(detail=False, methods=['get'], url_path='previous')
+    def previous(self, request):
+        return self.anteriors(request)
 
     @action(detail=True, methods=['post'], url_path='iniciar')
     def iniciar(self, request, pk=None):
@@ -37,12 +80,14 @@ class TemporadaViewSet(viewsets.ModelViewSet):
         try:
             Temporada.objects.iniciar(temporada)
             resum_puntuacions = actualitzar_puntuacions_base_inici_temporada(temporada)
+            resum_snapshot = generar_snapshots_temporada(temporada)
             temporada.refresh_from_db()
         except ValueError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         data = TemporadaSerializer(temporada).data
         data["resum_puntuacions_base"] = resum_puntuacions
+        data["resum_snapshot_ranking"] = resum_snapshot
         return Response(data)
 
     @action(detail=True, methods=['post'], url_path='tancar')

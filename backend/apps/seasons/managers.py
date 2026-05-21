@@ -21,11 +21,18 @@ class SeasonManager(models.Manager):
 
     def tancar(self, temporada):
         from .models import EstatTemporada
+        from apps.leagues.services import generar_snapshots_temporada
+
         if temporada.estat != EstatTemporada.ACTIVA:
             raise ValueError(
                 f"No es pot tancar una temporada en estat '{temporada.estat}'. "
                 "Només es poden tancar temporades en estat ACTIVA."
             )
+
+        # Consolidar RankingHistorico abans de tancar la temporada.
+        # Per decisió de producte només es consolida la categoria PROGRES.
+        generar_snapshots_temporada(temporada)
+
         temporada.estat = EstatTemporada.TANCADA
         temporada.save()
 

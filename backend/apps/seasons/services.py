@@ -76,7 +76,10 @@ def _actualitzar_participacions_temporada(temporada: Temporada, edifici: Edifici
     return (
         Participacio.objects
         .filter(lliga__temporada=temporada, edifici=edifici)
-        .update(puntuacio=puntuacio)
+        .update(
+            puntuacio=puntuacio,
+            puntuacio_inicial=puntuacio,
+        )
     )
 
 

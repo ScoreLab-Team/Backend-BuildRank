@@ -5,17 +5,23 @@ from apps.buildings.models import EstatValidacio
 class ParticipationManager(models.Manager):
 
     def create_participation(self, edifici, lliga):
-        puntuacio_base = edifici.puntuacioBase or 0
+        """Crea una participació amb la puntuació efectiva de l'edifici.
 
-        puntuacio_millores = (
-                edifici.implementacions.filter(
-                    estatValidacio=EstatValidacio.VALIDADA
-                ).aggregate(
-                    total=Sum("millora__impactePunts")
-                )["total"] or 0
-        )
+        Prioritat:
+        1. puntuacioBase, si existeix.
+        2. puntuacioBaseOpenData, per edificis provinents de CEE/Open Data.
+        3. 0 si encara no hi ha dades suficients.
 
-        puntuacio_inicial = puntuacio_base + puntuacio_millores
+        No sumem aquí les millores validades perquè la consolidació de millores
+        es fa explícitament a l'inici de temporada actualitzant puntuacioBase.
+        Això evita dobles comptatges.
+        """
+        if edifici.puntuacioBase is not None:
+            puntuacio_inicial = edifici.puntuacioBase
+        elif edifici.puntuacioBaseOpenData is not None:
+            puntuacio_inicial = edifici.puntuacioBaseOpenData
+        else:
+            puntuacio_inicial = 0
 
         return self.create(
             edifici=edifici,

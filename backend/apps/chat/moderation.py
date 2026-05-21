@@ -76,14 +76,13 @@ def flag_message(actor, message_id: str, channel_id: str, reason: str = "") -> N
 def hide_message(moderator, message_id: str, channel_id: str, reason: str = "") -> None:
     """Moderator hides a message: replaces content with a placeholder. visible → hidden."""
     client = get_stream_client()
-    # SDK v4: update_message exists on the client, not on the channel object.
-    # type:"hidden" is not a valid GetStream type; we replace the text instead so
-    # the message stays visible in the timeline as a placeholder (distinct from deleted).
-    client.update_message({
-        "id": message_id,
-        "text": "[Missatge ocult per moderació]",
-        "moderated": True,
-    })
+    # update_message omits user_id and GetStream rejects it; update_message_partial
+    # includes the user context required by the API and only patches specified fields.
+    client.update_message_partial(
+        message_id,
+        {"set": {"text": "[Missatge ocult per moderació]", "moderated": True}},
+        get_stream_user_id(moderator),
+    )
     _log(moderator, "hide_message", channel_id, target_message_id=message_id,
          reason=reason, previous_state="visible", new_state="hidden")
 
@@ -104,8 +103,11 @@ def restore_message(moderator, message_id: str, channel_id: str, reason: str = "
     This call only clears the moderated:True custom field.
     """
     client = get_stream_client()
-    # SDK v4: update_message exists on the client, not on the channel object.
-    client.update_message({"id": message_id, "moderated": False})
+    client.update_message_partial(
+        message_id,
+        {"set": {"moderated": False}},
+        get_stream_user_id(moderator),
+    )
     _log(moderator, "restore_message", channel_id, target_message_id=message_id,
          reason=reason, previous_state="hidden", new_state="visible")
 

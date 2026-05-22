@@ -67,10 +67,15 @@ def crear_lligues_i_participacions(sender, instance, **kwargs):
     }
     logger.info(f"[SIGNAL] Lligues PROGRES: {lligues_progres}")
 
-    # ── 3. Edificis actius ─────────────────────────────────────────────────
-    # Entren tots els edificis actius, encara que ara mateix no tinguin score.
-    # Si encara no tenen puntuació, comencen amb 0 i poden progressar durant la temporada.
-    edificis = list(Edifici.actius.all())
+    # ── 3. Edificis actius gestionats ──────────────────────────────────────
+    # No inscrivim automàticament tots els edificis Open Data/CEE massius.
+    # Només entren edificis actius amb administrador de finca assignat.
+    # Si un edifici gestionat encara no té puntuació, entra amb 0 i pot progressar.
+    edificis = list(
+        Edifici.actius
+        .filter(administradorFinca__isnull=False)
+        .select_related("administradorFinca")
+    )
 
     if not edificis:
         logger.warning("Cap edifici actiu per assignar a la temporada id=%s.", instance.pk)
@@ -83,7 +88,7 @@ def crear_lligues_i_participacions(sender, instance, **kwargs):
     n = len(edificis_ordenats)
 
     logger.info(
-        "Temporada id=%s — %d edificis actius assignables a PROGRES.",
+        "Temporada id=%s — %d edificis actius gestionats assignables a PROGRES.",
         instance.pk, n
     )
 

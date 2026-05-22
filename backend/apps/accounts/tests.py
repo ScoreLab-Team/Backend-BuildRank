@@ -1959,3 +1959,94 @@ class PendingAdminVerificationAccessTests(BaseTestData):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+
+@override_settings(REST_FRAMEWORK=NO_THROTTLE_REST_FRAMEWORK)
+class AdminDashboardSummaryTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.admin = User.objects.create_superuser(
+            email="dashboard-admin@example.com",
+            password="Adminpass123",
+        )
+        self.user = User.objects.create_user(
+            email="dashboard-user@example.com",
+            password="Password123",
+        )
+
+    def test_system_admin_can_read_dashboard_summary(self):
+        from apps.buildings.models import (
+            CatalegMillora,
+            Edifici,
+            EstatValidacio,
+            GrupComparable,
+            Localitzacio,
+            MilloraImplementada,
+        )
+        from apps.verification.models import AdminFincaDocumentVerification
+        from apps.seasons.models import Temporada, EstatTemporada
+
+        grup = GrupComparable.objects.create(
+            idGrup=9091,
+            zonaClimatica="C2",
+            tipologia="Residencial",
+            rangSuperficie="100-200",
+        )
+        localitzacio = Localitzacio.objects.create(
+            carrer="Carrer Dashboard",
+            numero=1,
+            codiPostal="08001",
+            barri="Eixample",
+        )
+        edifici = Edifici.objects.create(
+            anyConstruccio=2000,
+            tipologia="Residencial",
+            superficieTotal=100,
+            reglament="CTE",
+            orientacioPrincipal="Sud",
+            localitzacio=localitzacio,
+            grupComparable=grup,
+            administradorFinca=self.user,
+        )
+        millora = CatalegMillora.objects.create(
+            nom="Millora Dashboard",
+            descripcio="Test",
+            impactePunts=5,
+            activa=True,
+        )
+        MilloraImplementada.objects.create(
+            millora=millora,
+            edifici=edifici,
+            dataExecucio="2026-01-01",
+            costReal=1000,
+            estatValidacio=EstatValidacio.EN_REVISIO,
+        )
+        AdminFincaDocumentVerification.objects.create(
+            user=self.user,
+            edifici=edifici,
+            status=AdminFincaDocumentVerification.Status.PENDING,
+        )
+        Temporada.objects.create(
+            nom="Temporada Dashboard",
+            dataInici="2026-01-01",
+            dataFi="2026-12-31",
+            estat=EstatTemporada.ACTIVA,
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(reverse("admin-dashboard-summary"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(response.data["users_total"], 2)
+        self.assertEqual(response.data["buildings_managed"], 1)
+        self.assertEqual(response.data["pending_improvements"], 1)
+        self.assertEqual(response.data["pending_admin_verifications"], 1)
+        self.assertIsNotNone(response.data["active_season"])
+
+    def test_non_system_admin_cannot_read_dashboard_summary(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(reverse("admin-dashboard-summary"))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

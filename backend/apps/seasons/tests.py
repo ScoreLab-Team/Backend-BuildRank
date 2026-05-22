@@ -969,6 +969,7 @@ class TemporadaOpenDataSnapshotsAPITest(APITestCase):
             orientacioPrincipal="Sud",
             grupComparable=self.group,
             localitzacio=loc,
+            administradorFinca=self.user,
             puntuacioBase=puntuacio_base,
             puntuacioBaseOpenData=puntuacio_od,
             font_open_data=font_open_data,
@@ -996,6 +997,14 @@ class TemporadaOpenDataSnapshotsAPITest(APITestCase):
             "Carrer Sense Score",
             3,
         )
+        edifici_opendata_sense_admin = self._crear_edifici(
+            "Carrer CEE Sense Admin",
+            4,
+            puntuacio_od=77,
+            font_open_data=True,
+        )
+        edifici_opendata_sense_admin.administradorFinca = None
+        edifici_opendata_sense_admin.save(update_fields=["administradorFinca"])
 
         self.client.force_authenticate(user=self.admin)
         response = self.client.post(f"/api/seasons/{temporada.pk}/iniciar/")
@@ -1033,6 +1042,13 @@ class TemporadaOpenDataSnapshotsAPITest(APITestCase):
 
         self.assertEqual(participacio_sense_score.puntuacio, 0)
         self.assertEqual(participacio_sense_score.puntuacio_inicial, 0)
+
+        self.assertFalse(
+            Participacio.objects.filter(
+                edifici=edifici_opendata_sense_admin,
+                lliga__temporada=temporada,
+            ).exists()
+        )
 
     def test_generar_snapshot_temporada_es_idempotent(self):
         temporada = Temporada.objects.create(
@@ -1095,6 +1111,34 @@ class TemporadaOpenDataSnapshotsAPITest(APITestCase):
         self.assertEqual(snapshot.puntuacio, 88)
         self.assertEqual(snapshot.posicio, 1)
         self.assertEqual(snapshot.divisio, participacio.divisio)
+
+    def test_list_retorna_temporada_activa_i_anteriors_no_pendents(self):
+        activa = Temporada.objects.create(
+            nom="Temporada Activa",
+            dataInici="2026-01-01",
+            dataFi="2026-12-31",
+            estat=EstatTemporada.ACTIVA,
+        )
+        tancada = Temporada.objects.create(
+            nom="Temporada Tancada",
+            dataInici="2025-01-01",
+            dataFi="2025-12-31",
+            estat=EstatTemporada.TANCADA,
+        )
+        Temporada.objects.create(
+            nom="Temporada Pendent",
+            dataInici="2027-01-01",
+            dataFi="2027-12-31",
+            estat=EstatTemporada.PENDENT,
+        )
+
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get("/api/seasons/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = [item["id_temporada"] for item in response.data]
+
+        self.assertEqual(returned_ids, [activa.id_temporada, tancada.id_temporada])
 
     def test_endpoint_anteriors_retorna_només_temporades_tancades(self):
         tancada = Temporada.objects.create(

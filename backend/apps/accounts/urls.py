@@ -9,6 +9,7 @@ from apps.accounts.views import (
     UserListView, UserDetailView,
     UserBlockView, UserUnblockView,
     UserSuspendView, UserUnsuspendView,
+    AdminDashboardSummaryView,
 )
 
 urlpatterns = [
@@ -33,6 +34,7 @@ urlpatterns = [
 
     # Consulta: edificis accessibles per l'usuari autenticat
     path("me/edificis/", MeEdificisView.as_view(), name="me-edificis"),
+    path("admin/dashboard-summary/", AdminDashboardSummaryView.as_view(), name="admin-dashboard-summary"),
 
     # Assignació: resident → habitatge (AdminFinca, ABAC-B)
     path(

@@ -422,3 +422,74 @@ class UserUnsuspendView(APIView):
         profile.save(update_fields=["account_status", "suspension_reason", "suspended_until", "updated_at"])
 
         return Response(UserAdminSerializer(user).data, status=status.HTTP_200_OK)
+
+
+class AdminDashboardSummaryView(APIView):
+    """Mètriques agregades per al panell d'administració del sistema."""
+    permission_classes = [IsAdminSistema]
+
+    def get(self, request):
+        from apps.buildings.models import (
+            Edifici,
+            Habitatge,
+            MilloraImplementada,
+            EstatValidacio,
+        )
+        from apps.verification.models import AdminFincaDocumentVerification
+        from apps.seasons.models import Temporada, EstatTemporada
+
+        temporada_activa = (
+            Temporada.objects
+            .filter(estat=EstatTemporada.ACTIVA)
+            .order_by("-dataInici", "-id_temporada")
+            .first()
+        )
+
+        pending_improvements = MilloraImplementada.objects.filter(
+            estatValidacio__in=[
+                EstatValidacio.PENDENT_DOCUMENTACIO,
+                EstatValidacio.EN_REVISIO,
+            ]
+        ).count()
+
+        pending_admin_verifications = AdminFincaDocumentVerification.objects.filter(
+            status__in=[
+                AdminFincaDocumentVerification.Status.PENDING,
+                AdminFincaDocumentVerification.Status.RUNNING,
+                AdminFincaDocumentVerification.Status.REVIEW,
+            ]
+        ).count()
+
+        pending_housing_requests = Habitatge.objects.filter(
+            estatValidacio__in=[
+                EstatValidacio.PENDENT_DOCUMENTACIO,
+                EstatValidacio.EN_REVISIO,
+            ],
+            solicitant__isnull=False,
+        ).count()
+
+        active_season = None
+        if temporada_activa:
+            active_season = {
+                "id": temporada_activa.id_temporada,
+                "nom": temporada_activa.nom,
+                "dataInici": temporada_activa.dataInici,
+                "dataFi": temporada_activa.dataFi,
+                "estat": temporada_activa.estat,
+            }
+
+        return Response(
+            {
+                "users_total": User.objects.count(),
+                "buildings_total": Edifici.actius.count(),
+                "buildings_managed": Edifici.actius.filter(
+                    administradorFinca__isnull=False
+                ).count(),
+                "pending_improvements": pending_improvements,
+                "pending_admin_verifications": pending_admin_verifications,
+                "pending_housing_requests": pending_housing_requests,
+                "active_season": active_season,
+            },
+            status=status.HTTP_200_OK,
+        )
+

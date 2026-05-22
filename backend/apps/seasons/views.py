@@ -1,4 +1,4 @@
-from django.db.models import Q
+from django.db.models import Q, Case, When, IntegerField
 from django.db import transaction
 from django.db.models import F
 from django.db.models.functions import Rank
@@ -40,6 +40,27 @@ class TemporadaViewSet(viewsets.ModelViewSet):
         ]:
             return [IsAuthenticated()]
         return [IsAdminSistema()]
+
+    def list(self, request, *args, **kwargs):
+        """Retorna la temporada actual i les temporades anteriors.
+
+        La llista està pensada pel frontend: no inclou temporades pendents,
+        perquè encara no formen part del cicle visible de ranking/progrés.
+        """
+        temporades = (
+            Temporada.objects
+            .filter(estat__in=[EstatTemporada.ACTIVA, EstatTemporada.TANCADA])
+            .order_by(
+                Case(
+                    When(estat=EstatTemporada.ACTIVA, then=0),
+                    default=1,
+                    output_field=IntegerField(),
+                ),
+                "-dataInici",
+                "-id_temporada",
+            )
+        )
+        return Response(TemporadaSerializer(temporades, many=True).data)
 
     @action(detail=False, methods=['post'], url_path='crear-i-iniciar')
     def crear_i_iniciar(self, request):

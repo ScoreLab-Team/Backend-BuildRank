@@ -10,6 +10,7 @@ Oscar Montiel
 testing-us1-us7  
 feature/testing  
 feature/rankingtests
+testing/accounts-coverage-hardening
 
 ## Àmbit
 - **Mòdul Accounts:** US1, US2, US3, US4, US5, US6 i US7  
@@ -24,9 +25,9 @@ docker compose exec web python manage.py check
 docker compose exec web python manage.py makemigrations --check --dry-run
 
 # Tests i Coverage - Mòdul Accounts
-docker compose exec web python manage.py test apps.accounts
-docker compose exec web coverage run manage.py test apps.accounts
+docker compose exec web coverage run manage.py test apps.accounts -v 2
 docker compose exec web coverage report --include="apps/accounts/*"
+docker compose exec web coverage xml
 
 # Tests i Coverage - Mòdul Buildings
 docker compose exec web python manage.py test apps.buildings
@@ -48,10 +49,14 @@ docker compose exec web coverage report --include="apps/leagues/*"
 - **makemigrations --check --dry-run:** No changes detected  
 
 ### Mòdul Accounts
-- **Tests executats (apps.accounts):** 55  
-- **Tests correctes:** 55  
-- **Tests skipped:** 2  
-- **Coverage (apps.accounts):** 89%
+- **Tests executats (apps.accounts):** 96
+- **Tests correctes:** 96
+- **Tests skipped:** 0
+- **Coverage (apps.accounts):** 95%
+- **Coverage específic (authentication.py):** 100%
+- **Coverage específic (permissions.py):** 77%
+- **Coverage específic (throttles.py):** 100%
+- **Coverage específic (views.py):** 96%
 
 ### Mòdul Buildings (simulacions)
 - **Tests executats (apps.buildings):** 106  
@@ -116,7 +121,7 @@ El sistema backend:
 - Passa tots els tests automatitzats  
 - No presenta errors de configuració  
 - No té migracions pendents  
-- Manté una cobertura del 89% en l’app accounts i 99% en el motor de simulació 
+- Manté una cobertura del 95% en l’app accounts i 99% en el motor de simulació
 - Valida correctament els fluxos d’autenticació i permisos  
 
 Per tant, es considera que aquestes funcionalitats compleixen els criteris de qualitat definits i poden integrar-se al sistema sense risc de regressió.

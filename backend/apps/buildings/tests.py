@@ -4631,3 +4631,165 @@ class NormalitzarCeeCommandTests(TestCase):
             self.assertEqual(len(rows), 2)
         finally:
             os.unlink(csv_path)
+
+
+# ============================================================================
+# US47 - Validació de millores: actualització de score, participació i ranking
+# ============================================================================
+
+from datetime import timedelta
+from apps.leagues.models import CategoriaRanking, DivisioLliga, Lliga, RankingHistorico
+from apps.seasons.models import EstatTemporada, Temporada
+from apps.participations.models import Participacio
+from apps.buildings.models import CategoriaMillora
+
+
+class MilloraImplementadaValidacioScoreRankingTests(APITestCase):
+    def setUp(self):
+        self.superuser = User.objects.create_superuser(
+            email="system.score@example.com",
+            password="Password123",
+        )
+
+        self.admin_finca = User.objects.create_user(
+            email="admin.score@example.com",
+            password="Password123",
+        )
+        self.admin_finca.profile.role = RoleChoices.ADMIN
+        self.admin_finca.profile.estatValidacioAdmin = ValidacioAdmin.APROVAT
+        self.admin_finca.profile.save(
+            update_fields=["role", "estatValidacioAdmin"]
+        )
+
+        self.grup = GrupComparable.objects.create(
+            idGrup=991,
+            zonaClimatica="C2",
+            tipologia=TipusEdifici.RESIDENCIAL,
+            rangSuperficie="500-1000",
+        )
+
+        self.localitzacio = Localitzacio.objects.create(
+            carrer="Carrer Score",
+            numero=1,
+            codiPostal="08001",
+            barri="Demo",
+            latitud=41.0,
+            longitud=2.0,
+            zonaClimatica="C2",
+        )
+
+        self.edifici = Edifici.objects.create(
+            anyConstruccio=1995,
+            tipologia=TipusEdifici.RESIDENCIAL,
+            superficieTotal=800,
+            nombrePlantes=5,
+            reglament="CTE",
+            orientacioPrincipal="Sud",
+            puntuacioBase=60.0,
+            localitzacio=self.localitzacio,
+            administradorFinca=self.admin_finca,
+            grupComparable=self.grup,
+        )
+
+        today = timezone.now().date()
+        self.temporada = Temporada.objects.create(
+            nom="Temporada Score Activa",
+            dataInici=today - timedelta(days=30),
+            dataFi=today + timedelta(days=300),
+            estat=EstatTemporada.ACTIVA,
+        )
+
+        self.lliga = Lliga.objects.create(
+            nom="Lliga Silver Score",
+            categoria=CategoriaRanking.PROGRES,
+            divisio=DivisioLliga.SILVER,
+            temporada=self.temporada,
+        )
+
+        self.participacio = Participacio.objects.create(
+            edifici=self.edifici,
+            lliga=self.lliga,
+            puntuacio_inicial=60.0,
+            puntuacio=60.0,
+            posicio=0,
+            divisio=self.lliga.divisio,
+        )
+
+        self.millora = CatalegMillora.objects.create(
+            slug="aillament-score-test",
+            nom="Aïllament score test",
+            descripcio="Millora de prova per validar score i ranking.",
+            categoria=CategoriaMillora.ENVOLUPANT,
+            costMinim=1000,
+            costMaxim=2000,
+            estalviEnergeticEstimat=10,
+            impactePunts=8,
+            activa=True,
+        )
+
+        self.implementacio = MilloraImplementada.objects.create(
+            dataExecucio=today,
+            costReal=1200,
+            estatValidacio=EstatValidacio.EN_REVISIO,
+            millora=self.millora,
+            edifici=self.edifici,
+            administradorFinca=self.admin_finca,
+        )
+
+        self.client.force_authenticate(user=self.superuser)
+
+    def test_validar_millora_actualitza_score_participacio_i_ranking(self):
+        response = self.client.post(
+            reverse("millora-implementada-validar", args=[self.implementacio.id]),
+            {
+                "estatValidacio": EstatValidacio.VALIDADA,
+                "observacionsAdmin": "Documentació correcta.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.implementacio.refresh_from_db()
+        self.edifici.refresh_from_db()
+        self.participacio.refresh_from_db()
+
+        self.assertEqual(self.implementacio.estatValidacio, EstatValidacio.VALIDADA)
+        self.assertEqual(self.edifici.puntuacioBase, 68.0)
+        self.assertEqual(self.participacio.puntuacio, 68.0)
+
+        snapshot = RankingHistorico.objects.get(
+            edifici=self.edifici,
+            temporada=self.temporada,
+            categoria=CategoriaRanking.PROGRES,
+        )
+        self.assertEqual(snapshot.puntuacio, 68.0)
+        self.assertEqual(snapshot.divisio, self.lliga.divisio)
+
+        self.assertIn("scoreRanking", response.data)
+        self.assertTrue(response.data["scoreRanking"]["score_actualitzat"])
+        self.assertTrue(response.data["scoreRanking"]["participacio_actualitzada"])
+        self.assertTrue(response.data["scoreRanking"]["ranking_actualitzat"])
+
+    def test_validar_millora_no_supera_100_punts(self):
+        self.edifici.puntuacioBase = 97.0
+        self.edifici.save(update_fields=["puntuacioBase"])
+
+        self.participacio.puntuacio = 97.0
+        self.participacio.save(update_fields=["puntuacio"])
+
+        response = self.client.post(
+            reverse("millora-implementada-validar", args=[self.implementacio.id]),
+            {"estatValidacio": EstatValidacio.VALIDADA},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.edifici.refresh_from_db()
+        self.participacio.refresh_from_db()
+
+        self.assertEqual(self.edifici.puntuacioBase, 100.0)
+        self.assertEqual(self.participacio.puntuacio, 100.0)
+
+

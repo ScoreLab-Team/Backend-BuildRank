@@ -12,8 +12,15 @@ from .serializers import (
     AdminFincaDocumentVerificationSerializer,
 )
 from .services.review import aprovar_verificacio, rebutjar_verificacio
+from .schemas import (
+    verification_create_schema,
+    verification_list_schema,
+    verification_detail_schema,
+    verificacio_revisio_schema,
+)
 
 
+@verification_create_schema
 class AdminFincaDocumentVerificationCreateView(generics.CreateAPIView):
     """
     POST /api/verification/create/
@@ -39,6 +46,7 @@ class AdminFincaDocumentVerificationCreateView(generics.CreateAPIView):
         return Response(output.data, status=status.HTTP_201_CREATED)
 
 
+@verification_list_schema
 class AdminFincaDocumentVerificationListView(generics.ListAPIView):
     """
     GET /api/verification/
@@ -61,6 +69,7 @@ class AdminFincaDocumentVerificationListView(generics.ListAPIView):
         return qs.filter(user=self.request.user)
 
 
+@verification_detail_schema
 class AdminFincaDocumentVerificationDetailView(generics.RetrieveAPIView):
     """
     GET /api/verification/<id>/
@@ -83,25 +92,13 @@ class AdminFincaDocumentVerificationDetailView(generics.RetrieveAPIView):
         return qs.filter(user=self.request.user)
 
 
+@verificacio_revisio_schema
 class VerificacioRevisioView(APIView):
     """
     POST /api/verification/<id>/revisar/
 
     Endpoint exclusiu per a superusuaris.
     Aprova o rebutja una verificació en estat 'review'.
-
-    Body:
-        {
-            "accio": "aprovar" | "rebutjar",
-            "motiu": "text opcional — requerit si rebutja"
-        }
-
-    Respostes:
-        200 → decisió aplicada correctament
-        400 → accio invàlida o motiu absent en rebuig
-        403 → no és superusuari
-        404 → verificació no trobada
-        409 → verificació no està en estat 'review'
     """
     permission_classes = [permissions.IsAuthenticated, IsAdminSistema]
 

@@ -86,6 +86,7 @@ INSTALLED_APPS = [
     'apps.notifications',
 
     'apps.audit',
+    "drf_spectacular",
 ]
 
 MIDDLEWARE = [
@@ -202,7 +203,8 @@ REST_FRAMEWORK = {
         'login': '3/min',          # Login: 3 intentos/min por IP → previene credential stuffing
         'register': '5/hour',      # Register: 5 registros/hora por IP → evita account enumeration
         'refresh': '20/min',       # Refresh: 20 req/min → uso normal sin abuse
-    }
+    },
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 
 AUTH_USER_MODEL = 'accounts.User'

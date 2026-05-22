@@ -570,9 +570,14 @@ class EdificiDetailSerializer(serializers.ModelSerializer):
 
         if user.is_superuser:
             qs = obj.habitatges.all()
-        elif role == RoleChoices.ADMIN and obj.administradorFinca == user:
-            # Administrador de finca: veu tots els habitatges de l'edifici que administra.
-            qs = obj.habitatges.all()
+        elif role == RoleChoices.ADMIN:
+            from apps.verification.access import admin_assignment_is_effective
+
+            if admin_assignment_is_effective(user, obj):
+                # Administrador de finca efectiu: veu tots els habitatges de l'edifici que administra.
+                qs = obj.habitatges.all()
+            else:
+                qs = obj.habitatges.none()
         else:
             # Owner/Tenant: només veu els habitatges vinculats al seu usuari.
             qs = obj.habitatges.filter(Q(usuari=user) | Q(propietari=user) | Q(llogater=user))

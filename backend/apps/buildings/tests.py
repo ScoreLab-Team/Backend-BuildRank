@@ -2989,10 +2989,14 @@ class TestAdminFincaAltaEdifici(BaseTestData):
         # Comprovem que es crea correctament (201 Created)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(Edifici.objects.count(), edificis_abans + 1)
-        
-        # Comprovem que l'edifici nou s'ha assignat a aquest admin
+
+        # La creació ja no concedeix gestió immediata.
+        # L'assignació efectiva queda pendent d'una verificació documental approved.
         nou_edifici = Edifici.objects.latest('idEdifici')
-        self.assertEqual(nou_edifici.administradorFinca, admin)
+        self.assertIsNone(nou_edifici.administradorFinca)
+        self.assertEqual(response.data["edifici_id"], nou_edifici.idEdifici)
+        self.assertTrue(response.data["requereix_verificacio"])
+        self.assertIn("documental", response.data["message"].lower())
 
 class TestRestriccionsHabitatge(BaseTestData):
     """

@@ -1,5 +1,6 @@
 from datetime import timedelta
 import re
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import override_settings
@@ -8,19 +9,26 @@ from django.core import mail
 from django.urls import reverse
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
+from django.utils import timezone
 from rest_framework.test import APITestCase
 from rest_framework import status
-from rest_framework.test import APITestCase, APIClient
+from rest_framework.test import APITestCase, APIClient, APIRequestFactory
+from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.accounts.authentication import AccountStatusJWTAuthentication
 from apps.accounts.models import (
     AccessDenialLog,
+    AccountStatus,
     Profile,
     RoleChoices,
     TokenLoginLog,
     User,
 )
+from apps.accounts.permissions import ABACMixin, IsAdminFinca, IsResident
+from apps.accounts.throttles import AuthThrottle, RefreshThrottle
 from apps.buildings.models import (
     Edifici,
     GrupComparable,
@@ -189,6 +197,58 @@ class ABACTests(BaseTestData):
         denial = AccessDenialLog.objects.first()
         self.assertEqual(denial.user_id, self.admin_finca.id)
         self.assertIn("cartera de gestió", denial.motiu)
+
+
+class PermissionUtilityTests(BaseTestData):
+    """Small branch tests for account permission helpers."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.sysadmin = User.objects.create_superuser(
+            email="perm-sysadmin@example.com",
+            password="Password123",
+        )
+        cls.admin_finca = cls._create_user("perm-admin@example.com", RoleChoices.ADMIN)
+        cls.tenant = cls._create_user("perm-tenant@example.com", RoleChoices.TENANT)
+
+        cls.grup = GrupComparable.objects.create(
+            idGrup=707,
+            zonaClimatica="C2",
+            tipologia="Residencial",
+            rangSuperficie="100-200",
+        )
+        cls.edifici = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
+
+    def test_admin_finca_permission_allows_superuser_and_rejects_anonymous(self):
+        permission = IsAdminFinca()
+
+        self.assertTrue(permission.has_permission(SimpleNamespace(user=self.sysadmin), None))
+        self.assertFalse(permission.has_permission(SimpleNamespace(user=AnonymousUser()), None))
+
+    def test_is_resident_requires_authenticated_user(self):
+        permission = IsResident()
+
+        self.assertTrue(permission.has_permission(SimpleNamespace(user=self.tenant), None))
+        self.assertFalse(permission.has_permission(SimpleNamespace(user=AnonymousUser()), None))
+
+    def test_abac_superuser_access_returns_without_logging_denial(self):
+        request = APIRequestFactory().get("/fake/", HTTP_X_FORWARDED_FOR="203.0.113.7, 10.0.0.1")
+        request.user = self.sysadmin
+
+        ABACMixin().check_edifici_access(request, self.edifici.idEdifici)
+
+        self.assertFalse(AccessDenialLog.objects.exists())
+
+    def test_abac_denial_logs_first_forwarded_ip_for_unlinked_resident(self):
+        request = APIRequestFactory().get("/fake/", HTTP_X_FORWARDED_FOR="203.0.113.8, 10.0.0.2")
+        request.user = self.tenant
+
+        with self.assertRaises(Exception):
+            ABACMixin().check_edifici_access(request, self.edifici.idEdifici)
+
+        denial = AccessDenialLog.objects.get()
+        self.assertEqual(denial.ip, "203.0.113.8")
+        self.assertIn("vinculació directa", denial.motiu)
 
 
 class AssignmentTests(BaseTestData):
@@ -1104,6 +1164,85 @@ class ThrottleByIPTestCase(APITestCase):
                 self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS,
                                msg="Intento 4 debería estar throttled por IP")
 
+
+class ThrottleCacheKeyTests(APITestCase):
+    """Unit tests for custom throttle cache key branches."""
+
+    def setUp(self):
+        self.factory = APIRequestFactory()
+
+    def test_auth_throttle_uses_user_id_for_authenticated_requests(self):
+        request = self.factory.get("/auth/")
+        request.user = SimpleNamespace(is_authenticated=True, id=42)
+
+        key = AuthThrottle().get_cache_key(request, view=None)
+
+        self.assertEqual(key, "throttle_auth_42")
+
+    def test_auth_throttle_uses_ip_for_anonymous_requests(self):
+        request = self.factory.get("/auth/", REMOTE_ADDR="203.0.113.10")
+        request.user = AnonymousUser()
+
+        key = AuthThrottle().get_cache_key(request, view=None)
+
+        self.assertEqual(key, "throttle_auth_203.0.113.10")
+
+    def test_refresh_throttle_uses_user_id_for_authenticated_requests(self):
+        request = self.factory.get("/refresh/")
+        request.user = SimpleNamespace(is_authenticated=True, id=77)
+
+        key = RefreshThrottle().get_cache_key(request, view=None)
+
+        self.assertEqual(key, "throttle_refresh_77")
+
+
+class AccountStatusJWTAuthenticationTests(APITestCase):
+    """Unit tests for account status enforcement on JWT-authenticated requests."""
+
+    def test_enforce_account_status_allows_user_without_profile(self):
+        AccountStatusJWTAuthentication()._enforce_account_status(SimpleNamespace())
+
+    def test_enforce_account_status_rejects_blocked_user(self):
+        user = User.objects.create_user(email="blocked-auth@example.com", password="Password123")
+        user.profile.account_status = AccountStatus.BLOCKED
+        user.profile.save(update_fields=["account_status"])
+
+        with self.assertRaises(AuthenticationFailed) as ctx:
+            AccountStatusJWTAuthentication()._enforce_account_status(user)
+
+        self.assertIn("bloquejat", str(ctx.exception.detail["detail"]))
+
+    def test_enforce_account_status_rejects_indefinite_suspension(self):
+        user = User.objects.create_user(email="suspended-auth@example.com", password="Password123")
+        user.profile.account_status = AccountStatus.SUSPENDED
+        user.profile.suspended_until = None
+        user.profile.save(update_fields=["account_status", "suspended_until"])
+
+        with self.assertRaises(AuthenticationFailed) as ctx:
+            AccountStatusJWTAuthentication()._enforce_account_status(user)
+
+        self.assertIn("suspès", str(ctx.exception.detail["detail"]))
+
+    def test_enforce_account_status_rejects_future_suspension(self):
+        user = User.objects.create_user(email="future-suspension@example.com", password="Password123")
+        user.profile.account_status = AccountStatus.SUSPENDED
+        user.profile.suspended_until = timezone.now() + timedelta(days=1)
+        user.profile.save(update_fields=["account_status", "suspended_until"])
+
+        with self.assertRaises(AuthenticationFailed) as ctx:
+            AccountStatusJWTAuthentication()._enforce_account_status(user)
+
+        self.assertIn("suspès", str(ctx.exception.detail["detail"]))
+
+    def test_enforce_account_status_allows_expired_suspension(self):
+        user = User.objects.create_user(email="expired-suspension@example.com", password="Password123")
+        user.profile.account_status = AccountStatus.SUSPENDED
+        user.profile.suspended_until = timezone.now() - timedelta(days=1)
+        user.profile.save(update_fields=["account_status", "suspended_until"])
+
+        AccountStatusJWTAuthentication()._enforce_account_status(user)
+
+
 class AdminRoleSemanticsTests(BaseTestData):
     """Tests to ensure role semantics are aligned with the domain model."""
 
@@ -1204,6 +1343,128 @@ class SystemAdminMeEndpointTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("access", response.data)
         self.assertIn("refresh", response.data)
+
+
+@override_settings(REST_FRAMEWORK=NO_THROTTLE_REST_FRAMEWORK)
+class SystemAdminUserManagementTests(APITestCase):
+    """Branch coverage for system-admin account status endpoints."""
+
+    def setUp(self):
+        cache.clear()
+        self.admin = User.objects.create_superuser(
+            email="status-admin@example.com",
+            password="Adminpass123",
+        )
+        self.user = User.objects.create_user(
+            email="status-user@example.com",
+            password="Password123",
+        )
+        self.client.force_authenticate(user=self.admin)
+
+    def _create_active_session(self):
+        refresh = RefreshToken.for_user(self.user)
+        jti = str(refresh.get("jti"))
+        TokenLoginLog.objects.create(
+            user=self.user,
+            status=TokenLoginLog.LOGIN,
+            expires_at=timezone.now() + timedelta(days=1),
+            jti=jti,
+        )
+        return jti
+
+    def test_system_admin_can_list_and_retrieve_users(self):
+        list_response = self.client.get(reverse("user-list"))
+        detail_response = self.client.get(reverse("user-detail", args=[self.user.pk]))
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_response.data["email"], self.user.email)
+
+    def test_block_user_sets_status_and_revokes_active_sessions(self):
+        jti = self._create_active_session()
+
+        response = self.client.post(reverse("user-block", args=[self.user.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.account_status, AccountStatus.BLOCKED)
+        self.assertTrue(BlacklistedToken.objects.filter(token__jti=jti).exists())
+        self.assertEqual(
+            TokenLoginLog.objects.get(jti=jti).status,
+            TokenLoginLog.REVOKED,
+        )
+
+    def test_block_missing_user_returns_404(self):
+        response = self.client.post(reverse("user-block", args=[999999]))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_block_superuser_returns_403(self):
+        response = self.client.post(reverse("user-block", args=[self.admin.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unblock_requires_blocked_account(self):
+        response = self.client.post(reverse("user-unblock", args=[self.user.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_unblock_blocked_user_restores_active_status(self):
+        self.user.profile.account_status = AccountStatus.BLOCKED
+        self.user.profile.save(update_fields=["account_status"])
+
+        response = self.client.post(reverse("user-unblock", args=[self.user.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.account_status, AccountStatus.ACTIVE)
+
+    def test_suspend_user_sets_status_reason_and_revokes_sessions(self):
+        jti = self._create_active_session()
+        until = timezone.now() + timedelta(days=3)
+
+        response = self.client.post(
+            reverse("user-suspend", args=[self.user.pk]),
+            {"reason": "Review needed", "suspended_until": until.isoformat()},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.account_status, AccountStatus.SUSPENDED)
+        self.assertEqual(self.user.profile.suspension_reason, "Review needed")
+        self.assertTrue(BlacklistedToken.objects.filter(token__jti=jti).exists())
+
+    def test_suspend_missing_user_returns_404(self):
+        response = self.client.post(reverse("user-suspend", args=[999999]))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_suspend_superuser_returns_403(self):
+        response = self.client.post(reverse("user-suspend", args=[self.admin.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unsuspend_requires_suspended_account(self):
+        response = self.client.post(reverse("user-unsuspend", args=[self.user.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_unsuspend_suspended_user_restores_active_status(self):
+        self.user.profile.account_status = AccountStatus.SUSPENDED
+        self.user.profile.suspension_reason = "Review"
+        self.user.profile.suspended_until = timezone.now() + timedelta(days=1)
+        self.user.profile.save(
+            update_fields=["account_status", "suspension_reason", "suspended_until"]
+        )
+
+        response = self.client.post(reverse("user-unsuspend", args=[self.user.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.account_status, AccountStatus.ACTIVE)
+        self.assertEqual(self.user.profile.suspension_reason, "")
+        self.assertIsNone(self.user.profile.suspended_until)
     
 @override_settings(
     REST_FRAMEWORK=NO_THROTTLE_REST_FRAMEWORK,
@@ -1598,3 +1859,103 @@ class GoogleOAuthTests(APITestCase):
                 email="invalid-role-google@example.com"
             ).exists()
         )
+
+
+class PendingAdminVerificationAccessTests(BaseTestData):
+    """Regressió: un admin finca no pot accedir a edificis amb verificació pendent."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin_finca = cls._create_user("pending-admin@example.com", RoleChoices.ADMIN)
+        cls.owner = cls._create_user("owner-pending@example.com", RoleChoices.OWNER)
+
+        cls.grup = GrupComparable.objects.create(
+            idGrup=909,
+            zonaClimatica="C2",
+            tipologia="Residencial",
+            rangSuperficie="100-200",
+        )
+
+        cls.edifici_pending = cls._create_edifici(
+            administrador=cls.admin_finca,
+            grup=cls.grup,
+            carrer="Carrer Pending",
+            numero=91,
+        )
+        cls.edifici_approved = cls._create_edifici(
+            administrador=cls.admin_finca,
+            grup=cls.grup,
+            carrer="Carrer Approved",
+            numero=92,
+        )
+        cls.edifici_legacy = cls._create_edifici(
+            administrador=cls.admin_finca,
+            grup=cls.grup,
+            carrer="Carrer Legacy",
+            numero=93,
+        )
+
+        Habitatge.objects.create(
+            referenciaCadastral="PENDING-OWNER-1",
+            planta="1",
+            porta="A",
+            superficie=80,
+            edifici=cls.edifici_pending,
+            usuari=cls.owner,
+            propietari=cls.owner,
+        )
+
+        from apps.verification.models import AdminFincaDocumentVerification
+
+        AdminFincaDocumentVerification.objects.create(
+            user=cls.admin_finca,
+            edifici=cls.edifici_pending,
+            status=AdminFincaDocumentVerification.Status.PENDING,
+        )
+        AdminFincaDocumentVerification.objects.create(
+            user=cls.admin_finca,
+            edifici=cls.edifici_approved,
+            status=AdminFincaDocumentVerification.Status.APPROVED,
+        )
+
+    def test_me_edificis_no_retorna_edifici_amb_verificacio_pending(self):
+        self.client.force_authenticate(user=self.admin_finca)
+
+        response = self.client.get(reverse("me-edificis"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = {item["idEdifici"] for item in response.data}
+
+        self.assertNotIn(self.edifici_pending.idEdifici, returned_ids)
+        self.assertIn(self.edifici_approved.idEdifici, returned_ids)
+        self.assertIn(self.edifici_legacy.idEdifici, returned_ids)
+
+    def test_admin_finca_pending_no_pot_accedir_detail_edifici(self):
+        self.client.force_authenticate(user=self.admin_finca)
+
+        response = self.client.get(
+            reverse("edifici-detail", args=[self.edifici_pending.idEdifici])
+        )
+
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+
+    def test_admin_finca_approved_pot_accedir_detail_edifici(self):
+        self.client.force_authenticate(user=self.admin_finca)
+
+        response = self.client.get(
+            reverse("edifici-detail", args=[self.edifici_approved.idEdifici])
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_owner_vinculat_no_es_bloqueja_per_verificacio_admin_pending(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(
+            reverse("edifici-detail", args=[self.edifici_pending.idEdifici])
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)

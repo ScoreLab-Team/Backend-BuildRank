@@ -10,6 +10,8 @@ from .serializers import LligaSerializer
 from apps.buildings.models import GrupComparable
 from apps.participations.models import Participacio
 from apps.accounts.permissions import ABACMixin, IsAdminSistema
+from apps.seasons.models import Temporada, EstatTemporada
+from apps.leagues.services import generar_snapshots_temporada
 
 class LligaViewSet(viewsets.ModelViewSet):
     queryset = Lliga.objects.all()
@@ -117,6 +119,17 @@ class LligaViewSet(viewsets.ModelViewSet):
                 {"error": "edifici and categoria are required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        # Snapshot on demand: si hi ha temporada activa, mantenim RankingHistorico
+        # actualitzat abans de retornar evolució.
+        temporada_activa = (
+            Temporada.objects
+            .filter(estat=EstatTemporada.ACTIVA)
+            .order_by("-dataInici", "-id_temporada")
+            .first()
+        )
+        if temporada_activa:
+            generar_snapshots_temporada(temporada_activa, categoria=categoria.upper())
 
         historial = RankingHistorico.objects.filter(
             edifici_id=edifici_id,

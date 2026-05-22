@@ -184,8 +184,14 @@ class MeEdificisView(APIView):
         if user.is_superuser:
             edificis = Edifici.objects.select_related("localitzacio").all()
         elif role == RoleChoices.ADMIN:
-            # Admin de finca: edificis de la seva cartera
-            edificis = user.edificis_administrats.select_related("localitzacio").all()
+            # Admin de finca: només edificis amb assignació efectiva.
+            # Si hi ha verificació documental per aquest edifici, ha d'estar approved.
+            from apps.verification.access import effective_admin_buildings_queryset
+
+            edificis = effective_admin_buildings_queryset(
+                Edifici.objects.select_related("localitzacio"),
+                user,
+            )
         else:
             # Owner / Tenant: edificis on té vinculació per habitatge
             edificis = (

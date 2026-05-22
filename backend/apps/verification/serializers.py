@@ -275,6 +275,7 @@ class AdminFincaDocumentVerificationCreateSerializer(serializers.ModelSerializer
         actives = [
             AdminFincaDocumentVerification.Status.PENDING,
             AdminFincaDocumentVerification.Status.RUNNING,
+            AdminFincaDocumentVerification.Status.REVIEW,
         ]
 
         if AdminFincaDocumentVerification.objects.filter(

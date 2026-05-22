@@ -1095,11 +1095,42 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
 
 class MilloraImplementadaViewSet(viewsets.GenericViewSet):
-    queryset = MilloraImplementada.objects.select_related("millora", "edifici", "simulacio")
+    queryset = MilloraImplementada.objects.select_related(
+        "millora",
+        "edifici",
+        "edifici__localitzacio",
+        "simulacio",
+    )
     serializer_class = MilloraImplementadaSerializer
     permission_classes = [IsAuthenticated, EsAdminMilloraImplementada]
 
     @validar_millora_schema
+    def get_queryset(self):
+        queryset = super().get_queryset().order_by("-dataExecucio", "-id")
+
+        estat = self.request.query_params.get("estat")
+        if estat:
+            queryset = queryset.filter(estatValidacio=estat)
+
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        """Llista millores implementades per al panell d'administració."""
+        serializer = self.get_serializer(self.get_queryset(), many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="pendents")
+    def pendents(self, request):
+        """Llista millores pendents de revisió/validació final."""
+        queryset = self.get_queryset().filter(
+            estatValidacio__in=[
+                EstatValidacio.PENDENT_DOCUMENTACIO,
+                EstatValidacio.EN_REVISIO,
+            ]
+        )
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=["post"], url_path="validar")
     def validar(self, request, pk=None):
         millora_impl = self.get_object()

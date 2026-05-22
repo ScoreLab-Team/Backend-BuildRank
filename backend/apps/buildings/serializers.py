@@ -727,18 +727,35 @@ class SimulacioMilloraSerializer(serializers.ModelSerializer):
 
 class MilloraImplementadaSerializer(serializers.ModelSerializer):
     millora = CatalegMilloraSerializer(read_only=True)
+    edifici_id = serializers.IntegerField(source="edifici.idEdifici", read_only=True)
+    edifici_adreca = serializers.SerializerMethodField()
+    simulacio_id = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = MilloraImplementada
         fields = [
             "id",
             "millora",
+            "edifici_id",
+            "edifici_adreca",
+            "simulacio_id",
             "dataExecucio",
             "costReal",
             "estatValidacio",
             "observacionsAdmin",
             "documentacioAdjunta",
         ]
+
+    def get_edifici_adreca(self, obj):
+        localitzacio = getattr(obj.edifici, "localitzacio", None)
+        if not localitzacio:
+            return f"Edifici {obj.edifici_id}"
+
+        carrer = getattr(localitzacio, "carrer", "") or ""
+        numero = getattr(localitzacio, "numero", "") or ""
+
+        adreca = f"{carrer}, {numero}".strip(", ")
+        return adreca or f"Edifici {obj.edifici_id}"
 
 
 class ValidacioMilloraSerializer(serializers.Serializer):

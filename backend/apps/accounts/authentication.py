@@ -36,4 +36,8 @@ class AccountStatusJWTAuthentication(JWTAuthentication):
                     detail="Aquest compte està suspès temporalment.",
                     code="account_suspended",
                 )
-            # Suspension period has passed but admin hasn't restored it — still enforce.
+            # Suspension period has expired — auto-lift so the DB reflects reality.
+            profile.account_status = AccountStatus.ACTIVE
+            profile.suspension_reason = ""
+            profile.suspended_until = None
+            profile.save(update_fields=["account_status", "suspension_reason", "suspended_until"])

@@ -2,6 +2,23 @@
 import random
 
 from rest_framework.views import APIView
+from .schemas import (
+    third_party_score_schema,
+    PointInputSerializer, ThirdPartyRequestSerializer, PointResultSerializer, ThirdPartyResponseSerializer,
+    DesactivarBodySerializer, DesactivarDryRunResponseSerializer, DesactivarResponseSerializer, ReactivarResponseSerializer,
+    BadgesResponseSerializer, RecalcularBadgesResponseSerializer, MapaResponseSerializer, PosicioRankingResponseSerializer,
+    AdminFincaAltaResponseSerializer, SolicitudAccesResponseSerializer, AutocompleteCarrerItemSerializer,
+    edifici_viewset_schema, desactivar_schema, reactivar_schema, habitatges_schema,
+    habitatge_detail_schema, dades_energetiques_schema, me_habitatge_schema,
+    simulacions_preview_schema, simulacions_schema, sotmetre_simulacio_votacio_schema,
+    votacions_simulacions_schema, votar_simulacio_schema, acreditar_implementacio_schema,
+    millores_implementades_schema, mapa_schema, cerca_per_carrer_schema, badges_schema,
+    recalcular_badges_schema, validar_millora_schema, habitatge_viewset_schema,
+    solicitar_acces_schema, validar_acces_schema, pendents_schema, cataleg_millora_viewset_schema,
+    ranking_viewset_schema, posicion_schema, admin_finca_alta_schema,
+    edificis_mostrar_schema, edifici_crear_schema, edifici_veure_schema,
+    edifici_editar_schema, edifici_esborrar_schema, autocomplete_carrers_schema,
+)
 from rest_framework.response import Response
 from rest_framework import serializers, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -55,6 +72,14 @@ from .pagination import RankingPaginacio
 from django.db import transaction
 from .simulation.engine import simular_millores
  
+from .schemas import (
+    third_party_score_schema,
+    PointInputSerializer, ThirdPartyRequestSerializer, PointResultSerializer, ThirdPartyResponseSerializer,
+    DesactivarBodySerializer, DesactivarDryRunResponseSerializer, DesactivarResponseSerializer, ReactivarResponseSerializer,
+    BadgesResponseSerializer, RecalcularBadgesResponseSerializer, MapaResponseSerializer, PosicioRankingResponseSerializer,
+    AdminFincaAltaResponseSerializer, SolicitudAccesResponseSerializer, AutocompleteCarrerItemSerializer,
+)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -125,6 +150,7 @@ def _validar_consistencia_desactivacio(edifici):
 # ViewSets
 # ---------------------------------------------------------------------------
 
+@cataleg_millora_viewset_schema
 class CatalegMilloraViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Endpoint de catàleg de millores per al frontend.
@@ -142,6 +168,7 @@ class CatalegMilloraViewSet(viewsets.ReadOnlyModelViewSet):
 
         return queryset.order_by("categoria", "nom")
 
+@edifici_viewset_schema
 class EdificiViewSet(viewsets.ModelViewSet):
     queryset = Edifici.objects.all()
 
@@ -217,6 +244,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
     # ?confirmat=true             → executa la desactivació (#169 + #171)
     # Body opcional: { "motiu": "..." }
     # ------------------------------------------------------------------
+    @desactivar_schema
     @action(detail=True, methods=['post'],
             permission_classes=[IsAuthenticated, IsAdminSistema])
     def desactivar(self, request, pk=None):        
@@ -286,6 +314,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
     # US20 — Reactivació
     # POST /edificis/{id}/reactivar/
     # ------------------------------------------------------------------
+    @reactivar_schema
     @action(detail=True, methods=['post'],
             permission_classes=[IsAuthenticated, IsAdminSistema])
     def reactivar(self, request, pk=None):
@@ -330,6 +359,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         )
 
     # GET /edificis/{id}/habitatges/
+    @habitatges_schema
     @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici])
     def habitatges(self, request, pk=None):
         edifici = self.get_object()
@@ -342,6 +372,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         serializer = HabitatgeResumSerializer(habitatges, many=True)
         return Response(serializer.data)
 
+    @habitatge_detail_schema
     @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici],
         url_path='habitatges/(?P<referenciaCadastral>[A-Za-z0-9]+)')
     def habitatge_detail(self, request, pk=None, referenciaCadastral=None):
@@ -360,6 +391,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         serializer = HabitatgeDetailSerializer(habitatge, context={'request': request})
         return Response(serializer.data)
 
+    @dades_energetiques_schema
     @action(detail=True, methods=['get'], permission_classes=[EsAdminOPropietariEdifici])
     def dades_energetiques(self, request, pk=None):
         edifici = self.get_object()  # ja aplica check_object_permissions automàticament
@@ -387,6 +419,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return Response({"detail": "No hi ha dades energètiques disponibles."}, status=404)
 
         return Response(dades)
+    @me_habitatge_schema
     @action(
         detail=True,
         methods=['patch'],
@@ -497,6 +530,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         return votacio
 
+    @simulacions_preview_schema
     @action(
         detail=True,
         methods=['post'],
@@ -519,6 +553,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         return Response(resultat, status=status.HTTP_200_OK)
 
+    @simulacions_schema
     @action(
         detail=True,
         methods=['get', 'post'],
@@ -580,6 +615,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         return Response(output.data, status=status.HTTP_201_CREATED)
 
 
+    @sotmetre_simulacio_votacio_schema
     @action(
         detail=True,
         methods=['post'],
@@ -647,6 +683,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         )
         return Response(output.data, status=status.HTTP_201_CREATED)
 
+    @votacions_simulacions_schema
     @action(
         detail=True,
         methods=['get'],
@@ -673,6 +710,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @votar_simulacio_schema
     @action(
         detail=True,
         methods=['post'],
@@ -726,6 +764,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         )
         return Response(output.data, status=status.HTTP_200_OK)
 
+    @acreditar_implementacio_schema
     @action(
         detail=True,
         methods=['post'],
@@ -792,6 +831,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         )
         return Response(output.data, status=status.HTTP_201_CREATED)
 
+    @millores_implementades_schema
     @action(
         detail=True,
         methods=["get"],
@@ -810,6 +850,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         serializer = MilloraImplementadaSerializer(implementacions, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    @mapa_schema
     @action(
         detail=False,
         methods=["get"],
@@ -935,6 +976,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
     
+    @cerca_per_carrer_schema
     @action(detail=False, methods=['get'], url_path='cerca')
     def cerca_per_carrer(self, request):
         """
@@ -952,6 +994,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         serializer = EdificiCercaSerializer(edificis[:15], many=True)
         return Response(serializer.data)
 
+    @badges_schema
     @action(detail=True, methods=['get'], url_path='badges')
     def badges(self, request, pk=None):
         """
@@ -1007,6 +1050,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
             "results": resultats,
         }, status=status.HTTP_200_OK)
 
+    @recalcular_badges_schema
     @action(detail=True, methods=['post'], url_path='badges/recalcular')
     def recalcular_badges(self, request, pk=None):
         """
@@ -1055,6 +1099,7 @@ class MilloraImplementadaViewSet(viewsets.GenericViewSet):
     serializer_class = MilloraImplementadaSerializer
     permission_classes = [IsAuthenticated, EsAdminMilloraImplementada]
 
+    @validar_millora_schema
     @action(detail=True, methods=["post"], url_path="validar")
     def validar(self, request, pk=None):
         millora_impl = self.get_object()
@@ -1102,6 +1147,7 @@ class MilloraImplementadaViewSet(viewsets.GenericViewSet):
 
 
 
+@habitatge_viewset_schema
 class HabitatgeViewSet(viewsets.ModelViewSet):
     queryset = Habitatge.objects.all()
 
@@ -1224,6 +1270,7 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
                 {"referenciaCadastral": "Ja existeix un habitatge amb aquesta referència cadastral."}
             )
 
+    @solicitar_acces_schema
     @action(detail=True, methods=['post'], url_path='solicitar-acces')
     def solicitar_acces(self, request, pk=None):
         # Sol·licitud de vincular-se a aquest habitatge com a propietari o llogater.
@@ -1276,6 +1323,7 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK
         )
 
+    @validar_acces_schema
     @action(detail=True, methods=['post'], url_path='validar-acces')
     def validar_acces(self, request, pk=None):
         # L'administrador de finca aprova o rebutja la sol·licitud.
@@ -1358,6 +1406,7 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
 
         return Response({"error": "Estat no vàlid."}, status=status.HTTP_400_BAD_REQUEST)
 
+    @pendents_schema
     @action(detail=False, methods=['get'])
     def pendents(self, request):
         # Retorna només els habitatges que estan pendents de validació
@@ -1414,6 +1463,7 @@ class DadesEnergetiquesViewSet(viewsets.ModelViewSet):
 class EdificisMostrarAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @edificis_mostrar_schema
     # GET /edificis/mostrar/: Llista tots els edificis
     def get(self, request):
         edificis = Edifici.objects.all()
@@ -1423,6 +1473,7 @@ class EdificisMostrarAPIView(APIView):
 class EdificiCrearAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @edifici_crear_schema
     # POST /edificis/crear/: Crea un nou edifici
     def post(self, request):
         serializer = EdificiDetailSerializer(data=request.data, context={'request': request})
@@ -1434,6 +1485,7 @@ class EdificiCrearAPIView(APIView):
 class EdificiVeureAPIView(ABACMixin, APIView):
     permission_classes = [IsAuthenticated]
 
+    @edifici_veure_schema
     # GET /edificis/{id}/veure/: Retorna un edifici concret
     def get(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
@@ -1448,6 +1500,7 @@ class EdificiVeureAPIView(ABACMixin, APIView):
 class EdificiEditarAPIView(ABACMixin, APIView):
     permission_classes = [IsAuthenticated]
 
+    @edifici_editar_schema
     # PUT /edificis/{id}/editar/: Actualitza tot un edifici
     def put(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
@@ -1464,6 +1517,7 @@ class EdificiEditarAPIView(ABACMixin, APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     # PATCH /edificis/{id}/: Actualitza només una part de l'edifici
+    @edifici_editar_schema
     def patch(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
 
@@ -1481,6 +1535,7 @@ class EdificiEditarAPIView(ABACMixin, APIView):
 class EdificiEsborrarAPIView(ABACMixin, APIView):
     permission_classes = [IsAuthenticated]
 
+    @edifici_esborrar_schema
     # DELETE /edificis/{id}/esborrar: Esborra un edifici
     def delete(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
@@ -1491,6 +1546,7 @@ class EdificiEsborrarAPIView(ABACMixin, APIView):
         return Response({"detail": "Edifici esborrat correctament."}, status=status.HTTP_204_NO_CONTENT)
 
 
+@autocomplete_carrers_schema
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def autocomplete_carrers(request):
@@ -1550,6 +1606,7 @@ def autocomplete_carrers(request):
 
     return Response(list(resultats))
 
+@ranking_viewset_schema
 class RankingViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = RankingSerializer
     pagination_class = RankingPaginacio
@@ -1563,6 +1620,7 @@ class RankingViewSet(viewsets.ReadOnlyModelViewSet):
 
         return queryset.order_by('-score')
 
+    @posicion_schema
     @action(detail=True, methods=['get'])
     def posicion(self, request, pk=None):
         edifici = get_object_or_404(Edifici, pk=pk)
@@ -1623,6 +1681,7 @@ class ThirdPartyServiceView(APIView):
 
     permission_classes = [HasAPIKey]
 
+    @third_party_score_schema
     def post(self, request):
         points = request.data.get("points", [])
 
@@ -1685,6 +1744,7 @@ class ThirdPartyServiceView(APIView):
 class AdminFincaEdificiAltaView(APIView):
     permission_classes = [IsAuthenticated, IsAdminFinca]
 
+    @admin_finca_alta_schema
     def post(self, request):
         perfil = request.user.profile
 

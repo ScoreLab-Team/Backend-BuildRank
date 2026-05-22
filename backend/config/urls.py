@@ -19,6 +19,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.views.generic import RedirectView
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 
 from apps.buildings.views import ThirdPartyServiceView
@@ -37,6 +38,8 @@ urlpatterns = [
     path("api/community/", include("apps.community.urls")),
     path("api/notifications/", include("apps.notifications.urls")),
     path('api/audit/', include('apps.audit.urls')),
+    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+    path("api/swagger/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
 ]
 
 if settings.DEBUG and "debug_toolbar" in settings.INSTALLED_APPS:

@@ -1,15 +1,19 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
-import jwt
-from django.test import override_settings
+import jwt, sys
+from django.test import override_settings, TestCase
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from django.db.models.signals import post_save
 from apps.chat import signals as chat_signals
+from apps.chat.models import ModerationLog
 from apps.accounts.models import Profile, RoleChoices, User
 from apps.buildings.models import Edifici, GrupComparable, Habitatge, Localitzacio
 
+if 'test' in sys.argv:
+    STREAM_API_KEY = ""
+    STREAM_API_SECRET = ""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -27,7 +31,7 @@ def _make_mock_stream_client():
     return mock_client, mock_channel
 
 
-def _create_building(owner=None, grup=None):
+def _create_building(owner=None, grup=None, actiu=True):
     loc = Localitzacio.objects.create(
         carrer="Carrer Major",
         numero=1,
@@ -43,6 +47,7 @@ def _create_building(owner=None, grup=None):
         localitzacio=loc,
         administradorFinca=owner,
         grupComparable=grup,
+        actiu=True,
     )
 
 
@@ -52,13 +57,1029 @@ def _set_role(user, role):
     user.profile.save()
 
 
-def _create_grup():
+def _create_grup(idGrup=1):
     return GrupComparable.objects.create(
-        idGrup=1,
+        idGrup=idGrup,
         zonaClimatica="C2",
         tipologia="Residencial",
         rangSuperficie="200-500",
     )
+
+
+# ---------------------------------------------------------------------------
+# models.py — ModerationLog.__str__
+# ---------------------------------------------------------------------------
+ 
+class ModerationLogStrTest(TestCase):
+    def test_str_contains_action_and_channel(self):
+        moderator = User.objects.create_user(email="mod@test.com", password="pw")
+        log = ModerationLog.objects.create(
+            moderator=moderator,
+            moderator_role="admin",
+            action="hide_message",
+            channel_id="building_1",
+        )
+        result = str(log)
+        self.assertIn("hide_message", result)
+        self.assertIn("building_1", result)
+        self.assertIn("admin", result)
+
+
+# ---------------------------------------------------------------------------
+# services.py — sync_user_to_stream: camins d'error
+# ---------------------------------------------------------------------------
+ 
+@override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s")
+class SyncUserToStreamTests(TestCase):
+    def setUp(self):
+        post_save.disconnect(chat_signals.sync_profile_to_stream, sender=Profile)
+        self.addCleanup(post_save.connect, chat_signals.sync_profile_to_stream, sender=Profile)
+        self.user = User.objects.create_user(
+            email="sync@test.com", password="pw",
+            first_name="Joan", last_name="Pla",
+        )
+ 
+    @patch("apps.chat.services.StreamChat")
+    def test_sync_superuser_sets_stream_admin_role(self, mock_sc):
+        from apps.chat.services import get_stream_client, sync_user_to_stream
+        su = User.objects.create_superuser(email="su@test.com", password="pw")
+        mock_client = MagicMock()
+        mock_sc.return_value = mock_client
+        client = get_stream_client()
+        sync_user_to_stream(client, su)
+        call_args = mock_client.upsert_user.call_args[0][0]
+        self.assertEqual(call_args["role"], "admin")
+ 
+    @patch("apps.chat.services.StreamChat")
+    def test_sync_tenant_does_not_set_stream_admin_role(self, mock_sc):
+        from apps.chat.services import get_stream_client, sync_user_to_stream
+        _set_role(self.user, RoleChoices.TENANT)
+        mock_client = MagicMock()
+        mock_sc.return_value = mock_client
+        client = get_stream_client()
+        sync_user_to_stream(client, self.user)
+        call_args = mock_client.upsert_user.call_args[0][0]
+        self.assertNotIn("role", call_args)
+ 
+    @patch("apps.chat.services.logger")
+    @patch("apps.chat.services.StreamChat")
+    def test_sync_reactivates_deleted_user(self, mock_sc, mock_logger):
+        from apps.chat.services import get_stream_client, sync_user_to_stream
+        mock_client = MagicMock()
+        mock_sc.return_value = mock_client
+        mock_client.upsert_user.side_effect = [
+            Exception("User was deleted"),
+            None,
+        ]
+        client = get_stream_client()
+        sync_user_to_stream(client, self.user)
+        mock_client.reactivate_user.assert_called_once()
+        self.assertEqual(mock_client.upsert_user.call_count, 2)
+ 
+    @patch("apps.chat.services.logger")
+    @patch("apps.chat.services.StreamChat")
+    def test_sync_logs_warning_on_hard_deleted_user(self, mock_sc, mock_logger):
+        from apps.chat.services import get_stream_client, sync_user_to_stream
+        mock_client = MagicMock()
+        mock_sc.return_value = mock_client
+        mock_client.upsert_user.side_effect = Exception("User was deleted")
+        mock_client.reactivate_user.side_effect = Exception("Cannot reactivate hard-deleted")
+        client = get_stream_client()
+        sync_user_to_stream(client, self.user)  # no ha de llançar excepció
+        mock_logger.warning.assert_called()
+ 
+    @patch("apps.chat.services.StreamChat")
+    def test_sync_raises_non_deleted_exception(self, mock_sc):
+        from apps.chat.services import get_stream_client, sync_user_to_stream
+        mock_client = MagicMock()
+        mock_sc.return_value = mock_client
+        mock_client.upsert_user.side_effect = Exception("network error")
+        client = get_stream_client()
+        with self.assertRaises(Exception):
+            sync_user_to_stream(client, self.user)
+ 
+ 
+# ---------------------------------------------------------------------------
+# services.py — get_accessible_buildings
+# ---------------------------------------------------------------------------
+ 
+@override_settings(STREAM_API_KEY="", STREAM_API_SECRET="")
+class GetAccessibleBuildingsTests(TestCase):
+    def setUp(self):
+        self.grup = _create_grup(idGrup=50)
+        self.owner = User.objects.create_user(email="owner_acc@test.com", password="pw")
+        _set_role(self.owner, RoleChoices.OWNER)
+        self.tenant = User.objects.create_user(email="tenant_acc@test.com", password="pw")
+        _set_role(self.tenant, RoleChoices.TENANT)
+        self.admin = User.objects.create_user(email="admin_acc@test.com", password="pw")
+        _set_role(self.admin, RoleChoices.ADMIN)
+        self.edifici = _create_building(owner=self.owner, grup=self.grup)
+        Habitatge.objects.create(
+            referenciaCadastral="ACC001", planta="1", porta="1A",
+            superficie=80.0, edifici=self.edifici, usuari=self.tenant,
+        )
+ 
+    def test_unauthenticated_user_gets_no_buildings(self):
+        from apps.chat.services import get_accessible_buildings
+        anon = MagicMock()
+        anon.is_authenticated = False
+        result = get_accessible_buildings(anon)
+        self.assertEqual(result.count(), 0)
+ 
+    def test_superuser_sees_all_active_buildings(self):
+        from apps.chat.services import get_accessible_buildings
+        su = User.objects.create_superuser(email="su_acc@test.com", password="pw")
+        result = get_accessible_buildings(su)
+        self.assertIn(self.edifici, result)
+ 
+    def test_owner_sees_only_managed_buildings(self):
+        from apps.chat.services import get_accessible_buildings
+        other_edifici = _create_building(grup=self.grup)
+        result = get_accessible_buildings(self.owner)
+        ids = list(result.values_list("idEdifici", flat=True))
+        self.assertIn(self.edifici.idEdifici, ids)
+        self.assertNotIn(other_edifici.idEdifici, ids)
+ 
+    def test_tenant_sees_buildings_via_habitatge_usuari(self):
+        from apps.chat.services import get_accessible_buildings
+        result = get_accessible_buildings(self.tenant)
+        self.assertIn(self.edifici, result)
+ 
+    def test_tenant_sees_buildings_via_habitatge_propietari(self):
+        from apps.chat.services import get_accessible_buildings
+        propietari = User.objects.create_user(email="prop@test.com", password="pw")
+        _set_role(propietari, RoleChoices.TENANT)
+        Habitatge.objects.create(
+            referenciaCadastral="ACC002", planta="2", porta="2A",
+            superficie=90.0, edifici=self.edifici, propietari=propietari,
+        )
+        result = get_accessible_buildings(propietari)
+        self.assertIn(self.edifici, result)
+ 
+    def test_tenant_sees_buildings_via_habitatge_llogater(self):
+        from apps.chat.services import get_accessible_buildings
+        llogater = User.objects.create_user(email="llog@test.com", password="pw")
+        _set_role(llogater, RoleChoices.TENANT)
+        Habitatge.objects.create(
+            referenciaCadastral="ACC003", planta="3", porta="3A",
+            superficie=70.0, edifici=self.edifici, llogater=llogater,
+        )
+        result = get_accessible_buildings(llogater)
+        self.assertIn(self.edifici, result)
+ 
+    def test_admin_sees_all_active_buildings(self):
+        from apps.chat.services import get_accessible_buildings
+        result = get_accessible_buildings(self.admin)
+        self.assertIn(self.edifici, result)
+ 
+ 
+# ---------------------------------------------------------------------------
+# services.py — _format_building_address, _format_user_name
+# ---------------------------------------------------------------------------
+ 
+class FormatHelpersTests(TestCase):
+    def test_format_address_with_location(self):
+        from apps.chat.services import _format_building_address
+        loc = MagicMock()
+        loc.carrer = "Gran Via"
+        loc.numero = 42
+        edifici = MagicMock()
+        edifici.localitzacio = loc
+        edifici.idEdifici = 1
+        result = _format_building_address(edifici)
+        self.assertIn("Gran Via", result)
+        self.assertIn("42", result)
+ 
+    def test_format_address_without_location(self):
+        from apps.chat.services import _format_building_address
+        edifici = MagicMock()
+        edifici.localitzacio = None
+        edifici.idEdifici = 7
+        result = _format_building_address(edifici)
+        self.assertIn("7", result)
+ 
+    def test_format_address_with_location_but_no_carrer(self):
+        from apps.chat.services import _format_building_address
+        loc = MagicMock()
+        loc.carrer = ""
+        loc.numero = None
+        edifici = MagicMock()
+        edifici.localitzacio = loc
+        edifici.idEdifici = 9
+        result = _format_building_address(edifici)
+        self.assertIn("9", result)
+ 
+    def test_format_user_name_with_full_name(self):
+        from apps.chat.services import _format_user_name
+        user = MagicMock()
+        user.first_name = "Maria"
+        user.last_name = "Vila"
+        user.email = "maria@test.com"
+        self.assertEqual(_format_user_name(user), "Maria Vila")
+ 
+    def test_format_user_name_falls_back_to_email(self):
+        from apps.chat.services import _format_user_name
+        user = MagicMock()
+        user.first_name = ""
+        user.last_name = ""
+        user.email = "noemail@test.com"
+        self.assertEqual(_format_user_name(user), "noemail@test.com")
+ 
+ 
+# ---------------------------------------------------------------------------
+# services.py — _is_admin_finca_of_building, _is_valid_target_admin
+# ---------------------------------------------------------------------------
+ 
+class AdminFincaHelpersTests(TestCase):
+    def setUp(self):
+        self.grup = _create_grup(idGrup=51)
+        self.admin = User.objects.create_user(email="af_admin@test.com", password="pw")
+        _set_role(self.admin, RoleChoices.ADMIN)
+        self.tenant = User.objects.create_user(email="af_tenant@test.com", password="pw")
+        _set_role(self.tenant, RoleChoices.TENANT)
+        self.edifici = _create_building(owner=self.admin, grup=self.grup)
+ 
+    def test_unauthenticated_user_is_not_admin_finca(self):
+        from apps.chat.services import _is_admin_finca_of_building
+        anon = MagicMock()
+        anon.is_authenticated = False
+        self.assertFalse(_is_admin_finca_of_building(anon, self.edifici))
+ 
+    def test_superuser_is_always_admin_finca(self):
+        from apps.chat.services import _is_admin_finca_of_building
+        su = User.objects.create_superuser(email="af_su@test.com", password="pw")
+        self.assertTrue(_is_admin_finca_of_building(su, self.edifici))
+ 
+    def test_admin_matching_edifici_is_admin_finca(self):
+        from apps.chat.services import _is_admin_finca_of_building
+        self.assertTrue(_is_admin_finca_of_building(self.admin, self.edifici))
+ 
+    def test_tenant_is_not_admin_finca(self):
+        from apps.chat.services import _is_admin_finca_of_building
+        self.assertFalse(_is_admin_finca_of_building(self.tenant, self.edifici))
+ 
+    def test_is_valid_target_admin_none_returns_false(self):
+        from apps.chat.services import _is_valid_target_admin
+        self.assertFalse(_is_valid_target_admin(None))
+ 
+    def test_is_valid_target_admin_superuser_returns_true(self):
+        from apps.chat.services import _is_valid_target_admin
+        su = User.objects.create_superuser(email="vta_su@test.com", password="pw")
+        self.assertTrue(_is_valid_target_admin(su))
+ 
+    def test_is_valid_target_admin_admin_role_returns_true(self):
+        from apps.chat.services import _is_valid_target_admin
+        admin = User.objects.create_user(email="vta_admin@test.com", password="pw")
+        _set_role(admin, RoleChoices.ADMIN)
+        self.assertTrue(_is_valid_target_admin(admin))
+ 
+    def test_is_valid_target_admin_tenant_returns_false(self):
+        from apps.chat.services import _is_valid_target_admin
+        self.assertFalse(_is_valid_target_admin(self.tenant))
+ 
+ 
+# ---------------------------------------------------------------------------
+# services.py — get_twin_building_admin_candidates: errors i edge cases
+# ---------------------------------------------------------------------------
+ 
+@override_settings(STREAM_API_KEY="", STREAM_API_SECRET="")
+class TwinAdminCandidatesServiceTests(TestCase):
+    def setUp(self):
+        self.grup = _create_grup(idGrup=52)
+        self.admin = User.objects.create_user(email="cand_admin@test.com", password="pw")
+        _set_role(self.admin, RoleChoices.ADMIN)
+        self.edifici = _create_building(owner=self.admin, grup=self.grup)
+ 
+    def test_raises_value_error_for_nonexistent_edifici(self):
+        from apps.chat.services import get_twin_building_admin_candidates
+        with self.assertRaises(ValueError):
+            get_twin_building_admin_candidates(self.admin, 999999)
+ 
+    def test_raises_permission_error_if_not_admin_finca(self):
+        from apps.chat.services import get_twin_building_admin_candidates
+        other = User.objects.create_user(email="cand_other@test.com", password="pw")
+        _set_role(other, RoleChoices.ADMIN)
+        with self.assertRaises(PermissionError):
+            get_twin_building_admin_candidates(other, self.edifici.idEdifici)
+ 
+    def test_returns_empty_list_when_no_grup_comparable(self):
+        from apps.chat.services import get_twin_building_admin_candidates
+        edifici_no_grup = _create_building(owner=self.admin, grup=None)
+        result = get_twin_building_admin_candidates(self.admin, edifici_no_grup.idEdifici)
+        self.assertEqual(result, [])
+ 
+    def test_excludes_own_building_and_same_admin(self):
+        from apps.chat.services import get_twin_building_admin_candidates
+        # Edifici del mateix grup però gestionat pel mateix admin
+        _create_building(owner=self.admin, grup=self.grup)
+        result = get_twin_building_admin_candidates(self.admin, self.edifici.idEdifici)
+        for item in result:
+            self.assertNotEqual(item["edifici_id"], self.edifici.idEdifici)
+            self.assertNotEqual(item["admin"]["id"], self.admin.id)
+ 
+    def test_returns_candidates_with_valid_admin(self):
+        from apps.chat.services import get_twin_building_admin_candidates
+        other_admin = User.objects.create_user(email="cand_other2@test.com", password="pw")
+        _set_role(other_admin, RoleChoices.ADMIN)
+        _create_building(owner=other_admin, grup=self.grup)
+        result = get_twin_building_admin_candidates(self.admin, self.edifici.idEdifici)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["admin"]["email"], other_admin.email)
+ 
+ 
+# ---------------------------------------------------------------------------
+# services.py — get_or_create_twin_building_admin_channel: errors
+# ---------------------------------------------------------------------------
+ 
+@override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s")
+class TwinBuildingAdminChannelServiceTests(TestCase):
+    def setUp(self):
+        post_save.disconnect(chat_signals.sync_profile_to_stream, sender=Profile)
+        post_save.disconnect(chat_signals.add_tenant_to_building_channel, sender=Habitatge)
+        self.addCleanup(post_save.connect, chat_signals.sync_profile_to_stream, sender=Profile)
+        self.addCleanup(post_save.connect, chat_signals.add_tenant_to_building_channel, sender=Habitatge)
+ 
+        self.grup = _create_grup(idGrup=53)
+        self.altre_grup = _create_grup(idGrup=54)
+        self.admin1 = User.objects.create_user(email="ch_admin1@test.com", password="pw")
+        _set_role(self.admin1, RoleChoices.ADMIN)
+        self.admin2 = User.objects.create_user(email="ch_admin2@test.com", password="pw")
+        _set_role(self.admin2, RoleChoices.ADMIN)
+        self.edifici1 = _create_building(owner=self.admin1, grup=self.grup)
+        self.edifici2 = _create_building(owner=self.admin2, grup=self.grup)
+        self.edifici_altre = _create_building(owner=self.admin2, grup=self.altre_grup)
+ 
+    def test_raises_if_source_edifici_not_found(self):
+        from apps.chat.services import get_or_create_twin_building_admin_channel
+        with self.assertRaises(ValueError, msg="No s'ha trobat l'edifici origen"):
+            get_or_create_twin_building_admin_channel(self.admin1, 999999, self.edifici2.idEdifici)
+ 
+    def test_raises_if_target_edifici_not_found(self):
+        from apps.chat.services import get_or_create_twin_building_admin_channel
+        with self.assertRaises(ValueError, msg="No s'ha trobat l'edifici destí"):
+            get_or_create_twin_building_admin_channel(self.admin1, self.edifici1.idEdifici, 999999)
+ 
+    def test_raises_permission_error_if_not_admin_finca(self):
+        from apps.chat.services import get_or_create_twin_building_admin_channel
+        other = User.objects.create_user(email="ch_other@test.com", password="pw")
+        _set_role(other, RoleChoices.ADMIN)
+        with self.assertRaises(PermissionError):
+            get_or_create_twin_building_admin_channel(other, self.edifici1.idEdifici, self.edifici2.idEdifici)
+ 
+    def test_raises_if_source_has_no_grup(self):
+        from apps.chat.services import get_or_create_twin_building_admin_channel
+        edifici_no_grup = _create_building(owner=self.admin1, grup=None)
+        with self.assertRaises(ValueError, msg="no té cap grup comparable"):
+            get_or_create_twin_building_admin_channel(
+                self.admin1, edifici_no_grup.idEdifici, self.edifici2.idEdifici
+            )
+ 
+    def test_raises_if_same_edifici(self):
+        from apps.chat.services import get_or_create_twin_building_admin_channel
+        with self.assertRaises(ValueError, msg="mateix edifici"):
+            get_or_create_twin_building_admin_channel(
+                self.admin1, self.edifici1.idEdifici, self.edifici1.idEdifici
+            )
+ 
+    def test_raises_if_different_grup(self):
+        from apps.chat.services import get_or_create_twin_building_admin_channel
+        with self.assertRaises(ValueError, msg="mateix grup comparable"):
+            get_or_create_twin_building_admin_channel(
+                self.admin1, self.edifici1.idEdifici, self.edifici_altre.idEdifici
+            )
+ 
+    def test_raises_if_target_admin_same_user(self):
+        from apps.chat.services import get_or_create_twin_building_admin_channel
+        same_admin_edifici = _create_building(owner=self.admin1, grup=self.grup)
+        with self.assertRaises(ValueError, msg="mateix usuari"):
+            get_or_create_twin_building_admin_channel(
+                self.admin1, self.edifici1.idEdifici, same_admin_edifici.idEdifici
+            )
+ 
+    @patch("apps.chat.services.get_stream_client")
+    def test_channel_id_is_symmetric(self, mock_get_client):
+        from apps.chat.services import get_or_create_twin_building_admin_channel
+        mock_client, mock_channel = _make_mock_stream_client()
+        mock_get_client.return_value = mock_client
+ 
+        result = get_or_create_twin_building_admin_channel(
+            self.admin1, self.edifici1.idEdifici, self.edifici2.idEdifici
+        )
+        low = min(self.edifici1.idEdifici, self.edifici2.idEdifici)
+        high = max(self.edifici1.idEdifici, self.edifici2.idEdifici)
+        self.assertEqual(result["id"], f"twin_building_{low}_{high}_admins")
+        self.assertEqual(result["kind"], "twin_building_direct")
+ 
+ 
+# ---------------------------------------------------------------------------
+# moderation.py — _moderator_role_label
+# ---------------------------------------------------------------------------
+ 
+class ModeratorRoleLabelTests(TestCase):
+    def test_superuser_returns_superuser_label(self):
+        from apps.chat.moderation import _moderator_role_label
+        su = User.objects.create_superuser(email="rl_su@test.com", password="pw")
+        self.assertEqual(_moderator_role_label(su), "superuser")
+ 
+    def test_admin_returns_admin_label(self):
+        from apps.chat.moderation import _moderator_role_label
+        admin = User.objects.create_user(email="rl_admin@test.com", password="pw")
+        _set_role(admin, RoleChoices.ADMIN)
+        self.assertEqual(_moderator_role_label(admin), RoleChoices.ADMIN)
+ 
+    def test_user_without_profile_returns_empty_string(self):
+        from apps.chat.moderation import _moderator_role_label
+        user = MagicMock()
+        user.is_superuser = False
+        # del user.profile  # sense atribut profile
+        # Ha de retornar "" sense excepció
+        user.profile = None
+        result = _moderator_role_label(user)
+        self.assertIsInstance(result, str)
+ 
+ 
+# ---------------------------------------------------------------------------
+# moderation.py — _is_building_moderator: canal twin_group
+# ---------------------------------------------------------------------------
+ 
+class IsBuildingModeratorTwinGroupTests(TestCase):
+    def setUp(self):
+        self.grup = _create_grup(idGrup=55)
+        self.admin = User.objects.create_user(email="tg_admin@test.com", password="pw")
+        _set_role(self.admin, RoleChoices.ADMIN)
+        self.admin.profile.save()
+        self.edifici = _create_building(owner=self.admin, grup=self.grup)
+ 
+    def test_admin_can_moderate_own_twin_group_channel(self):
+        from apps.chat.moderation import _is_building_moderator
+        channel_id = f"twin_group_{self.grup.id}"
+        self.assertTrue(_is_building_moderator(self.admin, channel_id))
+ 
+    def test_admin_cannot_moderate_twin_group_without_building(self):
+        from apps.chat.moderation import _is_building_moderator
+        other_grup = _create_grup(idGrup=56)
+        channel_id = f"twin_group_{other_grup.id}"
+        self.assertFalse(_is_building_moderator(self.admin, channel_id))
+ 
+    def test_invalid_twin_group_id_returns_false(self):
+        from apps.chat.moderation import _is_building_moderator
+        self.assertFalse(_is_building_moderator(self.admin, "twin_group_abc"))
+ 
+    def test_invalid_building_id_returns_false(self):
+        from apps.chat.moderation import _is_building_moderator
+        self.assertFalse(_is_building_moderator(self.admin, "building_abc"))
+ 
+ 
+# ---------------------------------------------------------------------------
+# moderation.py — ModerationLog es crea per a totes les accions
+# ---------------------------------------------------------------------------
+ 
+@override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s")
+class ModerationLogCreationTests(TestCase):
+    def setUp(self):
+        self.grup = _create_grup(idGrup=57)
+        self.superuser = User.objects.create_superuser(email="mlsu@test.com", password="pw")
+        self.admin = User.objects.create_user(email="mladmin@test.com", password="pw")
+        _set_role(self.admin, RoleChoices.ADMIN)
+        self.target = User.objects.create_user(email="mltarget@test.com", password="pw")
+        self.edifici = _create_building(owner=self.admin, grup=self.grup)
+        self.channel_id = f"building_{self.edifici.idEdifici}"
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_hide_message_creates_log(self, mock_fn):
+        from apps.chat.moderation import hide_message
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        hide_message(self.admin, "msg-h1", self.channel_id, reason="spam")
+        log = ModerationLog.objects.filter(action="hide_message").first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.new_state, "hidden")
+        self.assertEqual(log.previous_state, "visible")
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_delete_message_creates_log(self, mock_fn):
+        from apps.chat.moderation import delete_message
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        delete_message(self.admin, "msg-d1", self.channel_id)
+        log = ModerationLog.objects.filter(action="delete_message").first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.new_state, "deleted")
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_restore_message_creates_log(self, mock_fn):
+        from apps.chat.moderation import restore_message
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        restore_message(self.admin, "msg-r1", self.channel_id)
+        log = ModerationLog.objects.filter(action="restore_message").first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.new_state, "visible")
+        self.assertEqual(log.previous_state, "hidden")
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_dismiss_flag_creates_log(self, mock_fn):
+        from apps.chat.moderation import dismiss_flag
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        dismiss_flag(self.admin, "msg-df1", self.channel_id)
+        log = ModerationLog.objects.filter(action="dismiss_flag").first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.new_state, "visible")
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_mute_user_creates_log(self, mock_fn):
+        from apps.chat.moderation import mute_user
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        mute_user(self.admin, self.target, self.channel_id, timeout=30, reason="flood")
+        log = ModerationLog.objects.filter(action="mute_user").first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.new_state, "muted")
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_unmute_user_creates_log(self, mock_fn):
+        from apps.chat.moderation import unmute_user
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        unmute_user(self.admin, self.target, self.channel_id)
+        log = ModerationLog.objects.filter(action="unmute_user").first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.new_state, "active")
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_ban_from_channel_creates_log(self, mock_fn):
+        from apps.chat.moderation import ban_from_channel
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        ban_from_channel(self.admin, self.target, self.channel_id, timeout=60)
+        log = ModerationLog.objects.filter(action="ban_from_channel").first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.new_state, "channel_banned")
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_unban_from_channel_creates_log(self, mock_fn):
+        from apps.chat.moderation import unban_from_channel
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        unban_from_channel(self.admin, self.target, self.channel_id)
+        log = ModerationLog.objects.filter(action="unban_from_channel").first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.new_state, "active")
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_global_unban_creates_log(self, mock_fn):
+        from apps.chat.moderation import global_unban
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        global_unban(self.superuser, self.target)
+        log = ModerationLog.objects.filter(action="global_unban").first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.new_state, "active")
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_shadow_ban_creates_log(self, mock_fn):
+        from apps.chat.moderation import shadow_ban
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        shadow_ban(self.superuser, self.target, reason="bot")
+        log = ModerationLog.objects.filter(action="shadow_ban").first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.new_state, "shadow_banned")
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_shadow_unban_creates_log(self, mock_fn):
+        from apps.chat.moderation import shadow_unban
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        shadow_unban(self.superuser, self.target)
+        log = ModerationLog.objects.filter(action="shadow_unban").first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.new_state, "active")
+
+
+# ---------------------------------------------------------------------------
+# signals.py
+# ---------------------------------------------------------------------------
+ 
+class SignalsTests(TestCase):
+    def test_sync_profile_skipped_when_not_configured(self):
+        """Si no hi ha credencials, el signal no ha d'intentar connectar."""
+        with override_settings(STREAM_API_KEY="", STREAM_API_SECRET=""):
+            with patch("apps.chat.services.StreamChat") as mock_sc:
+                user = User.objects.create_user(email="sig1@test.com", password="pw")
+                user.profile.save()
+                mock_sc.assert_not_called()
+ 
+    @override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s")
+    @patch("apps.chat.services.StreamChat")
+    def test_sync_profile_called_when_configured(self, mock_sc):
+        mock_client = MagicMock()
+        mock_sc.return_value = mock_client
+        mock_client.upsert_user.return_value = {}
+        user = User.objects.create_user(email="sig2@test.com", password="pw")
+        user.profile.save()
+        mock_client.upsert_user.assert_called()
+ 
+    @override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s")
+    @patch("apps.chat.signals.logger")
+    @patch("apps.chat.services.StreamChat")
+    def test_sync_profile_logs_warning_on_error(self, mock_sc, mock_logger):
+        mock_client = MagicMock()
+        mock_sc.return_value = mock_client
+        mock_client.upsert_user.side_effect = Exception("stream error")
+        user = User.objects.create_user(email="sig3@test.com", password="pw")
+        user.profile.save()  # no ha de llançar excepció
+        mock_logger.warning.assert_called()
+ 
+    def test_add_tenant_skipped_when_no_usuari(self):
+        """Si l'habitatge no té usuari, el signal no fa res."""
+        with override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s"):
+            with patch("apps.chat.services.StreamChat") as mock_sc:
+                grup = _create_grup(idGrup=60)
+                admin = User.objects.create_user(email="sig4@test.com", password="pw")
+                _set_role(admin, RoleChoices.ADMIN)
+                edifici = _create_building(owner=admin, grup=grup)
+                # Habitatge sense usuari — el signal no ha de cridar StreamChat
+                before = mock_sc.call_count
+                Habitatge.objects.create(
+                    referenciaCadastral="SIG001", planta="1", porta="1A",
+                    superficie=60.0, edifici=edifici,
+                )
+                # mock_sc no hauria d'haver-se cridat addicional
+                self.assertEqual(mock_sc.call_count, before)
+ 
+    @override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s")
+    @patch("apps.chat.signals.logger")
+    @patch("apps.chat.services.StreamChat")
+    def test_add_tenant_logs_warning_on_error(self, mock_sc, mock_logger):
+        mock_client = MagicMock()
+        mock_sc.return_value = mock_client
+        mock_client.upsert_user.side_effect = Exception("fail")
+        grup = _create_grup(idGrup=61)
+        admin = User.objects.create_user(email="sig5@test.com", password="pw")
+        _set_role(admin, RoleChoices.ADMIN)
+        edifici = _create_building(owner=admin, grup=grup)
+        tenant = User.objects.create_user(email="sig5t@test.com", password="pw")
+        Habitatge.objects.create(
+            referenciaCadastral="SIG002", planta="2", porta="2B",
+            superficie=75.0, edifici=edifici, usuari=tenant,
+        )
+        mock_logger.warning.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# views.py — endpoints no coberts: restore, dismiss-flag, unmute,
+#             ban/unban, global-unban, shadow-unban, errors 503/404
+# ---------------------------------------------------------------------------
+ 
+@override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s")
+class ModerationViewsMissingTests(APITestCase):
+    def setUp(self):
+        post_save.disconnect(chat_signals.sync_profile_to_stream, sender=Profile)
+        post_save.disconnect(chat_signals.add_tenant_to_building_channel, sender=Habitatge)
+        self.addCleanup(post_save.connect, chat_signals.sync_profile_to_stream, sender=Profile)
+        self.addCleanup(post_save.connect, chat_signals.add_tenant_to_building_channel, sender=Habitatge)
+ 
+        self.grup = _create_grup(idGrup=70)
+        self.admin = User.objects.create_user(email="mv_admin@test.com", password="pw")
+        _set_role(self.admin, RoleChoices.ADMIN)
+        self.tenant = User.objects.create_user(email="mv_tenant@test.com", password="pw")
+        _set_role(self.tenant, RoleChoices.TENANT)
+        self.superuser = User.objects.create_superuser(email="mv_su@test.com", password="pw")
+        self.target = User.objects.create_user(email="mv_target@test.com", password="pw")
+        self.edifici = _create_building(owner=self.admin, grup=self.grup)
+        self.channel_id = f"building_{self.edifici.idEdifici}"
+ 
+    def _post(self, url, user, data=None):
+        self.client.force_authenticate(user=user)
+        return self.client.post(url, data or {}, format="json")
+ 
+    # --- restore_message ---
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_admin_can_restore_message(self, mock_fn):
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        url = reverse("chat-restore-message", kwargs={"message_id": "msg-r1"})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 200)
+ 
+    def test_tenant_cannot_restore_message(self):
+        url = reverse("chat-restore-message", kwargs={"message_id": "msg-r2"})
+        resp = self._post(url, self.tenant, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 403)
+ 
+    @patch("apps.chat.views.logger")
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_restore_message_503_on_stream_error(self, mock_fn, _):
+        mock_client, mock_channel = _make_mock_stream_client()
+        mock_channel.update_message.side_effect = Exception("stream down")
+        mock_fn.return_value = mock_client
+        url = reverse("chat-restore-message", kwargs={"message_id": "msg-r3"})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 503)
+ 
+    # --- dismiss_flag ---
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_admin_can_dismiss_flag(self, mock_fn):
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        url = reverse("chat-dismiss-flag", kwargs={"message_id": "msg-df1"})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 200)
+ 
+    def test_tenant_cannot_dismiss_flag(self):
+        url = reverse("chat-dismiss-flag", kwargs={"message_id": "msg-df2"})
+        resp = self._post(url, self.tenant, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 403)
+ 
+    # --- unmute ---
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_admin_can_unmute_user(self, mock_fn):
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        url = reverse("chat-unmute-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 200)
+ 
+    def test_tenant_cannot_unmute_user(self):
+        url = reverse("chat-unmute-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.tenant, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 403)
+ 
+    @patch("apps.chat.views.logger")
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_unmute_503_on_stream_error(self, mock_fn, _):
+        mock_client, _ = _make_mock_stream_client()
+        mock_client.unmute_user.side_effect = Exception("fail")
+        mock_fn.return_value = mock_client
+        url = reverse("chat-unmute-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 503)
+ 
+    # --- ban_from_channel ---
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_admin_can_ban_from_channel(self, mock_fn):
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        url = reverse("chat-ban-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 200)
+ 
+    def test_ban_from_channel_returns_404_for_unknown_user(self):
+        url = reverse("chat-ban-user", kwargs={"user_id": 999999})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 404)
+ 
+    def test_tenant_cannot_ban_from_channel(self):
+        url = reverse("chat-ban-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.tenant, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 403)
+ 
+    @patch("apps.chat.views.logger")
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_ban_503_on_stream_error(self, mock_fn, _):
+        mock_client, mock_channel = _make_mock_stream_client()
+        mock_channel.ban_user.side_effect = Exception("fail")
+        mock_fn.return_value = mock_client
+        url = reverse("chat-ban-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id, "timeout": 60})
+        self.assertEqual(resp.status_code, 503)
+ 
+    # --- unban_from_channel ---
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_admin_can_unban_from_channel(self, mock_fn):
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        url = reverse("chat-unban-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 200)
+ 
+    def test_tenant_cannot_unban_from_channel(self):
+        url = reverse("chat-unban-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.tenant, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 403)
+ 
+    # --- global_unban ---
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_superuser_can_global_unban(self, mock_fn):
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        url = reverse("chat-global-unban", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.superuser, {"reason": "rehabilitat"})
+        self.assertEqual(resp.status_code, 200)
+ 
+    def test_admin_cannot_global_unban(self):
+        url = reverse("chat-global-unban", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.admin, {})
+        self.assertEqual(resp.status_code, 403)
+ 
+    def test_global_unban_returns_404_for_unknown_user(self):
+        url = reverse("chat-global-unban", kwargs={"user_id": 999999})
+        resp = self._post(url, self.superuser, {})
+        self.assertEqual(resp.status_code, 404)
+ 
+    @patch("apps.chat.views.logger")
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_global_unban_503_on_stream_error(self, mock_fn, _):
+        mock_client, _ = _make_mock_stream_client()
+        mock_client.unban_user.side_effect = Exception("fail")
+        mock_fn.return_value = mock_client
+        url = reverse("chat-global-unban", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.superuser, {})
+        self.assertEqual(resp.status_code, 503)
+ 
+    # --- shadow_unban ---
+ 
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_superuser_can_shadow_unban(self, mock_fn):
+        mock_client, _ = _make_mock_stream_client()
+        mock_fn.return_value = mock_client
+        url = reverse("chat-shadow-unban", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.superuser, {})
+        self.assertEqual(resp.status_code, 200)
+ 
+    def test_admin_cannot_shadow_unban(self):
+        url = reverse("chat-shadow-unban", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.admin, {})
+        self.assertEqual(resp.status_code, 403)
+ 
+    @patch("apps.chat.views.logger")
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_shadow_unban_503_on_stream_error(self, mock_fn, _):
+        mock_client, _ = _make_mock_stream_client()
+        mock_client.unban_user.side_effect = Exception("fail")
+        mock_fn.return_value = mock_client
+        url = reverse("chat-shadow-unban", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.superuser, {})
+        self.assertEqual(resp.status_code, 503)
+ 
+    # --- warn_user: 404 i 503 ---
+ 
+    def test_warn_returns_404_for_unknown_user(self):
+        url = reverse("chat-warn-user", kwargs={"user_id": 999999})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 404)
+ 
+    @patch("apps.chat.views.logger")
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_warn_503_on_stream_error(self, mock_fn, _):
+        mock_client, _ = _make_mock_stream_client()
+        mock_client.upsert_user.side_effect = Exception("fail")
+        mock_fn.return_value = mock_client
+        url = reverse("chat-warn-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 503)
+ 
+    # --- flag_message: 503 ---
+ 
+    @patch("apps.chat.views.logger")
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_flag_message_503_on_stream_error(self, mock_fn, _):
+        mock_client, _ = _make_mock_stream_client()
+        mock_client.flag.side_effect = Exception("fail")
+        mock_fn.return_value = mock_client
+        url = reverse("chat-flag-message", kwargs={"message_id": "msg-fail"})
+        resp = self._post(url, self.tenant, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 503)
+ 
+    # --- hide_message: 503 ---
+ 
+    @patch("apps.chat.views.logger")
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_hide_message_503_on_stream_error(self, mock_fn, _):
+        mock_client, mock_channel = _make_mock_stream_client()
+        mock_channel.update_message.side_effect = Exception("fail")
+        mock_fn.return_value = mock_client
+        url = reverse("chat-hide-message", kwargs={"message_id": "msg-fail2"})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 503)
+ 
+    # --- delete_message: 503 ---
+ 
+    @patch("apps.chat.views.logger")
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_delete_message_503_on_stream_error(self, mock_fn, _):
+        mock_client, mock_channel = _make_mock_stream_client()
+        mock_channel.delete_message.side_effect = Exception("fail")
+        mock_fn.return_value = mock_client
+        url = reverse("chat-delete-message", kwargs={"message_id": "msg-fail3"})
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.delete(
+            url, {"channel_id": self.channel_id, "is_own": True}, format="json"
+        )
+        self.assertEqual(resp.status_code, 503)
+ 
+    # --- mute: 503 i 404 ---
+ 
+    def test_mute_returns_404_for_unknown_user(self):
+        url = reverse("chat-mute-user", kwargs={"user_id": 999999})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 404)
+ 
+    @patch("apps.chat.views.logger")
+    @patch("apps.chat.moderation.get_stream_client")
+    def test_mute_503_on_stream_error(self, mock_fn, _):
+        mock_client, _ = _make_mock_stream_client()
+        mock_client.mute_user.side_effect = Exception("fail")
+        mock_fn.return_value = mock_client
+        url = reverse("chat-mute-user", kwargs={"user_id": self.target.id})
+        resp = self._post(url, self.admin, {"channel_id": self.channel_id})
+        self.assertEqual(resp.status_code, 503)
+ 
+ 
+# ---------------------------------------------------------------------------
+# views.py — TwinBuildingChannelView: camins d'error
+# ---------------------------------------------------------------------------
+ 
+@override_settings(STREAM_API_KEY="k", STREAM_API_SECRET="s")
+class TwinBuildingChannelViewErrorTests(APITestCase):
+    def setUp(self):
+        post_save.disconnect(chat_signals.sync_profile_to_stream, sender=Profile)
+        post_save.disconnect(chat_signals.add_tenant_to_building_channel, sender=Habitatge)
+        self.addCleanup(post_save.connect, chat_signals.sync_profile_to_stream, sender=Profile)
+        self.addCleanup(post_save.connect, chat_signals.add_tenant_to_building_channel, sender=Habitatge)
+ 
+        self.grup = _create_grup(idGrup=80)
+        self.admin = User.objects.create_user(email="tcv_admin@test.com", password="pw")
+        _set_role(self.admin, RoleChoices.ADMIN)
+        self.edifici = _create_building(owner=self.admin, grup=self.grup)
+ 
+    def test_non_integer_target_edifici_id_returns_400(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(
+            reverse("chat-twin-building-channel", kwargs={"edifici_id": self.edifici.idEdifici}),
+            {"target_edifici_id": "abc"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("enter", resp.data["detail"])
+ 
+    def test_permission_error_returns_403(self):
+        other = User.objects.create_user(email="tcv_other@test.com", password="pw")
+        _set_role(other, RoleChoices.ADMIN)
+        self.client.force_authenticate(user=other)
+        resp = self.client.post(
+            reverse("chat-twin-building-channel", kwargs={"edifici_id": self.edifici.idEdifici}),
+            {"target_edifici_id": 999},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 403)
+ 
+    @patch("apps.chat.views.logger")
+    @patch("apps.chat.services.get_stream_client")
+    def test_unexpected_exception_returns_503(self, mock_fn, _):
+        mock_fn.side_effect = Exception("unexpected")
+        altre_admin = User.objects.create_user(email="tcv_admin2@test.com", password="pw")
+        _set_role(altre_admin, RoleChoices.ADMIN)
+        altre_edifici = _create_building(owner=altre_admin, grup=self.grup)
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(
+            reverse("chat-twin-building-channel", kwargs={"edifici_id": self.edifici.idEdifici}),
+            {"target_edifici_id": altre_edifici.idEdifici},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 503)
+ 
+ 
+# ---------------------------------------------------------------------------
+# views.py — TwinBuildingAdminsView: errors
+# ---------------------------------------------------------------------------
+ 
+@override_settings(STREAM_API_KEY="", STREAM_API_SECRET="")
+class TwinBuildingAdminsViewErrorTests(APITestCase):
+    def setUp(self):
+        post_save.disconnect(chat_signals.sync_profile_to_stream, sender=Profile)
+        self.addCleanup(post_save.connect, chat_signals.sync_profile_to_stream, sender=Profile)
+        self.admin = User.objects.create_user(email="tav_admin@test.com", password="pw")
+        _set_role(self.admin, RoleChoices.ADMIN)
+ 
+    def test_nonexistent_edifici_returns_400(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.get(
+            reverse("chat-twin-building-admins", kwargs={"edifici_id": 999999})
+        )
+        self.assertEqual(resp.status_code, 400)
+ 
+    @patch("apps.chat.views.logger")
+    @patch(
+        "apps.chat.views.get_twin_building_admin_candidates",
+        side_effect=Exception("unexpected"),
+    )
+    def test_unexpected_exception_returns_500(self, _, __):
+        grup = _create_grup(idGrup=81)
+        edifici = _create_building(owner=self.admin, grup=grup)
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.get(
+            reverse("chat-twin-building-admins", kwargs={"edifici_id": edifici.idEdifici})
+        )
+        self.assertEqual(resp.status_code, 500)
 
 
 # ---------------------------------------------------------------------------
@@ -694,6 +1715,7 @@ class ModerationPermissionTests(APITestCase):
         self.assertIsNotNone(log)
         self.assertEqual(log.moderator_role, "superuser")
         self.assertEqual(log.new_state, "global_banned")
+
 # ---------------------------------------------------------------------------
 # US40 — Twin Building direct chat entre administradors de finca
 # ---------------------------------------------------------------------------

@@ -134,6 +134,11 @@ class LoginSerializer(serializers.Serializer):
                     raise serializers.ValidationError(
                         "Aquest compte està suspès temporalment."
                     )
+                # Suspension expired — auto-lift so the DB reflects reality.
+                profile.account_status = AccountStatus.ACTIVE
+                profile.suspension_reason = ""
+                profile.suspended_until = None
+                profile.save(update_fields=["account_status", "suspension_reason", "suspended_until"])
 
         refresh = RefreshToken.for_user(user)
         jti = str(refresh.get('jti'))
@@ -587,6 +592,11 @@ class GoogleOAuthSerializer(serializers.Serializer):
                 raise serializers.ValidationError(
                     "Aquest compte està suspès temporalment."
                 )
+            # Suspension expired — auto-lift so the DB reflects reality.
+            profile.account_status = AccountStatus.ACTIVE
+            profile.suspension_reason = ""
+            profile.suspended_until = None
+            profile.save(update_fields=["account_status", "suspension_reason", "suspended_until"])
 
         refresh = RefreshToken.for_user(user)
         jti = str(refresh.get("jti"))

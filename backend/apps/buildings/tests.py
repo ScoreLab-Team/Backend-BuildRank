@@ -4793,3 +4793,272 @@ class MilloraImplementadaValidacioScoreRankingTests(APITestCase):
         self.assertEqual(self.participacio.puntuacio, 100.0)
 
 
+# ============================================================================
+# Simulacions -> votacions: permisos owner/admin
+# ============================================================================
+
+from apps.buildings.models import (
+    VotacioSimulacioMillora,
+    VotSimulacioMillora,
+    EstatVotacioSimulacio,
+    SentitVotSimulacio,
+)
+
+
+class SimulacioVotacioPermisosTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            email="admin.votacions@example.com",
+            password="Password123",
+        )
+        self.admin.profile.role = RoleChoices.ADMIN
+        self.admin.profile.estatValidacioAdmin = ValidacioAdmin.APROVAT
+        self.admin.profile.save(update_fields=["role", "estatValidacioAdmin"])
+
+        self.owner = User.objects.create_user(
+            email="owner.votacions@example.com",
+            password="Password123",
+        )
+        self.owner.profile.role = RoleChoices.OWNER
+        self.owner.profile.save(update_fields=["role"])
+
+        self.tenant = User.objects.create_user(
+            email="tenant.votacions@example.com",
+            password="Password123",
+        )
+        self.tenant.profile.role = RoleChoices.TENANT
+        self.tenant.profile.save(update_fields=["role"])
+
+        self.external_owner = User.objects.create_user(
+            email="external.owner.votacions@example.com",
+            password="Password123",
+        )
+        self.external_owner.profile.role = RoleChoices.OWNER
+        self.external_owner.profile.save(update_fields=["role"])
+
+        self.grup = GrupComparable.objects.create(
+            idGrup=7701,
+            zonaClimatica="C2",
+            tipologia=TipusEdifici.RESIDENCIAL,
+            rangSuperficie="100-200",
+        )
+
+        self.localitzacio = Localitzacio.objects.create(
+            carrer="Carrer Votacions",
+            numero=1,
+            codiPostal="08001",
+            barri="Demo",
+            latitud=41.0,
+            longitud=2.0,
+            zonaClimatica="C2",
+        )
+
+        self.edifici = Edifici.objects.create(
+            anyConstruccio=2000,
+            tipologia=TipusEdifici.RESIDENCIAL,
+            superficieTotal=500,
+            nombrePlantes=4,
+            reglament="CTE",
+            orientacioPrincipal="Sud",
+            puntuacioBase=60,
+            localitzacio=self.localitzacio,
+            administradorFinca=self.admin,
+            grupComparable=self.grup,
+        )
+
+        self.hab_owner = Habitatge.objects.create(
+            referenciaCadastral="VOT-OWNER-001",
+            planta="1",
+            porta="A",
+            superficie=80,
+            edifici=self.edifici,
+            usuari=self.owner,
+            propietari=self.owner,
+            estatValidacio=EstatValidacio.VALIDADA,
+        )
+
+        self.hab_tenant = Habitatge.objects.create(
+            referenciaCadastral="VOT-TENANT-001",
+            planta="1",
+            porta="B",
+            superficie=70,
+            edifici=self.edifici,
+            usuari=self.tenant,
+            llogater=self.tenant,
+            estatValidacio=EstatValidacio.VALIDADA,
+        )
+
+        self.simulacio = SimulacioMillora.objects.create(
+            descripcio="Simulació votable",
+            edifici=self.edifici,
+            creadaPer=self.admin,
+            estatAplicacio=EstatAplicacioSimulacio.ESBORRANY,
+            reduccioConsumPrevista=10,
+            reduccioEmissionsPrevista=5,
+            costEstimat=1000,
+            estalviAnual=100,
+            resultat={},
+            hipotesiBase={},
+        )
+
+    def _crear_votacio(self):
+        return VotacioSimulacioMillora.objects.create(
+            simulacio=self.simulacio,
+            edifici=self.edifici,
+            creadaPer=self.admin,
+            titol="Votació simulació",
+            descripcio="Votació de prova",
+            dataFi=timezone.now() + timezone.timedelta(days=14),
+            quorumPercent=100,
+            majoriaPercent=50,
+            estat=EstatVotacioSimulacio.ACTIVA,
+        )
+
+    def test_admin_finca_pot_sotmetre_simulacio_a_votacio(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            reverse(
+                "edifici-sotmetre-simulacio-votacio",
+                args=[self.edifici.idEdifici, self.simulacio.id],
+            ),
+            {
+                "titol": "Votació millora",
+                "descripcio": "Votació generada des de simulació guardada.",
+                "diesDurada": 7,
+                "quorumPercent": 100,
+                "majoriaPercent": 50,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        self.simulacio.refresh_from_db()
+        self.assertEqual(self.simulacio.estatAplicacio, EstatAplicacioSimulacio.EN_VOTACIO)
+        self.assertTrue(
+            VotacioSimulacioMillora.objects.filter(simulacio=self.simulacio).exists()
+        )
+
+    def test_owner_no_pot_sotmetre_simulacio_a_votacio(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(
+            reverse(
+                "edifici-sotmetre-simulacio-votacio",
+                args=[self.edifici.idEdifici, self.simulacio.id],
+            ),
+            {"titol": "Intent no permès"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_owner_pot_votar_votacio_de_simulacio(self):
+        votacio = self._crear_votacio()
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(
+            reverse(
+                "edifici-votar-simulacio",
+                args=[self.edifici.idEdifici, votacio.id],
+            ),
+            {"sentit": SentitVotSimulacio.FAVOR},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(
+            VotSimulacioMillora.objects.filter(
+                votacio=votacio,
+                usuari=self.owner,
+                sentit=SentitVotSimulacio.FAVOR,
+            ).exists()
+        )
+
+    def test_admin_finca_pot_votar_votacio_de_simulacio(self):
+        votacio = self._crear_votacio()
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            reverse(
+                "edifici-votar-simulacio",
+                args=[self.edifici.idEdifici, votacio.id],
+            ),
+            {"sentit": SentitVotSimulacio.FAVOR},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(
+            VotSimulacioMillora.objects.filter(
+                votacio=votacio,
+                usuari=self.admin,
+                sentit=SentitVotSimulacio.FAVOR,
+            ).exists()
+        )
+
+    def test_tenant_no_pot_votar_votacio_de_simulacio(self):
+        votacio = self._crear_votacio()
+        self.client.force_authenticate(user=self.tenant)
+
+        response = self.client.post(
+            reverse(
+                "edifici-votar-simulacio",
+                args=[self.edifici.idEdifici, votacio.id],
+            ),
+            {"sentit": SentitVotSimulacio.FAVOR},
+            format="json",
+        )
+
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+        self.assertFalse(
+            VotSimulacioMillora.objects.filter(
+                votacio=votacio,
+                usuari=self.tenant,
+            ).exists()
+        )
+
+    def test_owner_sense_vinculacio_no_pot_votar(self):
+        votacio = self._crear_votacio()
+        self.client.force_authenticate(user=self.external_owner)
+
+        response = self.client.post(
+            reverse(
+                "edifici-votar-simulacio",
+                args=[self.edifici.idEdifici, votacio.id],
+            ),
+            {"sentit": SentitVotSimulacio.FAVOR},
+            format="json",
+        )
+
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+        self.assertFalse(
+            VotSimulacioMillora.objects.filter(
+                votacio=votacio,
+                usuari=self.external_owner,
+            ).exists()
+        )
+
+    def test_no_autenticat_no_pot_votar(self):
+        votacio = self._crear_votacio()
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            reverse(
+                "edifici-votar-simulacio",
+                args=[self.edifici.idEdifici, votacio.id],
+            ),
+            {"sentit": SentitVotSimulacio.FAVOR},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+

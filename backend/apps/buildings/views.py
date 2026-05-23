@@ -576,20 +576,41 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return False
 
         from apps.verification.access import admin_assignment_is_effective
+
         if admin_assignment_is_effective(user, edifici):
             return True
 
         if user.profile.role != RoleChoices.OWNER:
             return False
 
-        return edifici.habitatges.filter(Q(usuari=user) | Q(propietari=user)).exists()
+        return user.id in self._owner_ids_votacio(edifici)
+
+    def _owner_ids_votacio(self, edifici):
+        """
+        Retorna els propietaris amb dret de vot dins l'edifici.
+
+        Es contemplen:
+        - `usuari`, per compatibilitat amb el model antic;
+        - `propietari`, per al model actual de vinculació residencial.
+
+        Els tenants queden exclosos encara que apareguin com a `usuari`
+        legacy, perquè el criteri funcional és owner/admin.
+        """
+        owner_ids = set(
+            edifici.habitatges
+            .filter(usuari__isnull=False, usuari__profile__role=RoleChoices.OWNER)
+            .values_list('usuari_id', flat=True)
+        )
+        owner_ids.update(
+            edifici.habitatges
+            .filter(propietari__isnull=False, propietari__profile__role=RoleChoices.OWNER)
+            .values_list('propietari_id', flat=True)
+        )
+        return owner_ids
 
     def _electors_votacio_count(self, edifici):
         admin_count = 1 if edifici.administradorFinca_id else 0
-        owners_count = edifici.habitatges.filter(
-            usuari__isnull=False,
-            usuari__profile__role=RoleChoices.OWNER,
-        ).values('usuari').distinct().count()
+        owners_count = len(self._owner_ids_votacio(edifici))
         return max(admin_count + owners_count, 1)
 
     def _recalcular_estat_votacio(self, votacio):

@@ -812,12 +812,28 @@ class VotacioSimulacioMilloraSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    def _owner_ids(self, edifici):
+        """
+        Retorna els usuaris amb dret de vot com a propietaris de l'edifici.
+
+        Es tenen en compte tant el camp legacy `usuari` com el camp explícit
+        `propietari`, però només si el perfil de l'usuari és owner.
+        """
+        owner_ids = set(
+            edifici.habitatges
+            .filter(usuari__isnull=False, usuari__profile__role=RoleChoices.OWNER)
+            .values_list('usuari_id', flat=True)
+        )
+        owner_ids.update(
+            edifici.habitatges
+            .filter(propietari__isnull=False, propietari__profile__role=RoleChoices.OWNER)
+            .values_list('propietari_id', flat=True)
+        )
+        return owner_ids
+
     def _electors_count(self, obj):
         admin_count = 1 if obj.edifici.administradorFinca_id else 0
-        owners_count = obj.edifici.habitatges.filter(
-            usuari__isnull=False,
-            usuari__profile__role='owner',
-        ).values('usuari').distinct().count()
+        owners_count = len(self._owner_ids(obj.edifici))
         return max(admin_count + owners_count, 1)
 
     def get_totalVots(self, obj):
@@ -843,15 +859,20 @@ class VotacioSimulacioMilloraSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         if not request or not request.user.is_authenticated:
             return False
-        user = request.user
 
-        if obj.edifici.administradorFinca_id == user.id:
+        user = request.user
+        if not hasattr(user, 'profile'):
+            return False
+
+        from apps.verification.access import admin_assignment_is_effective
+
+        if admin_assignment_is_effective(user, obj.edifici):
             return True
 
-        return obj.edifici.habitatges.filter(
-            usuari=user,
-            usuari__profile__role='owner',
-        ).exists()
+        if user.profile.role != RoleChoices.OWNER:
+            return False
+
+        return user.id in self._owner_ids(obj.edifici)
 
     def get_elMeuVot(self, obj):
         request = self.context.get('request')

@@ -108,6 +108,98 @@ def _registrar_audit(*, edifici, accio, usuari, request,
     )
  
  
+
+def _aplicar_validacio_millora_a_score_ranking(millora_impl):
+    """
+    Quan una millora implementada passa a Validada, aplica el seu impacte real
+    al score de l'edifici i sincronitza la participació/ranking de la temporada activa.
+
+    Regla de domini:
+    - La millora només suma punts quan l'admin de sistema la valida.
+    - La puntuació queda limitada a [0, 100].
+    - La lliga/divisió no es reassigna automàticament a mitja temporada.
+      Es manté la participació actual i es recalculen posicions/snapshots.
+    """
+    from apps.seasons.models import Temporada, EstatTemporada
+    from apps.leagues.models import CategoriaRanking
+    from apps.leagues.services import generar_snapshots_temporada
+    from apps.participations.models import Participacio
+
+    resum = {
+        "edifici_id": getattr(millora_impl, "edifici_id", None),
+        "delta": 0.0,
+        "score_anterior": None,
+        "score_nou": None,
+        "score_actualitzat": False,
+        "participacio_actualitzada": False,
+        "ranking_actualitzat": False,
+        "temporada_id": None,
+    }
+
+    if not millora_impl or not getattr(millora_impl, "edifici_id", None):
+        return resum
+
+    delta = float(getattr(millora_impl.millora, "impactePunts", 0) or 0)
+    resum["delta"] = delta
+
+    temporada = None
+
+    with transaction.atomic():
+        edifici = Edifici.objects.select_for_update().get(pk=millora_impl.edifici_id)
+
+        score_actual = (
+            edifici.puntuacioBase
+            if edifici.puntuacioBase is not None
+            else edifici.puntuacioBaseOpenData
+        )
+        score_actual = float(score_actual or 0)
+        score_nou = max(0.0, min(100.0, score_actual + delta))
+
+        resum["score_anterior"] = score_actual
+        resum["score_nou"] = score_nou
+
+        if edifici.puntuacioBase != score_nou:
+            edifici.puntuacioBase = score_nou
+            edifici.save(update_fields=["puntuacioBase"])
+            resum["score_actualitzat"] = True
+
+        temporada = (
+            Temporada.objects
+            .filter(estat=EstatTemporada.ACTIVA)
+            .order_by("-dataInici", "-id_temporada")
+            .first()
+        )
+
+        if temporada:
+            resum["temporada_id"] = temporada.id_temporada
+
+            participacions = list(
+                Participacio.objects
+                .select_for_update()
+                .select_related("lliga")
+                .filter(
+                    edifici_id=edifici.pk,
+                    lliga__temporada_id=temporada.pk,
+                )
+                .order_by("id")
+            )
+
+            for participacio in participacions:
+                participacio.puntuacio = score_nou
+                participacio.divisio = participacio.lliga.divisio
+                participacio.save(update_fields=["puntuacio", "divisio"])
+
+            if participacions:
+                resum["participacio_actualitzada"] = True
+                resum["participacions_actualitzades"] = len(participacions)
+
+    if temporada:
+        generar_snapshots_temporada(temporada)
+        resum["ranking_actualitzat"] = True
+
+    return resum
+
+
 def _validar_consistencia_desactivacio(edifici):
     """
     Comprova inconsistències abans de desactivar un edifici.
@@ -484,20 +576,41 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return False
 
         from apps.verification.access import admin_assignment_is_effective
+
         if admin_assignment_is_effective(user, edifici):
             return True
 
         if user.profile.role != RoleChoices.OWNER:
             return False
 
-        return edifici.habitatges.filter(Q(usuari=user) | Q(propietari=user)).exists()
+        return user.id in self._owner_ids_votacio(edifici)
+
+    def _owner_ids_votacio(self, edifici):
+        """
+        Retorna els propietaris amb dret de vot dins l'edifici.
+
+        Es contemplen:
+        - `usuari`, per compatibilitat amb el model antic;
+        - `propietari`, per al model actual de vinculació residencial.
+
+        Els tenants queden exclosos encara que apareguin com a `usuari`
+        legacy, perquè el criteri funcional és owner/admin.
+        """
+        owner_ids = set(
+            edifici.habitatges
+            .filter(usuari__isnull=False, usuari__profile__role=RoleChoices.OWNER)
+            .values_list('usuari_id', flat=True)
+        )
+        owner_ids.update(
+            edifici.habitatges
+            .filter(propietari__isnull=False, propietari__profile__role=RoleChoices.OWNER)
+            .values_list('propietari_id', flat=True)
+        )
+        return owner_ids
 
     def _electors_votacio_count(self, edifici):
         admin_count = 1 if edifici.administradorFinca_id else 0
-        owners_count = edifici.habitatges.filter(
-            usuari__isnull=False,
-            usuari__profile__role=RoleChoices.OWNER,
-        ).values('usuari').distinct().count()
+        owners_count = len(self._owner_ids_votacio(edifici))
         return max(admin_count + owners_count, 1)
 
     def _recalcular_estat_votacio(self, votacio):
@@ -1140,6 +1253,7 @@ class MilloraImplementadaViewSet(viewsets.GenericViewSet):
 
         nou_estat = input_serializer.validated_data["estatValidacio"]
         observacions = input_serializer.validated_data.get("observacionsAdmin", "")
+        estat_anterior = millora_impl.estatValidacio
 
         if millora_impl.estatValidacio not in (
             EstatValidacio.PENDENT_DOCUMENTACIO, EstatValidacio.EN_REVISIO
@@ -1155,6 +1269,10 @@ class MilloraImplementadaViewSet(viewsets.GenericViewSet):
         # l'usuari que ha fet la validació final. Per permisos, només pot ser admin sistema.
         millora_impl.administradorFinca = request.user
         millora_impl.save(update_fields=["estatValidacio", "observacionsAdmin", "administradorFinca"])
+
+        score_ranking_summary = None
+        if nou_estat == EstatValidacio.VALIDADA and estat_anterior != EstatValidacio.VALIDADA:
+            score_ranking_summary = _aplicar_validacio_millora_a_score_ranking(millora_impl)
 
         if nou_estat == EstatValidacio.VALIDADA and millora_impl.simulacio_id:
             hi_ha_pendents_o_rebutjades = millora_impl.simulacio.implementacions_generades.exclude(
@@ -1174,7 +1292,11 @@ class MilloraImplementadaViewSet(viewsets.GenericViewSet):
             # El recalcul de badges no ha de bloquejar la validació d'una millora.
             pass
 
-        return Response(output_serializer.data, status=status.HTTP_200_OK)
+        response_data = dict(output_serializer.data)
+        if score_ranking_summary is not None:
+            response_data["scoreRanking"] = score_ranking_summary
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 

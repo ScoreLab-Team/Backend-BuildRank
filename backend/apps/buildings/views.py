@@ -2,6 +2,23 @@
 import random
 
 from rest_framework.views import APIView
+from .schemas import (
+    third_party_score_schema,
+    PointInputSerializer, ThirdPartyRequestSerializer, PointResultSerializer, ThirdPartyResponseSerializer,
+    DesactivarBodySerializer, DesactivarDryRunResponseSerializer, DesactivarResponseSerializer, ReactivarResponseSerializer,
+    BadgesResponseSerializer, RecalcularBadgesResponseSerializer, MapaResponseSerializer, PosicioRankingResponseSerializer,
+    AdminFincaAltaResponseSerializer, SolicitudAccesResponseSerializer, AutocompleteCarrerItemSerializer,
+    edifici_viewset_schema, desactivar_schema, reactivar_schema, habitatges_schema,
+    habitatge_detail_schema, dades_energetiques_schema, me_habitatge_schema,
+    simulacions_preview_schema, simulacions_schema, sotmetre_simulacio_votacio_schema,
+    votacions_simulacions_schema, votar_simulacio_schema, acreditar_implementacio_schema,
+    millores_implementades_schema, mapa_schema, cerca_per_carrer_schema, badges_schema,
+    recalcular_badges_schema, validar_millora_schema, habitatge_viewset_schema,
+    solicitar_acces_schema, validar_acces_schema, pendents_schema, cataleg_millora_viewset_schema,
+    ranking_viewset_schema, posicion_schema, admin_finca_alta_schema,
+    edificis_mostrar_schema, edifici_crear_schema, edifici_veure_schema,
+    edifici_editar_schema, edifici_esborrar_schema, autocomplete_carrers_schema,
+)
 from rest_framework.response import Response
 from rest_framework import serializers, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -14,11 +31,14 @@ from rest_framework.exceptions import PermissionDenied
 
 from apps.accounts.permissions import ABACMixin, IsAdminSistema, IsAdminFinca
 from apps.accounts.models import RoleChoices, ValidacioAdmin
-
+from apps.buildings.services.badges import get_badges_resum_edifici, recalcular_insignies_edifici
+ 
 from .models import (
     Edifici, Habitatge, Localitzacio, DadesEnergetiques,
-    carrersBarcelona, EstatValidacio, AccioAudit, EdificiAuditLog,
+    carrersBarcelona, EstatValidacio, RolVinculacioHabitatge, AccioAudit, EdificiAuditLog,
     CatalegMillora, SimulacioMillora, SimulacioMilloraItem, MilloraImplementada,
+    EstatAplicacioSimulacio, EstatVotacioSimulacio, SentitVotSimulacio,
+    VotacioSimulacioMillora, VotSimulacioMillora, BuildingBadge,
 )
 from .serializers import (
     EdificiDetailSerializer, EdificiListSerializer, EdificiMapSerializer,
@@ -30,7 +50,9 @@ from .serializers import (
     SimulacioMilloraPreviewSerializer,
     SimulacioMilloraSerializer, MilloraImplementadaSerializer,
     ValidacioMilloraSerializer,
-    ReclamarEdificiAdminSerializer,
+    ReclamarEdificiAdminSerializer, VotacioSimulacioMilloraSerializer,
+    CrearVotacioSimulacioSerializer, VotarSimulacioSerializer,
+    AcreditarSimulacioImplementadaSerializer,
 )
 from .permissions import (
     EsAdminEdifici,
@@ -49,6 +71,14 @@ from .services.building_lookup import buscar_edifici
 from .pagination import RankingPaginacio
 from django.db import transaction
 from .simulation.engine import simular_millores
+ 
+from .schemas import (
+    third_party_score_schema,
+    PointInputSerializer, ThirdPartyRequestSerializer, PointResultSerializer, ThirdPartyResponseSerializer,
+    DesactivarBodySerializer, DesactivarDryRunResponseSerializer, DesactivarResponseSerializer, ReactivarResponseSerializer,
+    BadgesResponseSerializer, RecalcularBadgesResponseSerializer, MapaResponseSerializer, PosicioRankingResponseSerializer,
+    AdminFincaAltaResponseSerializer, SolicitudAccesResponseSerializer, AutocompleteCarrerItemSerializer,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -76,6 +106,98 @@ def _registrar_audit(*, edifici, accio, usuari, request,
         motiu=motiu,
         ip=_get_client_ip(request),
     )
+ 
+ 
+
+def _aplicar_validacio_millora_a_score_ranking(millora_impl):
+    """
+    Quan una millora implementada passa a Validada, aplica el seu impacte real
+    al score de l'edifici i sincronitza la participació/ranking de la temporada activa.
+
+    Regla de domini:
+    - La millora només suma punts quan l'admin de sistema la valida.
+    - La puntuació queda limitada a [0, 100].
+    - La lliga/divisió no es reassigna automàticament a mitja temporada.
+      Es manté la participació actual i es recalculen posicions/snapshots.
+    """
+    from apps.seasons.models import Temporada, EstatTemporada
+    from apps.leagues.models import CategoriaRanking
+    from apps.leagues.services import generar_snapshots_temporada
+    from apps.participations.models import Participacio
+
+    resum = {
+        "edifici_id": getattr(millora_impl, "edifici_id", None),
+        "delta": 0.0,
+        "score_anterior": None,
+        "score_nou": None,
+        "score_actualitzat": False,
+        "participacio_actualitzada": False,
+        "ranking_actualitzat": False,
+        "temporada_id": None,
+    }
+
+    if not millora_impl or not getattr(millora_impl, "edifici_id", None):
+        return resum
+
+    delta = float(getattr(millora_impl.millora, "impactePunts", 0) or 0)
+    resum["delta"] = delta
+
+    temporada = None
+
+    with transaction.atomic():
+        edifici = Edifici.objects.select_for_update().get(pk=millora_impl.edifici_id)
+
+        score_actual = (
+            edifici.puntuacioBase
+            if edifici.puntuacioBase is not None
+            else edifici.puntuacioBaseOpenData
+        )
+        score_actual = float(score_actual or 0)
+        score_nou = max(0.0, min(100.0, score_actual + delta))
+
+        resum["score_anterior"] = score_actual
+        resum["score_nou"] = score_nou
+
+        if edifici.puntuacioBase != score_nou:
+            edifici.puntuacioBase = score_nou
+            edifici.save(update_fields=["puntuacioBase"])
+            resum["score_actualitzat"] = True
+
+        temporada = (
+            Temporada.objects
+            .filter(estat=EstatTemporada.ACTIVA)
+            .order_by("-dataInici", "-id_temporada")
+            .first()
+        )
+
+        if temporada:
+            resum["temporada_id"] = temporada.id_temporada
+
+            participacions = list(
+                Participacio.objects
+                .select_for_update()
+                .select_related("lliga")
+                .filter(
+                    edifici_id=edifici.pk,
+                    lliga__temporada_id=temporada.pk,
+                )
+                .order_by("id")
+            )
+
+            for participacio in participacions:
+                participacio.puntuacio = score_nou
+                participacio.divisio = participacio.lliga.divisio
+                participacio.save(update_fields=["puntuacio", "divisio"])
+
+            if participacions:
+                resum["participacio_actualitzada"] = True
+                resum["participacions_actualitzades"] = len(participacions)
+
+    if temporada:
+        generar_snapshots_temporada(temporada)
+        resum["ranking_actualitzat"] = True
+
+    return resum
 
 
 def _validar_consistencia_desactivacio(edifici):
@@ -120,6 +242,7 @@ def _validar_consistencia_desactivacio(edifici):
 # ViewSets
 # ---------------------------------------------------------------------------
 
+@cataleg_millora_viewset_schema
 class CatalegMilloraViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Endpoint de catàleg de millores per al frontend.
@@ -137,6 +260,7 @@ class CatalegMilloraViewSet(viewsets.ReadOnlyModelViewSet):
 
         return queryset.order_by("categoria", "nom")
 
+@edifici_viewset_schema
 class EdificiViewSet(viewsets.ModelViewSet):
     queryset = Edifici.objects.all()
 
@@ -155,11 +279,20 @@ class EdificiViewSet(viewsets.ModelViewSet):
         role = user.profile.role
         qs = Edifici.actius.all()
         if role == RoleChoices.ADMIN:
-            return qs.filter(administradorFinca=user)
+            from apps.verification.access import effective_admin_buildings_queryset
+            return effective_admin_buildings_queryset(qs, user)
         if role == RoleChoices.OWNER:
-            return qs.filter(habitatges__usuari=user).distinct()
+            return qs.filter(
+                Q(habitatges__usuari=user) |
+                Q(habitatges__propietari=user) |
+                Q(habitatges__llogater=user)
+            ).distinct()
         if role == RoleChoices.TENANT:
-            return qs.filter(habitatges__usuari=user).distinct()
+            return qs.filter(
+                Q(habitatges__usuari=user) |
+                Q(habitatges__propietari=user) |
+                Q(habitatges__llogater=user)
+            ).distinct()
         return Edifici.objects.none()
 
     def get_serializer_class(self):
@@ -169,11 +302,16 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         """
-        Quan un administrador de finca crea un edifici, el backend el vincula
-        automàticament a l'usuari autenticat. El frontend no ha d'enviar
-        administradorFinca manualment.
+        Crear un edifici no concedeix gestió immediata a l'admin finca.
+
+        La vinculació efectiva s'ha de produir quan la verificació documental
+        passa a approved. Això evita que un usuari pugui accedir a l'edifici
+        mentre la documentació encara està pending/running/review.
         """
-        serializer.save(administradorFinca=self.request.user)
+        if self.request.user.is_superuser:
+            serializer.save()
+        else:
+            serializer.save(administradorFinca=None)
 
     def get_permissions(self):
         if self.action in ['destroy']:
@@ -198,6 +336,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
     # ?confirmat=true             → executa la desactivació (#169 + #171)
     # Body opcional: { "motiu": "..." }
     # ------------------------------------------------------------------
+    @desactivar_schema
     @action(detail=True, methods=['post'],
             permission_classes=[IsAuthenticated, IsAdminSistema])
     def desactivar(self, request, pk=None):
@@ -267,6 +406,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
     # US20 — Reactivació
     # POST /edificis/{id}/reactivar/
     # ------------------------------------------------------------------
+    @reactivar_schema
     @action(detail=True, methods=['post'],
             permission_classes=[IsAuthenticated, IsAdminSistema])
     def reactivar(self, request, pk=None):
@@ -311,6 +451,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         )
 
     # GET /edificis/{id}/habitatges/
+    @habitatges_schema
     @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici])
     def habitatges(self, request, pk=None):
         edifici = self.get_object()
@@ -318,11 +459,12 @@ class EdificiViewSet(viewsets.ModelViewSet):
         if request.user.profile.role == RoleChoices.ADMIN:
             habitatges = edifici.habitatges.all()
         else:
-            habitatges = edifici.habitatges.filter(usuari=request.user)
-
+            habitatges = edifici.habitatges.filter(Q(usuari=request.user) | Q(propietari=request.user) | Q(llogater=request.user))
+        
         serializer = HabitatgeResumSerializer(habitatges, many=True)
         return Response(serializer.data)
 
+    @habitatge_detail_schema
     @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici],
         url_path='habitatges/(?P<referenciaCadastral>[A-Za-z0-9]+)')
     def habitatge_detail(self, request, pk=None, referenciaCadastral=None):
@@ -335,12 +477,13 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         # Propietari només pot veure el seu
         if edifici.administradorFinca != request.user:
-            if habitatge.usuari != request.user:
+            if not habitatge.te_vinculacio(request.user):
                 return Response({"detail": "No tens permisos."}, status=403)
 
         serializer = HabitatgeDetailSerializer(habitatge, context={'request': request})
         return Response(serializer.data)
 
+    @dades_energetiques_schema
     @action(detail=True, methods=['get'], permission_classes=[EsAdminOPropietariEdifici])
     def dades_energetiques(self, request, pk=None):
         edifici = self.get_object()  # ja aplica check_object_permissions automàticament
@@ -349,7 +492,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         if edifici.administradorFinca == request.user:
             habitatges = edifici.habitatges.select_related('dadesEnergetiques').all()
         else:
-            habitatges = edifici.habitatges.select_related('dadesEnergetiques').filter(usuari=request.user)
+            habitatges = edifici.habitatges.select_related('dadesEnergetiques').filter(Q(usuari=request.user) | Q(propietari=request.user) | Q(llogater=request.user))
 
         dades = []
         for habitatge in habitatges:
@@ -368,6 +511,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
             return Response({"detail": "No hi ha dades energètiques disponibles."}, status=404)
 
         return Response(dades)
+    @me_habitatge_schema
     @action(
         detail=True,
         methods=['patch'],
@@ -416,6 +560,90 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         return items
 
+    def _es_admin_de_finca_edifici(self, request, edifici):
+        if not (
+            request.user.is_authenticated
+            and hasattr(request.user, 'profile')
+            and request.user.profile.role == RoleChoices.ADMIN
+        ):
+            return False
+
+        from apps.verification.access import admin_assignment_is_effective
+        return admin_assignment_is_effective(request.user, edifici)
+
+    def _pot_votar_votacio(self, user, edifici):
+        if not user.is_authenticated or not hasattr(user, 'profile'):
+            return False
+
+        from apps.verification.access import admin_assignment_is_effective
+
+        if admin_assignment_is_effective(user, edifici):
+            return True
+
+        if user.profile.role != RoleChoices.OWNER:
+            return False
+
+        return user.id in self._owner_ids_votacio(edifici)
+
+    def _owner_ids_votacio(self, edifici):
+        """
+        Retorna els propietaris amb dret de vot dins l'edifici.
+
+        Es contemplen:
+        - `usuari`, per compatibilitat amb el model antic;
+        - `propietari`, per al model actual de vinculació residencial.
+
+        Els tenants queden exclosos encara que apareguin com a `usuari`
+        legacy, perquè el criteri funcional és owner/admin.
+        """
+        owner_ids = set(
+            edifici.habitatges
+            .filter(usuari__isnull=False, usuari__profile__role=RoleChoices.OWNER)
+            .values_list('usuari_id', flat=True)
+        )
+        owner_ids.update(
+            edifici.habitatges
+            .filter(propietari__isnull=False, propietari__profile__role=RoleChoices.OWNER)
+            .values_list('propietari_id', flat=True)
+        )
+        return owner_ids
+
+    def _electors_votacio_count(self, edifici):
+        admin_count = 1 if edifici.administradorFinca_id else 0
+        owners_count = len(self._owner_ids_votacio(edifici))
+        return max(admin_count + owners_count, 1)
+
+    def _recalcular_estat_votacio(self, votacio):
+        if votacio.estat != EstatVotacioSimulacio.ACTIVA:
+            return votacio
+
+        total_electors = self._electors_votacio_count(votacio.edifici)
+        total_vots = votacio.total_vots
+        vots_favor = votacio.vots_favor
+
+        participacio = (total_vots / total_electors) * 100
+        favor = (vots_favor / total_vots) * 100 if total_vots else 0
+
+        ara = timezone.now()
+
+        if participacio >= votacio.quorumPercent and favor >= votacio.majoriaPercent:
+            votacio.estat = EstatVotacioSimulacio.APROVADA
+            votacio.simulacio.estatAplicacio = EstatAplicacioSimulacio.APROVADA
+            votacio.simulacio.votacioAprovadaAt = ara
+            votacio.simulacio.save(update_fields=['estatAplicacio', 'votacioAprovadaAt'])
+            votacio.save(update_fields=['estat', 'updatedAt'])
+            return votacio
+
+        if ara > votacio.dataFi:
+            votacio.estat = EstatVotacioSimulacio.REBUTJADA
+            votacio.simulacio.estatAplicacio = EstatAplicacioSimulacio.REBUTJADA
+            votacio.simulacio.save(update_fields=['estatAplicacio'])
+            votacio.save(update_fields=['estat', 'updatedAt'])
+            return votacio
+
+        return votacio
+
+    @simulacions_preview_schema
     @action(
         detail=True,
         methods=['post'],
@@ -438,6 +666,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         return Response(resultat, status=status.HTTP_200_OK)
 
+    @simulacions_schema
     @action(
         detail=True,
         methods=['get', 'post'],
@@ -498,6 +727,224 @@ class EdificiViewSet(viewsets.ModelViewSet):
         output = SimulacioMilloraSerializer(simulacio)
         return Response(output.data, status=status.HTTP_201_CREATED)
 
+
+    @sotmetre_simulacio_votacio_schema
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path=r'simulacions/(?P<simulacio_id>\d+)/sotmetre-votacio',
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici],
+    )
+    def sotmetre_simulacio_votacio(self, request, pk=None, simulacio_id=None):
+        edifici = self.get_object()
+
+        if not self._es_admin_de_finca_edifici(request, edifici):
+            return Response(
+                {"detail": "Només l'administrador de finca de l'edifici pot sotmetre simulacions a votació."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        simulacio = get_object_or_404(
+            SimulacioMillora.objects.prefetch_related('items__millora'),
+            pk=simulacio_id,
+            edifici=edifici,
+        )
+
+        if hasattr(simulacio, 'votacio'):
+            return Response(
+                {"detail": "Aquesta simulació ja té una votació associada."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if simulacio.estatAplicacio not in (
+            EstatAplicacioSimulacio.ESBORRANY,
+            EstatAplicacioSimulacio.REBUTJADA,
+        ):
+            return Response(
+                {"detail": "Aquesta simulació no es pot sotmetre a votació en el seu estat actual."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = CrearVotacioSimulacioSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        data_fi = data.get('dataFi')
+        if data_fi is None:
+            data_fi = timezone.now() + timezone.timedelta(days=data.get('diesDurada', 14))
+
+        titol = data.get('titol') or simulacio.descripcio or f"Votació simulació {simulacio.id}"
+
+        with transaction.atomic():
+            votacio = VotacioSimulacioMillora.objects.create(
+                simulacio=simulacio,
+                edifici=edifici,
+                creadaPer=request.user,
+                titol=titol,
+                descripcio=data.get('descripcio', ''),
+                dataFi=data_fi,
+                quorumPercent=data.get('quorumPercent', 75),
+                majoriaPercent=data.get('majoriaPercent', 50),
+            )
+
+            simulacio.estatAplicacio = EstatAplicacioSimulacio.EN_VOTACIO
+            simulacio.save(update_fields=['estatAplicacio'])
+
+        output = VotacioSimulacioMilloraSerializer(
+            votacio,
+            context={'request': request},
+        )
+        return Response(output.data, status=status.HTTP_201_CREATED)
+
+    @votacions_simulacions_schema
+    @action(
+        detail=True,
+        methods=['get'],
+        url_path='votacions-simulacions',
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici],
+    )
+    def votacions_simulacions(self, request, pk=None):
+        edifici = self.get_object()
+
+        votacions = (
+            edifici.votacions_simulacions
+            .select_related('simulacio', 'edifici', 'creadaPer')
+            .prefetch_related('simulacio__items__millora', 'vots')
+            .order_by('-createdAt')
+        )
+
+        for votacio in votacions:
+            self._recalcular_estat_votacio(votacio)
+
+        serializer = VotacioSimulacioMilloraSerializer(
+            votacions,
+            many=True,
+            context={'request': request},
+        )
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @votar_simulacio_schema
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path=r'votacions-simulacions/(?P<votacio_id>\d+)/votar',
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici],
+    )
+    def votar_simulacio(self, request, pk=None, votacio_id=None):
+        edifici = self.get_object()
+
+        votacio = get_object_or_404(
+            VotacioSimulacioMillora.objects.select_related('edifici', 'simulacio'),
+            pk=votacio_id,
+            edifici=edifici,
+        )
+
+        votacio = self._recalcular_estat_votacio(votacio)
+
+        if votacio.estat != EstatVotacioSimulacio.ACTIVA:
+            return Response(
+                {"detail": "Aquesta votació ja no està activa."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if timezone.now() > votacio.dataFi:
+            votacio = self._recalcular_estat_votacio(votacio)
+            return Response(
+                {"detail": "Aquesta votació ha finalitzat."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if not self._pot_votar_votacio(request.user, edifici):
+            return Response(
+                {"detail": "No tens permisos per votar en aquesta votació."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = VotarSimulacioSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        VotSimulacioMillora.objects.update_or_create(
+            votacio=votacio,
+            usuari=request.user,
+            defaults={'sentit': serializer.validated_data['sentit']},
+        )
+
+        votacio = self._recalcular_estat_votacio(votacio)
+
+        output = VotacioSimulacioMilloraSerializer(
+            votacio,
+            context={'request': request},
+        )
+        return Response(output.data, status=status.HTTP_200_OK)
+
+    @acreditar_implementacio_schema
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path=r'simulacions/(?P<simulacio_id>\d+)/acreditar-implementacio',
+        permission_classes=[IsAuthenticated, EsAdminOPropietariEdifici],
+    )
+    def acreditar_implementacio_simulacio(self, request, pk=None, simulacio_id=None):
+        edifici = self.get_object()
+
+        if not self._es_admin_de_finca_edifici(request, edifici):
+            return Response(
+                {"detail": "Només l'administrador de finca pot acreditar l'aplicació d'una simulació aprovada."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        simulacio = get_object_or_404(
+            SimulacioMillora.objects.prefetch_related('items__millora'),
+            pk=simulacio_id,
+            edifici=edifici,
+        )
+
+        if simulacio.estatAplicacio != EstatAplicacioSimulacio.APROVADA:
+            return Response(
+                {"detail": "Només es poden acreditar simulacions aprovades per votació."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = AcreditarSimulacioImplementadaSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        items = list(simulacio.items.select_related('millora'))
+
+        if not items:
+            return Response(
+                {"detail": "La simulació no té millores associades."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        implementacions = []
+
+        with transaction.atomic():
+            for item in items:
+                impl = MilloraImplementada.objects.create(
+                    simulacio=simulacio,
+                    edifici=edifici,
+                    millora=item.millora,
+                    dataExecucio=data['dataExecucio'],
+                    costReal=data['costReal'],
+                    documentacioAdjunta=data['documentacioAdjunta'],
+                    estatValidacio=EstatValidacio.EN_REVISIO,
+                    administradorFinca=request.user,
+                )
+                implementacions.append(impl)
+
+            # La simulació NO passa a implementada en aquest punt.
+            # L'admin de finca només acredita i puja evidències.
+            # La validació final la fa l'admin de sistema a /millores-implementades/{id}/validar/.
+
+        output = MilloraImplementadaSerializer(
+            implementacions,
+            many=True,
+            context={'request': request},
+        )
+        return Response(output.data, status=status.HTTP_201_CREATED)
+
+    @millores_implementades_schema
     @action(
         detail=True,
         methods=["get"],
@@ -516,6 +963,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         serializer = MilloraImplementadaSerializer(implementacions, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    @mapa_schema
     @action(
         detail=False,
         methods=["get"],
@@ -641,6 +1089,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
     
+    @cerca_per_carrer_schema
     @action(detail=False, methods=['get'], url_path='cerca')
     def cerca_per_carrer(self, request):
         """
@@ -658,10 +1107,142 @@ class EdificiViewSet(viewsets.ModelViewSet):
         serializer = EdificiCercaSerializer(edificis[:15], many=True)
         return Response(serializer.data)
 
+    @badges_schema
+    @action(detail=True, methods=['get'], url_path='badges')
+    def badges(self, request, pk=None):
+        """
+        Retorna les insígnies assignades a l'edifici.
+
+        Si s'indica ?temporada=<id>, es retornen:
+        - insígnies permanents de l'edifici
+        - insígnies estacionals d'aquella temporada
+
+        Sense filtre de temporada, es retornen totes les assignacions visibles.
+        """
+        edifici = self.get_object()
+        temporada_id = request.query_params.get('temporada')
+
+        queryset = (
+            BuildingBadge.objects
+            .filter(edifici=edifici, badge__activa=True)
+            .select_related('badge', 'temporada')
+            .order_by('badge__categoria', 'badge__code', '-awarded_at')
+        )
+
+        if temporada_id:
+            queryset = queryset.filter(
+                Q(temporada_id=temporada_id) |
+                Q(temporada__isnull=True)
+            )
+
+        resultats = []
+        for assignacio in queryset:
+            resultats.append({
+                "id": assignacio.id,
+                "code": assignacio.badge.code,
+                "nom": assignacio.badge.nom,
+                "descripcio": assignacio.badge.descripcio,
+                "categoria": assignacio.badge.categoria,
+                "scope": assignacio.badge.scope,
+                "temporada": assignacio.temporada_id,
+                "temporadaNom": assignacio.temporada.nom if assignacio.temporada_id else None,
+                "valorSnapshot": (
+                    str(assignacio.valor_snapshot)
+                    if assignacio.valor_snapshot is not None
+                    else None
+                ),
+                "metadata": assignacio.metadata,
+                "awardedAt": assignacio.awarded_at,
+            })
+
+        return Response({
+            "edifici": edifici.idEdifici,
+            "temporada": temporada_id,
+            "count": len(resultats),
+            "summary": get_badges_resum_edifici(edifici, temporada=temporada_id, limit=3),
+            "results": resultats,
+        }, status=status.HTTP_200_OK)
+
+    @recalcular_badges_schema
+    @action(detail=True, methods=['post'], url_path='badges/recalcular')
+    def recalcular_badges(self, request, pk=None):
+        """
+        Recalcula les insígnies de l'edifici.
+
+        Només ho pot fer:
+        - administrador de sistema / staff / superuser
+        - administrador de finca de l'edifici
+        """
+        edifici = self.get_object()
+        user = request.user
+
+        is_system_admin = bool(user.is_staff or user.is_superuser)
+        from apps.verification.access import admin_assignment_is_effective
+        is_finca_admin = admin_assignment_is_effective(user, edifici)
+
+        if not (is_system_admin or is_finca_admin):
+            return Response(
+                {"detail": "No tens permisos per recalcular les insígnies d'aquest edifici."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        temporada = None
+        temporada_id = request.data.get("temporada") or request.query_params.get("temporada")
+
+        if temporada_id:
+            from apps.seasons.models import Temporada
+            temporada = get_object_or_404(Temporada, pk=temporada_id)
+
+        assignades = recalcular_insignies_edifici(edifici, temporada=temporada)
+
+        return Response(
+            {
+                "edifici": edifici.idEdifici,
+                "temporada": getattr(temporada, "pk", None),
+                "count": len(assignades),
+                "summary": get_badges_resum_edifici(edifici, temporada=temporada, limit=5),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
 class MilloraImplementadaViewSet(viewsets.GenericViewSet):
-    queryset = MilloraImplementada.objects.select_related("millora", "edifici")
+    queryset = MilloraImplementada.objects.select_related(
+        "millora",
+        "edifici",
+        "edifici__localitzacio",
+        "simulacio",
+    )
     serializer_class = MilloraImplementadaSerializer
     permission_classes = [IsAuthenticated, EsAdminMilloraImplementada]
+
+    @validar_millora_schema
+    def get_queryset(self):
+        queryset = super().get_queryset().order_by("-dataExecucio", "-id")
+
+        estat = self.request.query_params.get("estat")
+        if estat:
+            queryset = queryset.filter(estatValidacio=estat)
+
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        """Llista millores implementades per al panell d'administració."""
+        serializer = self.get_serializer(self.get_queryset(), many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="pendents")
+    def pendents(self, request):
+        """Llista millores pendents de revisió/validació final."""
+        queryset = self.get_queryset().filter(
+            estatValidacio__in=[
+                EstatValidacio.PENDENT_DOCUMENTACIO,
+                EstatValidacio.EN_REVISIO,
+            ]
+        )
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="validar")
     def validar(self, request, pk=None):
@@ -672,6 +1253,7 @@ class MilloraImplementadaViewSet(viewsets.GenericViewSet):
 
         nou_estat = input_serializer.validated_data["estatValidacio"]
         observacions = input_serializer.validated_data.get("observacionsAdmin", "")
+        estat_anterior = millora_impl.estatValidacio
 
         if millora_impl.estatValidacio not in (
             EstatValidacio.PENDENT_DOCUMENTACIO, EstatValidacio.EN_REVISIO
@@ -683,13 +1265,42 @@ class MilloraImplementadaViewSet(viewsets.GenericViewSet):
 
         millora_impl.estatValidacio = nou_estat
         millora_impl.observacionsAdmin = observacions
+        # El camp conserva el nom històric administradorFinca, però aquí desa
+        # l'usuari que ha fet la validació final. Per permisos, només pot ser admin sistema.
         millora_impl.administradorFinca = request.user
         millora_impl.save(update_fields=["estatValidacio", "observacionsAdmin", "administradorFinca"])
 
+        score_ranking_summary = None
+        if nou_estat == EstatValidacio.VALIDADA and estat_anterior != EstatValidacio.VALIDADA:
+            score_ranking_summary = _aplicar_validacio_millora_a_score_ranking(millora_impl)
+
+        if nou_estat == EstatValidacio.VALIDADA and millora_impl.simulacio_id:
+            hi_ha_pendents_o_rebutjades = millora_impl.simulacio.implementacions_generades.exclude(
+                estatValidacio=EstatValidacio.VALIDADA
+            ).exists()
+
+            if not hi_ha_pendents_o_rebutjades:
+                millora_impl.simulacio.estatAplicacio = EstatAplicacioSimulacio.IMPLEMENTADA
+                millora_impl.simulacio.save(update_fields=["estatAplicacio"])
+
         output_serializer = MilloraImplementadaSerializer(millora_impl)
-        return Response(output_serializer.data, status=status.HTTP_200_OK)
+        try:
+            millora_validada = getattr(output_serializer, "instance", None)
+            if millora_validada and getattr(millora_validada, "edifici_id", None):
+                recalcular_insignies_edifici(millora_validada.edifici)
+        except Exception:
+            # El recalcul de badges no ha de bloquejar la validació d'una millora.
+            pass
+
+        response_data = dict(output_serializer.data)
+        if score_ranking_summary is not None:
+            response_data["scoreRanking"] = score_ranking_summary
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
+
+@habitatge_viewset_schema
 class HabitatgeViewSet(viewsets.ModelViewSet):
     queryset = Habitatge.objects.all()
 
@@ -698,16 +1309,22 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         if not user.is_authenticated or not hasattr(user, 'profile'):
             return Habitatge.objects.none()
 
-        # Excepció per US-H2
-        # Permetem que qualsevol usuari trobi l'habitatge si el que vol és sol·licitar-hi accés
+        # Excepció per US-H2:
+        # Permetem trobar l'habitatge si l'acció és sol·licitar-hi accés.
         if self.action == 'solicitar_acces':
             return Habitatge.objects.all()
 
         role = user.profile.role
         if role == RoleChoices.ADMIN:
             return Habitatge.objects.filter(edifici__administradorFinca=user)
+
         if role in (RoleChoices.OWNER, RoleChoices.TENANT):
-            return Habitatge.objects.filter(usuari=user)
+            return Habitatge.objects.filter(
+                Q(usuari=user) |
+                Q(propietari=user) |
+                Q(llogater=user)
+            ).distinct()
+
         return Habitatge.objects.none()
 
     def get_serializer_class(self):
@@ -730,13 +1347,38 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
 
         if not refCadastral:
             return Response({"error": "La referència cadastral és obligatòria."}, status=status.HTTP_400_BAD_REQUEST)
-        
+
+        if not hasattr(request.user, 'profile'):
+            return Response({"error": "Usuari sense perfil funcional."}, status=status.HTTP_403_FORBIDDEN)
+
+        role = request.user.profile.role
+        if role not in (RoleChoices.OWNER, RoleChoices.TENANT):
+            return Response(
+                {"error": "Només propietaris i llogaters poden sol·licitar accés a un habitatge."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        rol_solicitat = (
+            RolVinculacioHabitatge.OWNER
+            if role == RoleChoices.OWNER
+            else RolVinculacioHabitatge.TENANT
+        )
+
         habitatge = Habitatge.objects.filter(referenciaCadastral=refCadastral).first()
 
         if habitatge:
-            if habitatge.estatValidacio == EstatValidacio.VALIDADA:
-                return Response({"error": "Aquest habitatge ja està validat per un altre usuari."}, status=status.HTTP_400_BAD_REQUEST)
-            
+            ocupant_actual_id = (
+                habitatge.propietari_id or habitatge.usuari_id
+                if rol_solicitat == RolVinculacioHabitatge.OWNER
+                else habitatge.llogater_id
+            )
+
+            if ocupant_actual_id and ocupant_actual_id != request.user.id:
+                return Response(
+                    {"error": "Aquest rol ja està validat per a aquest habitatge."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             if habitatge.solicitant and habitatge.solicitant != request.user:
                 return Response(
                     {"error": "Aquest habitatge ja té una sol·licitud d'accés pendent de revisió per part d'un altre usuari."},
@@ -744,81 +1386,108 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
                 )
 
             habitatge.solicitant = request.user
+            habitatge.rolSolicitat = rol_solicitat
             habitatge.estatValidacio = EstatValidacio.EN_REVISIO
-            habitatge.idEdifici = edificiID
-            habitatge.save()
-            
+
+            if edificiID:
+                habitatge.edifici_id = edificiID
+
+            habitatge.save(update_fields=['solicitant', 'rolSolicitat', 'estatValidacio', 'edifici'])
             serializer = self.get_serializer(habitatge)
             return Response(serializer.data, status=status.HTTP_200_OK)
-        
+
         return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         if self.request.user.profile.role == RoleChoices.ADMIN:
             raise PermissionDenied("Els administradors de finca no poden crear habitatges.")
+
+        role = self.request.user.profile.role
+        if role not in (RoleChoices.OWNER, RoleChoices.TENANT):
+            raise PermissionDenied("Només propietaris i llogaters poden sol·licitar habitatges.")
+
+        rol_solicitat = (
+            RolVinculacioHabitatge.OWNER
+            if role == RoleChoices.OWNER
+            else RolVinculacioHabitatge.TENANT
+        )
+
         try:
-            serializer.save(solicitant=self.request.user)
+            serializer.save(
+                solicitant=self.request.user,
+                rolSolicitat=rol_solicitat,
+                estatValidacio=EstatValidacio.EN_REVISIO,
+            )
         except IntegrityError:
             raise serializers.ValidationError(
                 {"referenciaCadastral": "Ja existeix un habitatge amb aquesta referència cadastral."}
             )
 
+    @solicitar_acces_schema
     @action(detail=True, methods=['post'], url_path='solicitar-acces')
     def solicitar_acces(self, request, pk=None):
-        # Sol·licitud de vincular-se a aquest habitatge
+        # Sol·licitud de vincular-se a aquest habitatge com a propietari o llogater.
         habitatge = self.get_object()
 
-        # Comprovar si l'habitatge ja està ocupat per un usuari validat
-        if habitatge.usuari:
+        if not hasattr(request.user, 'profile'):
+            return Response({"error": "Usuari sense perfil funcional."}, status=status.HTTP_403_FORBIDDEN)
+
+        role = request.user.profile.role
+        if role not in (RoleChoices.OWNER, RoleChoices.TENANT):
             return Response(
-                {"detail": "Aquest habitatge ja té un resident assignat."},
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": "Només propietaris i llogaters poden sol·licitar accés a un habitatge."},
+                status=status.HTTP_403_FORBIDDEN,
             )
-        
-        # Bloquejar si l'estat ja és 'Validada'
-        if habitatge.estatValidacio == EstatValidacio.VALIDADA:
+
+        rol_solicitat = (
+            RolVinculacioHabitatge.OWNER
+            if role == RoleChoices.OWNER
+            else RolVinculacioHabitatge.TENANT
+        )
+
+        ocupant_actual_id = (
+            habitatge.propietari_id or habitatge.usuari_id
+            if rol_solicitat == RolVinculacioHabitatge.OWNER
+            else habitatge.llogater_id
+        )
+
+        if ocupant_actual_id and ocupant_actual_id != request.user.id:
             return Response(
-                {"error": "Aquest habitatge ja ha estat validat prèviament."},
-                status=status.HTTP_400_BAD_REQUEST
+                {"detail": "Aquest rol ja està validat per a aquest habitatge."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        
-        # Evitar trepitjar una sol·licitud pendent d'un altre usuari
+
         if habitatge.solicitant and habitatge.solicitant != request.user:
             return Response(
                 {"error": "Ja hi ha una sol·licitud pendent per aquest habitatge."},
                 status=status.HTTP_409_CONFLICT
             )
-        
-        # Guardem la sol·licitud, posem l'estat en revisió i guardem qui és l'usuari que ho demana
+
         habitatge.estatValidacio = EstatValidacio.EN_REVISIO
         habitatge.solicitant = request.user
-        habitatge.save(update_fields=['estatValidacio', 'solicitant'])
+        habitatge.rolSolicitat = rol_solicitat
+        habitatge.save(update_fields=['estatValidacio', 'solicitant', 'rolSolicitat'])
 
         return Response(
-            {"detail": "Sol·licitud enviada correctament."},
+            {
+                "detail": "Sol·licitud enviada correctament.",
+                "rolSolicitat": rol_solicitat,
+            },
             status=status.HTTP_200_OK
         )
 
+    @validar_acces_schema
     @action(detail=True, methods=['post'], url_path='validar-acces')
     def validar_acces(self, request, pk=None):
-        # L'Administrador de finca aprova o rebutja la sol·licitud
+        # L'administrador de finca aprova o rebutja la sol·licitud.
         habitatge = self.get_object()
 
-        if habitatge.usuari is not None:
-            return Response(
-                {"error": "Aquest habitatge ja té un resident vinculat."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-
-        # Només l'admin d'aquest edifici pot validar-ho
         if habitatge.edifici.administradorFinca != request.user:
             return Response(
                 {"error": "No tens permisos per validar accessos en aquest edifici."},
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # Comprovem que realment hi hagi algú pendent
         if habitatge.estatValidacio != EstatValidacio.EN_REVISIO or not habitatge.solicitant:
             return Response(
                 {"error": "Aquest habitatge no té cap sol·licitud pendent de revisió."},
@@ -827,25 +1496,70 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
 
         nouEstat = request.data.get('estat')
 
+        rol_solicitat = habitatge.rolSolicitat
+        if not rol_solicitat and hasattr(habitatge.solicitant, 'profile'):
+            if habitatge.solicitant.profile.role == RoleChoices.OWNER:
+                rol_solicitat = RolVinculacioHabitatge.OWNER
+            elif habitatge.solicitant.profile.role == RoleChoices.TENANT:
+                rol_solicitat = RolVinculacioHabitatge.TENANT
+
+        if rol_solicitat not in (RolVinculacioHabitatge.OWNER, RolVinculacioHabitatge.TENANT):
+            return Response(
+                {"error": "No es pot determinar si la sol·licitud és de propietari o llogater."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if nouEstat == EstatValidacio.VALIDADA:
-            habitatge.usuari = habitatge.solicitant
+            ocupant_actual_id = (
+                habitatge.propietari_id or habitatge.usuari_id
+                if rol_solicitat == RolVinculacioHabitatge.OWNER
+                else habitatge.llogater_id
+            )
+
+            if ocupant_actual_id and ocupant_actual_id != habitatge.solicitant_id:
+                return Response(
+                    {"error": "Aquest rol ja està ocupat per un altre usuari."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            habitatge.rolSolicitat = rol_solicitat
+            habitatge.assignar_solicitant_validat()
             habitatge.estatValidacio = EstatValidacio.VALIDADA
             habitatge.solicitant = None
-            habitatge.save(update_fields=['usuari', 'estatValidacio', 'solicitant'])
+            habitatge.rolSolicitat = None
+            habitatge.save(update_fields=[
+                'usuari',
+                'propietari',
+                'llogater',
+                'estatValidacio',
+                'solicitant',
+                'rolSolicitat',
+            ])
 
             return Response(
-                {"message": "Sol·licitud aprovada. Resident assignat."},
+                {"message": "Sol·licitud aprovada. Vinculació assignada correctament."},
                 status=status.HTTP_200_OK
             )
 
         elif nouEstat == EstatValidacio.REBUTJADA:
-            habitatge.estatValidacio = EstatValidacio.REBUTJADA
+            te_vinculacio_validada = bool(
+                habitatge.usuari_id or habitatge.propietari_id or habitatge.llogater_id
+            )
+
+            habitatge.estatValidacio = (
+                EstatValidacio.VALIDADA
+                if te_vinculacio_validada
+                else EstatValidacio.REBUTJADA
+            )
             habitatge.solicitant = None
-            habitatge.save()
+            habitatge.rolSolicitat = None
+            habitatge.save(update_fields=['estatValidacio', 'solicitant', 'rolSolicitat'])
+
             return Response({"detail": "Sol·licitud rebutjada."}, status=status.HTTP_200_OK)
-        
+
         return Response({"error": "Estat no vàlid."}, status=status.HTTP_400_BAD_REQUEST)
-        
+
+    @pendents_schema
     @action(detail=False, methods=['get'])
     def pendents(self, request):
         # Retorna només els habitatges que estan pendents de validació
@@ -884,7 +1598,11 @@ class DadesEnergetiquesViewSet(viewsets.ModelViewSet):
         if role == RoleChoices.ADMIN:
             return DadesEnergetiques.objects.filter(dades_energetiques__edifici__administradorFinca=user).distinct()
         if role in (RoleChoices.OWNER, RoleChoices.TENANT):
-            return DadesEnergetiques.objects.filter(dades_energetiques__usuari=user).distinct()
+            return DadesEnergetiques.objects.filter(
+            Q(dades_energetiques__usuari=user) |
+            Q(dades_energetiques__propietari=user) |
+            Q(dades_energetiques__llogater=user)
+        ).distinct()
         return DadesEnergetiques.objects.none()
 
     def get_permissions(self):
@@ -898,6 +1616,7 @@ class DadesEnergetiquesViewSet(viewsets.ModelViewSet):
 class EdificisMostrarAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @edificis_mostrar_schema
     # GET /edificis/mostrar/: Llista tots els edificis
     def get(self, request):
         edificis = Edifici.objects.all()
@@ -907,6 +1626,7 @@ class EdificisMostrarAPIView(APIView):
 class EdificiCrearAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @edifici_crear_schema
     # POST /edificis/crear/: Crea un nou edifici
     def post(self, request):
         serializer = EdificiDetailSerializer(data=request.data, context={'request': request})
@@ -918,6 +1638,7 @@ class EdificiCrearAPIView(APIView):
 class EdificiVeureAPIView(ABACMixin, APIView):
     permission_classes = [IsAuthenticated]
 
+    @edifici_veure_schema
     # GET /edificis/{id}/veure/: Retorna un edifici concret
     def get(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
@@ -932,6 +1653,7 @@ class EdificiVeureAPIView(ABACMixin, APIView):
 class EdificiEditarAPIView(ABACMixin, APIView):
     permission_classes = [IsAuthenticated]
 
+    @edifici_editar_schema
     # PUT /edificis/{id}/editar/: Actualitza tot un edifici
     def put(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
@@ -948,6 +1670,7 @@ class EdificiEditarAPIView(ABACMixin, APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     # PATCH /edificis/{id}/: Actualitza només una part de l'edifici
+    @edifici_editar_schema
     def patch(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
 
@@ -965,6 +1688,7 @@ class EdificiEditarAPIView(ABACMixin, APIView):
 class EdificiEsborrarAPIView(ABACMixin, APIView):
     permission_classes = [IsAuthenticated]
 
+    @edifici_esborrar_schema
     # DELETE /edificis/{id}/esborrar: Esborra un edifici
     def delete(self, request, pk):
         edifici = get_object_or_404(Edifici, pk=pk)
@@ -975,6 +1699,7 @@ class EdificiEsborrarAPIView(ABACMixin, APIView):
         return Response({"detail": "Edifici esborrat correctament."}, status=status.HTTP_204_NO_CONTENT)
 
 
+@autocomplete_carrers_schema
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def autocomplete_carrers(request):
@@ -1034,6 +1759,7 @@ def autocomplete_carrers(request):
 
     return Response(list(resultats))
 
+@ranking_viewset_schema
 class RankingViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = RankingSerializer
     pagination_class = RankingPaginacio
@@ -1047,6 +1773,7 @@ class RankingViewSet(viewsets.ReadOnlyModelViewSet):
 
         return queryset.order_by('-score')
 
+    @posicion_schema
     @action(detail=True, methods=['get'])
     def posicion(self, request, pk=None):
         edifici = get_object_or_404(Edifici, pk=pk)
@@ -1107,6 +1834,7 @@ class ThirdPartyServiceView(APIView):
 
     permission_classes = [HasAPIKey]
 
+    @third_party_score_schema
     def post(self, request):
         points = request.data.get("points", [])
 
@@ -1179,6 +1907,7 @@ class ThirdPartyServiceView(APIView):
 class AdminFincaEdificiAltaView(APIView):
     permission_classes = [IsAuthenticated, IsAdminFinca]
 
+    @admin_finca_alta_schema
     def post(self, request):
         perfil = request.user.profile
 
@@ -1217,12 +1946,20 @@ class AdminFincaEdificiAltaView(APIView):
                     {"error": "Aquest edifici ja té un administrador de finca assignat."},
                     status=status.HTTP_409_CONFLICT
                 )
-
-            # Assignar si existeix però no té admin
-            edifici.administradorFinca = request.user
-            edifici.save()
-            return Response({"message": "Edifici assignat correctament."}, status=status.HTTP_200_OK)
-
+            
+            # No assignem encara: cal verificació documental approved.
+            return Response(
+                {
+                    "message": (
+                        "Edifici localitzat. Per administrar-lo cal completar "
+                        "i aprovar la verificació documental."
+                    ),
+                    "edifici_id": edifici.idEdifici,
+                    "requereix_verificacio": True,
+                },
+                status=status.HTTP_200_OK,
+            )
+        
         # Si l'edifici no existeix, el creem i l'assignem
         if not loc:
             loc = Localitzacio.objects.create(
@@ -1237,10 +1974,19 @@ class AdminFincaEdificiAltaView(APIView):
             anyConstruccio=data.get('anyConstruccio'),
             tipologia=data.get('tipologia'),
             superficieTotal=data.get('superficieTotal'),
-            administradorFinca=request.user
+            reglament=data.get('reglament'),
+            orientacioPrincipal=data.get('orientacioPrincipal'),
+            administradorFinca=None,
         )
 
         return Response(
-            {"message": "Edifici creat i assignat correctament.", "edifici_id": nouEdifici.idEdifici},
+            {
+                "message": (
+                    "Edifici creat. Per administrar-lo cal completar "
+                    "i aprovar la verificació documental."
+                ),
+                "edifici_id": nouEdifici.idEdifici,
+                "requereix_verificacio": True,
+            },
             status=status.HTTP_201_CREATED
         )

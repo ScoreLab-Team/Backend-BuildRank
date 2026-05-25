@@ -33,3 +33,6 @@ Thumbs.db
 # Datasets locals grans / open data
 cee.csv
 backend/cee.csv
+
+# User-uploaded media files
+backend/media/

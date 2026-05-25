@@ -54,7 +54,7 @@ ENABLE_DEBUG_TOOLBAR = os.getenv("ENABLE_DEBUG_TOOLBAR", "False").lower() == "tr
 
 ALLOWED_HOSTS = env_list(
     "ALLOWED_HOSTS",
-    default="localhost,127.0.0.1,0.0.0.0,nattech.fib.upc.edu",
+    default="localhost,127.0.0.1,0.0.0.0,10.0.2.2",
 )
 
 
@@ -82,6 +82,11 @@ INSTALLED_APPS = [
     "apps.chat",
 
     "apps.verification",
+    'apps.community',
+    'apps.notifications',
+
+    'apps.audit',
+    "drf_spectacular",
 ]
 
 MIDDLEWARE = [
@@ -93,6 +98,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'apps.audit.middleware.AuditMiddleware',
 ]
 
 if DEBUG and ENABLE_DEBUG_TOOLBAR:
@@ -171,6 +177,10 @@ USE_TZ = True
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
+MEDIA_URL = os.getenv("MEDIA_URL", "/media/")
+_media_root = os.getenv("MEDIA_ROOT")
+MEDIA_ROOT = Path(_media_root) if _media_root else BASE_DIR / "media"
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
@@ -178,7 +188,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'apps.accounts.authentication.AccountStatusJWTAuthentication',
     ),
     # Política "denegar per defecte": qualsevol endpoint nou requereix autenticació
     # tret que declari explícitament permission_classes = [AllowAny]
@@ -197,7 +207,8 @@ REST_FRAMEWORK = {
         'login': '3/min',          # Login: 3 intentos/min por IP → previene credential stuffing
         'register': '5/hour',      # Register: 5 registros/hora por IP → evita account enumeration
         'refresh': '20/min',       # Refresh: 20 req/min → uso normal sin abuse
-    }
+    },
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 
 AUTH_USER_MODEL = 'accounts.User'
@@ -274,6 +285,17 @@ STREAM_TOKEN_EXPIRATION_SECONDS = int(os.getenv("STREAM_TOKEN_EXPIRATION_SECONDS
 
 # Google OAuth / Sign-In
 GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+
+# Password reset / Email
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.console.EmailBackend",
+)
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@buildrank.local")
+PASSWORD_RESET_FRONTEND_URL = os.getenv(
+    "PASSWORD_RESET_FRONTEND_URL",
+    "http://localhost:3000/reset-password",
+)
 
 # Celery (configuració bàsica, més detalls a config/celery.py)
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0')

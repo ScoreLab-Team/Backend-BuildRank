@@ -18,7 +18,9 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
+from django.conf.urls.static import static
 from django.views.generic import RedirectView
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 
 from apps.buildings.views import ThirdPartyServiceView
@@ -34,6 +36,11 @@ urlpatterns = [
     path('api/third-party-service/', ThirdPartyServiceView.as_view(), name='third-party-service'),
     path("api/chat/", include("apps.chat.urls")),
     path('api/verification/', include('apps.verification.urls', namespace='verification')),
+    path("api/community/", include("apps.community.urls")),
+    path("api/notifications/", include("apps.notifications.urls")),
+    path('api/audit/', include('apps.audit.urls')),
+    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+    path("api/swagger/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
 ]
 
 if settings.DEBUG and "debug_toolbar" in settings.INSTALLED_APPS:
@@ -41,4 +48,7 @@ if settings.DEBUG and "debug_toolbar" in settings.INSTALLED_APPS:
     urlpatterns += [
         path('__debug__/', include(debug_toolbar.urls)),
     ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 

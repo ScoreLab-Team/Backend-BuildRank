@@ -14,11 +14,27 @@ class ValidacioAdmin(models.TextChoices):
     APROVAT = "aprovat", "Aprovat"
     REBUTJAT = "rebutjat", "Rebutjat"
 
+
+class AccountStatus(models.TextChoices):
+    ACTIVE = "active", "Actiu"
+    BLOCKED = "blocked", "Bloquejat"
+    SUSPENDED = "suspended", "Suspès"
+
 class User(AbstractUser):
     username = None
     email = models.EmailField(unique=True)
     first_name = models.CharField(max_length=150, blank=True)
     last_name = models.CharField(max_length=150, blank=True)
+
+    class AuthProvider(models.TextChoices):
+        PASSWORD = "password", "Password"
+        GOOGLE = "google", "Google"
+
+    auth_provider = models.CharField(
+        max_length=20,
+        choices=AuthProvider.choices,
+        default=AuthProvider.PASSWORD,
+    )
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
@@ -51,11 +67,41 @@ class Profile(models.Model):
         help_text="Document acreditatiu de l'administrador de finca."
     )
 
+    avatar = models.ImageField(
+        upload_to="avatars/",
+        null=True,
+        blank=True,
+        help_text="Imatge/avatar del perfil de l'usuari."
+    )
+
+    account_status = models.CharField(
+        max_length=20,
+        choices=AccountStatus.choices,
+        default=AccountStatus.ACTIVE,
+        db_index=True,
+    )
+    suspension_reason = models.TextField(blank=True)
+    suspended_until = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Null indica suspensió indefinida. Ignorat si account_status != suspended.",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.user.email} - {self.role} ({self.estatValidacioAdmin})"
+
+    @property
+    def is_access_allowed(self):
+        """Retorna True si l'usuari pot accedir al sistema."""
+        if self.account_status == AccountStatus.BLOCKED:
+            return False
+        if self.account_status == AccountStatus.SUSPENDED:
+            from django.utils import timezone
+            return self.suspended_until is not None and self.suspended_until <= timezone.now()
+        return True
 
 
 class TokenLoginLog(models.Model):

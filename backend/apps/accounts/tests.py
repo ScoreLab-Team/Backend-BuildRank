@@ -1,24 +1,37 @@
 from datetime import timedelta
+import re
+import base64
+import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import override_settings
 from django.core.cache import cache
+from django.core import mail
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
+from django.utils import timezone
 from rest_framework.test import APITestCase
 from rest_framework import status
-from rest_framework.test import APITestCase, APIClient
-from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
+from rest_framework.test import APITestCase, APIClient, APIRequestFactory
+from rest_framework_simplejwt.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.accounts.authentication import AccountStatusJWTAuthentication
 from apps.accounts.models import (
     AccessDenialLog,
+    AccountStatus,
     Profile,
     RoleChoices,
     TokenLoginLog,
     User,
 )
+from apps.accounts.permissions import ABACMixin, IsAdminFinca, IsResident
+from apps.accounts.throttles import AuthThrottle, RefreshThrottle
 from apps.buildings.models import (
     Edifici,
     GrupComparable,
@@ -33,6 +46,10 @@ NO_THROTTLE_REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_CLASSES": [],
     "DEFAULT_THROTTLE_RATES": {},
 }
+
+SMALL_GIF_AVATAR = base64.b64decode(
+    "R0lGODdhAQABAIAAAAAAAP///ywAAAAAAQABAAACAkQBADs="
+)
 
 class BaseTestData(APITestCase):
     """Base class with shared test data creation utilities."""
@@ -189,6 +206,58 @@ class ABACTests(BaseTestData):
         self.assertIn("cartera de gestió", denial.motiu)
 
 
+class PermissionUtilityTests(BaseTestData):
+    """Small branch tests for account permission helpers."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.sysadmin = User.objects.create_superuser(
+            email="perm-sysadmin@example.com",
+            password="Password123",
+        )
+        cls.admin_finca = cls._create_user("perm-admin@example.com", RoleChoices.ADMIN)
+        cls.tenant = cls._create_user("perm-tenant@example.com", RoleChoices.TENANT)
+
+        cls.grup = GrupComparable.objects.create(
+            idGrup=707,
+            zonaClimatica="C2",
+            tipologia="Residencial",
+            rangSuperficie="100-200",
+        )
+        cls.edifici = cls._create_edifici(administrador=cls.admin_finca, grup=cls.grup)
+
+    def test_admin_finca_permission_allows_superuser_and_rejects_anonymous(self):
+        permission = IsAdminFinca()
+
+        self.assertTrue(permission.has_permission(SimpleNamespace(user=self.sysadmin), None))
+        self.assertFalse(permission.has_permission(SimpleNamespace(user=AnonymousUser()), None))
+
+    def test_is_resident_requires_authenticated_user(self):
+        permission = IsResident()
+
+        self.assertTrue(permission.has_permission(SimpleNamespace(user=self.tenant), None))
+        self.assertFalse(permission.has_permission(SimpleNamespace(user=AnonymousUser()), None))
+
+    def test_abac_superuser_access_returns_without_logging_denial(self):
+        request = APIRequestFactory().get("/fake/", HTTP_X_FORWARDED_FOR="203.0.113.7, 10.0.0.1")
+        request.user = self.sysadmin
+
+        ABACMixin().check_edifici_access(request, self.edifici.idEdifici)
+
+        self.assertFalse(AccessDenialLog.objects.exists())
+
+    def test_abac_denial_logs_first_forwarded_ip_for_unlinked_resident(self):
+        request = APIRequestFactory().get("/fake/", HTTP_X_FORWARDED_FOR="203.0.113.8, 10.0.0.2")
+        request.user = self.tenant
+
+        with self.assertRaises(Exception):
+            ABACMixin().check_edifici_access(request, self.edifici.idEdifici)
+
+        denial = AccessDenialLog.objects.get()
+        self.assertEqual(denial.ip, "203.0.113.8")
+        self.assertIn("vinculació directa", denial.motiu)
+
+
 class AssignmentTests(BaseTestData):
     """Tests for resident assignment functionality."""
 
@@ -343,6 +412,114 @@ class MeViewTests(BaseTestData):
         self.assertEqual(self.user.last_name, "Borras")
         self.assertEqual(response.data["first_name"], "Marti")
         self.assertEqual(response.data["last_name"], "Borras")
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_authenticated_user_can_patch_own_avatar(self):
+        """Authenticated user can upload an avatar image for their own profile."""
+        self.client.force_authenticate(user=self.user)
+
+        avatar = SimpleUploadedFile(
+            "avatar.gif",
+            SMALL_GIF_AVATAR,
+            content_type="image/gif",
+        )
+
+        response = self.client.patch(
+            reverse("me"),
+            {"avatar": avatar},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertTrue(self.user.profile.avatar.name.startswith("avatars/"))
+        self.assertIn("avatar_url", response.data)
+        self.assertIn("/media/avatars/", response.data["avatar_url"])
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_authenticated_user_can_replace_avatar_and_old_file_is_deleted(self):
+        """Uploading a new avatar replaces the previous one and removes the old file."""
+        self.client.force_authenticate(user=self.user)
+
+        first_avatar = SimpleUploadedFile(
+            "old_avatar.gif",
+            SMALL_GIF_AVATAR,
+            content_type="image/gif",
+        )
+
+        first_response = self.client.patch(
+            reverse("me"),
+            {"avatar": first_avatar},
+            format="multipart",
+        )
+
+        self.assertEqual(first_response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+
+        old_avatar_name = self.user.profile.avatar.name
+        storage = self.user.profile.avatar.storage
+
+        self.assertTrue(storage.exists(old_avatar_name))
+
+        second_avatar = SimpleUploadedFile(
+            "new_avatar.gif",
+            SMALL_GIF_AVATAR,
+            content_type="image/gif",
+        )
+
+        second_response = self.client.patch(
+            reverse("me"),
+            {"avatar": second_avatar},
+            format="multipart",
+        )
+
+        self.assertEqual(second_response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+
+        new_avatar_name = self.user.profile.avatar.name
+
+        self.assertNotEqual(old_avatar_name, new_avatar_name)
+        self.assertFalse(storage.exists(old_avatar_name))
+        self.assertTrue(storage.exists(new_avatar_name))
+        self.assertIn("/media/avatars/", second_response.data["avatar_url"])
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_authenticated_user_can_clear_own_avatar(self):
+        """Authenticated user can remove their avatar and avatar_url becomes null."""
+        self.client.force_authenticate(user=self.user)
+
+        avatar = SimpleUploadedFile(
+            "avatar_to_clear.gif",
+            SMALL_GIF_AVATAR,
+            content_type="image/gif",
+        )
+
+        upload_response = self.client.patch(
+            reverse("me"),
+            {"avatar": avatar},
+            format="multipart",
+        )
+
+        self.assertEqual(upload_response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+
+        old_avatar_name = self.user.profile.avatar.name
+        storage = self.user.profile.avatar.storage
+
+        self.assertTrue(storage.exists(old_avatar_name))
+
+        clear_response = self.client.patch(
+            reverse("me"),
+            {"avatar_clear": True},
+            format="json",
+        )
+
+        self.assertEqual(clear_response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+
+        self.assertFalse(bool(self.user.profile.avatar))
+        self.assertFalse(storage.exists(old_avatar_name))
+        self.assertIsNone(clear_response.data["avatar_url"])
 
     def test_unauthenticated_user_cannot_get_profile(self):
         """Unauthenticated requests to profile detail must return 401."""
@@ -639,6 +816,25 @@ class AccountUpdateTests(BaseTestData):
         self.user.refresh_from_db()
         self.assertNotEqual(self.user.email, "duplicat@example.com")
         self.assertIn("email", response.data)
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_update_account_rejects_invalid_avatar_file(self):
+        self.client.force_authenticate(user=self.user)
+
+        avatar = SimpleUploadedFile(
+            "avatar.txt",
+            b"not-an-image",
+            content_type="text/plain",
+        )
+
+        response = self.client.patch(
+            reverse("me"),
+            {"avatar": avatar},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("avatar", response.data)
 
 
 
@@ -1102,6 +1298,85 @@ class ThrottleByIPTestCase(APITestCase):
                 self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS,
                                msg="Intento 4 debería estar throttled por IP")
 
+
+class ThrottleCacheKeyTests(APITestCase):
+    """Unit tests for custom throttle cache key branches."""
+
+    def setUp(self):
+        self.factory = APIRequestFactory()
+
+    def test_auth_throttle_uses_user_id_for_authenticated_requests(self):
+        request = self.factory.get("/auth/")
+        request.user = SimpleNamespace(is_authenticated=True, id=42)
+
+        key = AuthThrottle().get_cache_key(request, view=None)
+
+        self.assertEqual(key, "throttle_auth_42")
+
+    def test_auth_throttle_uses_ip_for_anonymous_requests(self):
+        request = self.factory.get("/auth/", REMOTE_ADDR="203.0.113.10")
+        request.user = AnonymousUser()
+
+        key = AuthThrottle().get_cache_key(request, view=None)
+
+        self.assertEqual(key, "throttle_auth_203.0.113.10")
+
+    def test_refresh_throttle_uses_user_id_for_authenticated_requests(self):
+        request = self.factory.get("/refresh/")
+        request.user = SimpleNamespace(is_authenticated=True, id=77)
+
+        key = RefreshThrottle().get_cache_key(request, view=None)
+
+        self.assertEqual(key, "throttle_refresh_77")
+
+
+class AccountStatusJWTAuthenticationTests(APITestCase):
+    """Unit tests for account status enforcement on JWT-authenticated requests."""
+
+    def test_enforce_account_status_allows_user_without_profile(self):
+        AccountStatusJWTAuthentication()._enforce_account_status(SimpleNamespace())
+
+    def test_enforce_account_status_rejects_blocked_user(self):
+        user = User.objects.create_user(email="blocked-auth@example.com", password="Password123")
+        user.profile.account_status = AccountStatus.BLOCKED
+        user.profile.save(update_fields=["account_status"])
+
+        with self.assertRaises(AuthenticationFailed) as ctx:
+            AccountStatusJWTAuthentication()._enforce_account_status(user)
+
+        self.assertIn("bloquejat", str(ctx.exception.detail["detail"]))
+
+    def test_enforce_account_status_rejects_indefinite_suspension(self):
+        user = User.objects.create_user(email="suspended-auth@example.com", password="Password123")
+        user.profile.account_status = AccountStatus.SUSPENDED
+        user.profile.suspended_until = None
+        user.profile.save(update_fields=["account_status", "suspended_until"])
+
+        with self.assertRaises(AuthenticationFailed) as ctx:
+            AccountStatusJWTAuthentication()._enforce_account_status(user)
+
+        self.assertIn("suspès", str(ctx.exception.detail["detail"]))
+
+    def test_enforce_account_status_rejects_future_suspension(self):
+        user = User.objects.create_user(email="future-suspension@example.com", password="Password123")
+        user.profile.account_status = AccountStatus.SUSPENDED
+        user.profile.suspended_until = timezone.now() + timedelta(days=1)
+        user.profile.save(update_fields=["account_status", "suspended_until"])
+
+        with self.assertRaises(AuthenticationFailed) as ctx:
+            AccountStatusJWTAuthentication()._enforce_account_status(user)
+
+        self.assertIn("suspès", str(ctx.exception.detail["detail"]))
+
+    def test_enforce_account_status_allows_expired_suspension(self):
+        user = User.objects.create_user(email="expired-suspension@example.com", password="Password123")
+        user.profile.account_status = AccountStatus.SUSPENDED
+        user.profile.suspended_until = timezone.now() - timedelta(days=1)
+        user.profile.save(update_fields=["account_status", "suspended_until"])
+
+        AccountStatusJWTAuthentication()._enforce_account_status(user)
+
+
 class AdminRoleSemanticsTests(BaseTestData):
     """Tests to ensure role semantics are aligned with the domain model."""
 
@@ -1204,15 +1479,162 @@ class SystemAdminMeEndpointTests(APITestCase):
         self.assertIn("refresh", response.data)
 
 @override_settings(REST_FRAMEWORK=NO_THROTTLE_REST_FRAMEWORK)
+class SystemAdminUserManagementTests(APITestCase):
+    """Branch coverage for system-admin account status endpoints."""
+
+    def setUp(self):
+        cache.clear()
+        self.admin = User.objects.create_superuser(
+            email="status-admin@example.com",
+            password="Adminpass123",
+        )
+        self.user = User.objects.create_user(
+            email="status-user@example.com",
+            password="Password123",
+        )
+        self.client.force_authenticate(user=self.admin)
+
+    def _create_active_session(self):
+        refresh = RefreshToken.for_user(self.user)
+        jti = str(refresh.get("jti"))
+        TokenLoginLog.objects.create(
+            user=self.user,
+            status=TokenLoginLog.LOGIN,
+            expires_at=timezone.now() + timedelta(days=1),
+            jti=jti,
+        )
+        return jti
+
+    def test_system_admin_can_list_and_retrieve_users(self):
+        list_response = self.client.get(reverse("user-list"))
+        detail_response = self.client.get(reverse("user-detail", args=[self.user.pk]))
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_response.data["email"], self.user.email)
+
+    def test_block_user_sets_status_and_revokes_active_sessions(self):
+        jti = self._create_active_session()
+
+        response = self.client.post(reverse("user-block", args=[self.user.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.account_status, AccountStatus.BLOCKED)
+        self.assertTrue(BlacklistedToken.objects.filter(token__jti=jti).exists())
+        self.assertEqual(
+            TokenLoginLog.objects.get(jti=jti).status,
+            TokenLoginLog.REVOKED,
+        )
+
+    def test_block_missing_user_returns_404(self):
+        response = self.client.post(reverse("user-block", args=[999999]))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_block_superuser_returns_403(self):
+        response = self.client.post(reverse("user-block", args=[self.admin.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unblock_requires_blocked_account(self):
+        response = self.client.post(reverse("user-unblock", args=[self.user.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_unblock_blocked_user_restores_active_status(self):
+        self.user.profile.account_status = AccountStatus.BLOCKED
+        self.user.profile.save(update_fields=["account_status"])
+
+        response = self.client.post(reverse("user-unblock", args=[self.user.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.account_status, AccountStatus.ACTIVE)
+
+    def test_suspend_user_sets_status_reason_and_revokes_sessions(self):
+        jti = self._create_active_session()
+        until = timezone.now() + timedelta(days=3)
+
+        response = self.client.post(
+            reverse("user-suspend", args=[self.user.pk]),
+            {"reason": "Review needed", "suspended_until": until.isoformat()},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.account_status, AccountStatus.SUSPENDED)
+        self.assertEqual(self.user.profile.suspension_reason, "Review needed")
+        self.assertTrue(BlacklistedToken.objects.filter(token__jti=jti).exists())
+
+    def test_suspend_missing_user_returns_404(self):
+        response = self.client.post(reverse("user-suspend", args=[999999]))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_suspend_superuser_returns_403(self):
+        response = self.client.post(reverse("user-suspend", args=[self.admin.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unsuspend_requires_suspended_account(self):
+        response = self.client.post(reverse("user-unsuspend", args=[self.user.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_unsuspend_suspended_user_restores_active_status(self):
+        self.user.profile.account_status = AccountStatus.SUSPENDED
+        self.user.profile.suspension_reason = "Review"
+        self.user.profile.suspended_until = timezone.now() + timedelta(days=1)
+        self.user.profile.save(
+            update_fields=["account_status", "suspension_reason", "suspended_until"]
+        )
+
+        response = self.client.post(reverse("user-unsuspend", args=[self.user.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.account_status, AccountStatus.ACTIVE)
+        self.assertEqual(self.user.profile.suspension_reason, "")
+        self.assertIsNone(self.user.profile.suspended_until)
+    
+@override_settings(
+    REST_FRAMEWORK=NO_THROTTLE_REST_FRAMEWORK,
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    PASSWORD_RESET_FRONTEND_URL="http://localhost/reset-password",
+)
 class PasswordResetTests(APITestCase):
     def setUp(self):
         cache.clear()
+        mail.outbox = []
         self.user = User.objects.create_user(
             email="reset@example.com",
             password="OldPassword123",
         )
 
-    def test_password_reset_request_existing_email_returns_uid_and_token(self):
+    def _request_reset_and_get_uid_token(self):
+        response = self.client.post(
+            reverse("password-reset"),
+            {"email": "reset@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn("uid", response.data)
+        self.assertNotIn("token", response.data)
+        self.assertEqual(len(mail.outbox), 1)
+
+        body = mail.outbox[0].body
+        uid_match = re.search(r"uid=([^&\s]+)", body)
+        token_match = re.search(r"token=([^\s]+)", body)
+
+        self.assertIsNotNone(uid_match)
+        self.assertIsNotNone(token_match)
+
+        return uid_match.group(1), token_match.group(1)
+
+    def test_password_reset_request_existing_email_sends_email_without_returning_token(self):
         response = self.client.post(
             reverse("password-reset"),
             {"email": "reset@example.com"},
@@ -1221,8 +1643,14 @@ class PasswordResetTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("detail", response.data)
-        self.assertIn("uid", response.data)
-        self.assertIn("token", response.data)
+        self.assertNotIn("uid", response.data)
+        self.assertNotIn("token", response.data)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["reset@example.com"])
+        self.assertIn("http://localhost/reset-password", mail.outbox[0].body)
+        self.assertIn("uid=", mail.outbox[0].body)
+        self.assertIn("token=", mail.outbox[0].body)
 
     def test_password_reset_request_unknown_email_does_not_enumerate_accounts(self):
         response = self.client.post(
@@ -1235,19 +1663,16 @@ class PasswordResetTests(APITestCase):
         self.assertIn("detail", response.data)
         self.assertNotIn("uid", response.data)
         self.assertNotIn("token", response.data)
+        self.assertEqual(len(mail.outbox), 0)
 
     def test_password_reset_confirm_valid_token_changes_password(self):
-        request_response = self.client.post(
-            reverse("password-reset"),
-            {"email": "reset@example.com"},
-            format="json",
-        )
+        uid, token = self._request_reset_and_get_uid_token()
 
         response = self.client.post(
             reverse("password-reset-confirm"),
             {
-                "uid": request_response.data["uid"],
-                "token": request_response.data["token"],
+                "uid": uid,
+                "token": token,
                 "password": "NewPassword123",
                 "password_confirm": "NewPassword123",
             },
@@ -1260,16 +1685,12 @@ class PasswordResetTests(APITestCase):
         self.assertTrue(self.user.check_password("NewPassword123"))
 
     def test_password_reset_confirm_invalid_token_fails(self):
-        request_response = self.client.post(
-            reverse("password-reset"),
-            {"email": "reset@example.com"},
-            format="json",
-        )
+        uid, _token = self._request_reset_and_get_uid_token()
 
         response = self.client.post(
             reverse("password-reset-confirm"),
             {
-                "uid": request_response.data["uid"],
+                "uid": uid,
                 "token": "invalid-token",
                 "password": "NewPassword123",
                 "password_confirm": "NewPassword123",
@@ -1281,17 +1702,13 @@ class PasswordResetTests(APITestCase):
         self.assertIn("token", response.data)
 
     def test_password_reset_confirm_password_mismatch_fails(self):
-        request_response = self.client.post(
-            reverse("password-reset"),
-            {"email": "reset@example.com"},
-            format="json",
-        )
+        uid, token = self._request_reset_and_get_uid_token()
 
         response = self.client.post(
             reverse("password-reset-confirm"),
             {
-                "uid": request_response.data["uid"],
-                "token": request_response.data["token"],
+                "uid": uid,
+                "token": token,
                 "password": "NewPassword123",
                 "password_confirm": "DifferentPassword123",
             },
@@ -1300,6 +1717,54 @@ class PasswordResetTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("password_confirm", response.data)
+
+    def test_password_reset_confirm_revokes_active_refresh_tokens(self):
+        login_response = self.client.post(
+            reverse("login"),
+            {
+                "email": "reset@example.com",
+                "password": "OldPassword123",
+            },
+            format="json",
+        )
+        self.assertEqual(login_response.status_code, status.HTTP_200_OK)
+
+        refresh = RefreshToken(login_response.data["refresh"])
+        jti = str(refresh.get("jti"))
+        outstanding = OutstandingToken.objects.get(jti=jti)
+        self.assertFalse(BlacklistedToken.objects.filter(token=outstanding).exists())
+        self.assertEqual(
+            TokenLoginLog.objects.filter(
+                user=self.user,
+                status=TokenLoginLog.LOGIN,
+                logout_at__isnull=True,
+            ).count(),
+            1,
+        )
+
+        uid, token = self._request_reset_and_get_uid_token()
+
+        response = self.client.post(
+            reverse("password-reset-confirm"),
+            {
+                "uid": uid,
+                "token": token,
+                "password": "NewPassword123",
+                "password_confirm": "NewPassword123",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertTrue(BlacklistedToken.objects.filter(token=outstanding).exists())
+        self.assertEqual(
+            TokenLoginLog.objects.filter(
+                user=self.user,
+                status=TokenLoginLog.REVOKED,
+                logout_at__isnull=False,
+            ).count(),
+            1,
+        )
 
 @override_settings(
     GOOGLE_OAUTH_CLIENT_ID="test-google-client-id.apps.googleusercontent.com",
@@ -1321,7 +1786,10 @@ class GoogleOAuthTests(APITestCase):
 
         response = self.client.post(
             self.url,
-            {"id_token": "valid-google-id-token"},
+            {
+                "id_token": "valid-google-id-token",
+                "mode": "register",
+            },
             format="json",
         )
 
@@ -1357,12 +1825,17 @@ class GoogleOAuthTests(APITestCase):
 
         response = self.client.post(
             self.url,
-            {"id_token": "valid-google-id-token"},
+            {
+                "id_token": "valid-google-id-token",
+                "mode": "register"
+            },
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(User.objects.filter(email="existing@example.com").count(), 1)
+
+        self.assertIn("detail", response.data)
 
         existing_user.refresh_from_db()
         self.assertEqual(existing_user.first_name, "Existing")
@@ -1379,7 +1852,10 @@ class GoogleOAuthTests(APITestCase):
 
         response = self.client.post(
             self.url,
-            {"id_token": "valid-google-id-token"},
+            {
+                "id_token": "valid-google-id-token",
+                "mode": "register",
+            },
             format="json",
         )
 
@@ -1390,9 +1866,320 @@ class GoogleOAuthTests(APITestCase):
     def test_google_oauth_requires_client_id_configuration(self):
         response = self.client.post(
             self.url,
-            {"id_token": "any-token"},
+            {
+                "id_token": "any-token",
+                "mode": "login",
+            },
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("detail", response.data)
+        
+    @patch("apps.accounts.serializers.google_id_token.verify_oauth2_token")
+    def test_google_oauth_creates_user_with_requested_role(
+        self,
+        mock_verify,
+    ):
+        mock_verify.return_value = {
+            "email": "tenant-google@example.com",
+            "email_verified": True,
+            "given_name": "Tenant",
+            "family_name": "Google",
+        }
+
+        response = self.client.post(
+            self.url,
+            {
+                "id_token": "valid-google-id-token",
+                "role": RoleChoices.TENANT,
+                "mode": "register",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.assertEqual(
+            response.data["user"]["email"],
+            "tenant-google@example.com",
+        )
+        self.assertEqual(
+            response.data["user"]["role"],
+            RoleChoices.TENANT,
+        )
+
+        user = User.objects.get(email="tenant-google@example.com")
+        self.assertEqual(user.profile.role, RoleChoices.TENANT)
+
+    @patch("apps.accounts.serializers.google_id_token.verify_oauth2_token")
+    def test_google_oauth_existing_user_does_not_change_role(
+        self,
+        mock_verify,
+    ):
+        existing_user = User.objects.create_user(
+            email="existing-role@example.com",
+            password="Password123",
+            first_name="Existing",
+            last_name="Role",
+        )
+
+        existing_user.profile.role = RoleChoices.OWNER
+        existing_user.profile.save(update_fields=["role"])
+
+        mock_verify.return_value = {
+            "email": "existing-role@example.com",
+            "email_verified": True,
+            "given_name": "GoogleName",
+            "family_name": "GoogleSurname",
+        }
+
+        response = self.client.post(
+            self.url,
+            {
+                "id_token": "valid-google-id-token",
+                "role": RoleChoices.TENANT,
+                "mode": "register",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("detail", response.data)
+
+        existing_user.refresh_from_db()
+        existing_user.profile.refresh_from_db()
+
+        self.assertEqual(existing_user.profile.role, RoleChoices.OWNER)
+
+        self.assertEqual(
+            existing_user.profile.role,
+            RoleChoices.OWNER,
+        )
+
+    @patch("apps.accounts.serializers.google_id_token.verify_oauth2_token")
+    def test_google_oauth_rejects_invalid_role(
+        self,
+        mock_verify,
+    ):
+        mock_verify.return_value = {
+            "email": "invalid-role-google@example.com",
+            "email_verified": True,
+            "given_name": "Invalid",
+            "family_name": "Role",
+        }
+
+        response = self.client.post(
+            self.url,
+            {
+                "id_token": "valid-google-id-token",
+                "role": "superadmin",
+                "mode": "register",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        self.assertIn("role", response.data)
+
+        self.assertFalse(
+            User.objects.filter(
+                email="invalid-role-google@example.com"
+            ).exists()
+        )
+
+
+class PendingAdminVerificationAccessTests(BaseTestData):
+    """Regressió: un admin finca no pot accedir a edificis amb verificació pendent."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin_finca = cls._create_user("pending-admin@example.com", RoleChoices.ADMIN)
+        cls.owner = cls._create_user("owner-pending@example.com", RoleChoices.OWNER)
+
+        cls.grup = GrupComparable.objects.create(
+            idGrup=909,
+            zonaClimatica="C2",
+            tipologia="Residencial",
+            rangSuperficie="100-200",
+        )
+
+        cls.edifici_pending = cls._create_edifici(
+            administrador=cls.admin_finca,
+            grup=cls.grup,
+            carrer="Carrer Pending",
+            numero=91,
+        )
+        cls.edifici_approved = cls._create_edifici(
+            administrador=cls.admin_finca,
+            grup=cls.grup,
+            carrer="Carrer Approved",
+            numero=92,
+        )
+        cls.edifici_legacy = cls._create_edifici(
+            administrador=cls.admin_finca,
+            grup=cls.grup,
+            carrer="Carrer Legacy",
+            numero=93,
+        )
+
+        Habitatge.objects.create(
+            referenciaCadastral="PENDING-OWNER-1",
+            planta="1",
+            porta="A",
+            superficie=80,
+            edifici=cls.edifici_pending,
+            usuari=cls.owner,
+            propietari=cls.owner,
+        )
+
+        from apps.verification.models import AdminFincaDocumentVerification
+
+        AdminFincaDocumentVerification.objects.create(
+            user=cls.admin_finca,
+            edifici=cls.edifici_pending,
+            status=AdminFincaDocumentVerification.Status.PENDING,
+        )
+        AdminFincaDocumentVerification.objects.create(
+            user=cls.admin_finca,
+            edifici=cls.edifici_approved,
+            status=AdminFincaDocumentVerification.Status.APPROVED,
+        )
+
+    def test_me_edificis_no_retorna_edifici_amb_verificacio_pending(self):
+        self.client.force_authenticate(user=self.admin_finca)
+
+        response = self.client.get(reverse("me-edificis"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = {item["idEdifici"] for item in response.data}
+
+        self.assertNotIn(self.edifici_pending.idEdifici, returned_ids)
+        self.assertIn(self.edifici_approved.idEdifici, returned_ids)
+        self.assertIn(self.edifici_legacy.idEdifici, returned_ids)
+
+    def test_admin_finca_pending_no_pot_accedir_detail_edifici(self):
+        self.client.force_authenticate(user=self.admin_finca)
+
+        response = self.client.get(
+            reverse("edifici-detail", args=[self.edifici_pending.idEdifici])
+        )
+
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+
+    def test_admin_finca_approved_pot_accedir_detail_edifici(self):
+        self.client.force_authenticate(user=self.admin_finca)
+
+        response = self.client.get(
+            reverse("edifici-detail", args=[self.edifici_approved.idEdifici])
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_owner_vinculat_no_es_bloqueja_per_verificacio_admin_pending(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(
+            reverse("edifici-detail", args=[self.edifici_pending.idEdifici])
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+
+@override_settings(REST_FRAMEWORK=NO_THROTTLE_REST_FRAMEWORK)
+class AdminDashboardSummaryTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.admin = User.objects.create_superuser(
+            email="dashboard-admin@example.com",
+            password="Adminpass123",
+        )
+        self.user = User.objects.create_user(
+            email="dashboard-user@example.com",
+            password="Password123",
+        )
+
+    def test_system_admin_can_read_dashboard_summary(self):
+        from apps.buildings.models import (
+            CatalegMillora,
+            Edifici,
+            EstatValidacio,
+            GrupComparable,
+            Localitzacio,
+            MilloraImplementada,
+        )
+        from apps.verification.models import AdminFincaDocumentVerification
+        from apps.seasons.models import Temporada, EstatTemporada
+
+        grup = GrupComparable.objects.create(
+            idGrup=9091,
+            zonaClimatica="C2",
+            tipologia="Residencial",
+            rangSuperficie="100-200",
+        )
+        localitzacio = Localitzacio.objects.create(
+            carrer="Carrer Dashboard",
+            numero=1,
+            codiPostal="08001",
+            barri="Eixample",
+        )
+        edifici = Edifici.objects.create(
+            anyConstruccio=2000,
+            tipologia="Residencial",
+            superficieTotal=100,
+            reglament="CTE",
+            orientacioPrincipal="Sud",
+            localitzacio=localitzacio,
+            grupComparable=grup,
+            administradorFinca=self.user,
+        )
+        millora = CatalegMillora.objects.create(
+            nom="Millora Dashboard",
+            descripcio="Test",
+            impactePunts=5,
+            activa=True,
+        )
+        MilloraImplementada.objects.create(
+            millora=millora,
+            edifici=edifici,
+            dataExecucio="2026-01-01",
+            costReal=1000,
+            estatValidacio=EstatValidacio.EN_REVISIO,
+        )
+        AdminFincaDocumentVerification.objects.create(
+            user=self.user,
+            edifici=edifici,
+            status=AdminFincaDocumentVerification.Status.PENDING,
+        )
+        Temporada.objects.create(
+            nom="Temporada Dashboard",
+            dataInici="2026-01-01",
+            dataFi="2026-12-31",
+            estat=EstatTemporada.ACTIVA,
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(reverse("admin-dashboard-summary"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(response.data["users_total"], 2)
+        self.assertEqual(response.data["buildings_managed"], 1)
+        self.assertEqual(response.data["pending_improvements"], 1)
+        self.assertEqual(response.data["pending_admin_verifications"], 1)
+        self.assertIsNotNone(response.data["active_season"])
+
+    def test_non_system_admin_cannot_read_dashboard_summary(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(reverse("admin-dashboard-summary"))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

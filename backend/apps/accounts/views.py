@@ -1,10 +1,16 @@
+from django.contrib.auth import get_user_model
+from django.db import transaction
+from django.utils import timezone
+from django.db.models import Q
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from rest_framework_simplejwt.views import TokenRefreshView as SimpleJWTTokenRefreshView
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
 
-from apps.accounts.models import RoleChoices
+from apps.accounts.models import AccountStatus, RoleChoices, TokenLoginLog
 from apps.buildings.models import Edifici, Habitatge
 from apps.accounts.permissions import IsAdminSistema, IsAdminFinca, ABACMixin
 from apps.accounts.throttles import LoginThrottle, RegisterThrottle, RefreshThrottle
@@ -15,7 +21,10 @@ from apps.accounts.serializers import (
     EdificiResumSerializer, HabitatgeResumSerializer,
     AssignarResidentSerializer, AssignarAdminSerializer,
     GoogleOAuthSerializer,
+    UserAdminSerializer, SuspendSerializer,
 )
+
+User = get_user_model()
 
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
@@ -113,20 +122,19 @@ class PasswordResetRequestView(APIView):
     throttle_classes = [LoginThrottle]
 
     def post(self, request):
-        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer = PasswordResetRequestSerializer(
+            data=request.data,
+            context={"request": request},
+        )
         serializer.is_valid(raise_exception=True)
-        reset_data = serializer.save()
+        serializer.save()
 
-        response_data = {
-            "detail": "Si el correu existeix, s'han generat instruccions per restablir la contrasenya."
-        }
-
-        # MVP: retornem uid/token només si existeix usuari per facilitar integració frontend.
-        # En producció s'hauria d'enviar per email i no retornar el token a la resposta.
-        if reset_data:
-            response_data.update(reset_data)
-
-        return Response(response_data, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "detail": "Si el correu existeix, s'han enviat instruccions per restablir la contrasenya."
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class PasswordResetConfirmView(APIView):
@@ -145,22 +153,29 @@ class PasswordResetConfirmView(APIView):
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get(self, request):
-        serializer = MeSerializer(request.user)
+        serializer = MeSerializer(request.user, context={"request": request})
         return Response(serializer.data)
 
     def put(self, request):
         serializer = AccountUpdateSerializer(request.user, data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        return Response(MeSerializer(user).data, status=status.HTTP_200_OK)
+        return Response(
+            MeSerializer(user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
     def patch(self, request):
         serializer = AccountUpdateSerializer(request.user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        return Response(MeSerializer(user).data, status=status.HTTP_200_OK)
+        return Response(
+            MeSerializer(user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -177,13 +192,23 @@ class MeEdificisView(APIView):
         if user.is_superuser:
             edificis = Edifici.objects.select_related("localitzacio").all()
         elif role == RoleChoices.ADMIN:
-            # Admin de finca: edificis de la seva cartera
-            edificis = user.edificis_administrats.select_related("localitzacio").all()
+            # Admin de finca: només edificis amb assignació efectiva.
+            # Si hi ha verificació documental per aquest edifici, ha d'estar approved.
+            from apps.verification.access import effective_admin_buildings_queryset
+
+            edificis = effective_admin_buildings_queryset(
+                Edifici.objects.select_related("localitzacio"),
+                user,
+            )
         else:
             # Owner / Tenant: edificis on té vinculació per habitatge
             edificis = (
                 Edifici.objects.select_related("localitzacio")
-                .filter(habitatges__usuari=user)
+                .filter(
+                    Q(habitatges__usuari=user)
+                    | Q(habitatges__propietari=user)
+                    | Q(habitatges__llogater=user)
+                )
                 .distinct()
             )
 
@@ -259,6 +284,220 @@ class MeRoleView(APIView):
         profile.save(update_fields=["role", "updated_at"])
 
         return Response(
-            MeSerializer(request.user).data,
+            MeSerializer(request.user, context={"request": request}).data,
             status=status.HTTP_200_OK
         )
+
+
+# ---------------------------------------------------------------------------
+# Gestió d'usuaris (US49) — només AdminSistema
+# ---------------------------------------------------------------------------
+
+def _revoke_all_user_tokens(user):
+    """Blacklist every outstanding refresh token and mark all active sessions as REVOKED."""
+    outstanding = OutstandingToken.objects.filter(user=user)
+    for token in outstanding:
+        BlacklistedToken.objects.get_or_create(token=token)
+
+    TokenLoginLog.objects.filter(
+        user=user,
+        status=TokenLoginLog.LOGIN,
+        logout_at__isnull=True,
+    ).update(status=TokenLoginLog.REVOKED, logout_at=timezone.now())
+
+
+class UserListView(generics.ListAPIView):
+    """Llista tots els usuaris de la plataforma."""
+    permission_classes = [IsAdminSistema]
+    serializer_class = UserAdminSerializer
+    queryset = User.objects.select_related("profile").order_by("id")
+
+
+class UserDetailView(generics.RetrieveAPIView):
+    """Detall d'un usuari concret."""
+    permission_classes = [IsAdminSistema]
+    serializer_class = UserAdminSerializer
+    queryset = User.objects.select_related("profile")
+
+
+class UserBlockView(APIView):
+    """
+    Bloqueja permanentment un compte.
+    Revoca immediatament totes les sessions actives de l'usuari.
+    """
+    permission_classes = [IsAdminSistema]
+
+    def post(self, request, pk):
+        try:
+            user = User.objects.select_related("profile").get(pk=pk)
+        except User.DoesNotExist:
+            return Response({"detail": "Usuari no trobat."}, status=status.HTTP_404_NOT_FOUND)
+
+        if user.is_superuser:
+            return Response(
+                {"detail": "No es pot bloquejar un administrador del sistema."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        with transaction.atomic():
+            profile = user.profile
+            profile.account_status = AccountStatus.BLOCKED
+            profile.suspension_reason = ""
+            profile.suspended_until = None
+            profile.save(update_fields=["account_status", "suspension_reason", "suspended_until", "updated_at"])
+            _revoke_all_user_tokens(user)
+
+        return Response(UserAdminSerializer(user).data, status=status.HTTP_200_OK)
+
+
+class UserUnblockView(APIView):
+    """Desbloqueja un compte i el torna a l'estat actiu."""
+    permission_classes = [IsAdminSistema]
+
+    def post(self, request, pk):
+        try:
+            user = User.objects.select_related("profile").get(pk=pk)
+        except User.DoesNotExist:
+            return Response({"detail": "Usuari no trobat."}, status=status.HTTP_404_NOT_FOUND)
+
+        profile = user.profile
+        if profile.account_status != AccountStatus.BLOCKED:
+            return Response(
+                {"detail": "El compte no està bloquejat."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        profile.account_status = AccountStatus.ACTIVE
+        profile.save(update_fields=["account_status", "updated_at"])
+
+        return Response(UserAdminSerializer(user).data, status=status.HTTP_200_OK)
+
+
+class UserSuspendView(APIView):
+    """
+    Suspèn temporalment un compte.
+    Camps opcionals: reason (text), suspended_until (datetime; null = indefinit).
+    Revoca immediatament totes les sessions actives.
+    """
+    permission_classes = [IsAdminSistema]
+
+    def post(self, request, pk):
+        try:
+            user = User.objects.select_related("profile").get(pk=pk)
+        except User.DoesNotExist:
+            return Response({"detail": "Usuari no trobat."}, status=status.HTTP_404_NOT_FOUND)
+
+        if user.is_superuser:
+            return Response(
+                {"detail": "No es pot suspendre un administrador del sistema."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = SuspendSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            profile = user.profile
+            profile.account_status = AccountStatus.SUSPENDED
+            profile.suspension_reason = serializer.validated_data.get("reason", "")
+            profile.suspended_until = serializer.validated_data.get("suspended_until")
+            profile.save(update_fields=["account_status", "suspension_reason", "suspended_until", "updated_at"])
+            _revoke_all_user_tokens(user)
+
+        return Response(UserAdminSerializer(user).data, status=status.HTTP_200_OK)
+
+
+class UserUnsuspendView(APIView):
+    """Aixeca la suspensió d'un compte i el torna a l'estat actiu."""
+    permission_classes = [IsAdminSistema]
+
+    def post(self, request, pk):
+        try:
+            user = User.objects.select_related("profile").get(pk=pk)
+        except User.DoesNotExist:
+            return Response({"detail": "Usuari no trobat."}, status=status.HTTP_404_NOT_FOUND)
+
+        profile = user.profile
+        if profile.account_status != AccountStatus.SUSPENDED:
+            return Response(
+                {"detail": "El compte no està suspès."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        profile.account_status = AccountStatus.ACTIVE
+        profile.suspension_reason = ""
+        profile.suspended_until = None
+        profile.save(update_fields=["account_status", "suspension_reason", "suspended_until", "updated_at"])
+
+        return Response(UserAdminSerializer(user).data, status=status.HTTP_200_OK)
+
+
+class AdminDashboardSummaryView(APIView):
+    """Mètriques agregades per al panell d'administració del sistema."""
+    permission_classes = [IsAdminSistema]
+
+    def get(self, request):
+        from apps.buildings.models import (
+            Edifici,
+            Habitatge,
+            MilloraImplementada,
+            EstatValidacio,
+        )
+        from apps.verification.models import AdminFincaDocumentVerification
+        from apps.seasons.models import Temporada, EstatTemporada
+
+        temporada_activa = (
+            Temporada.objects
+            .filter(estat=EstatTemporada.ACTIVA)
+            .order_by("-dataInici", "-id_temporada")
+            .first()
+        )
+
+        pending_improvements = MilloraImplementada.objects.filter(
+            estatValidacio__in=[
+                EstatValidacio.PENDENT_DOCUMENTACIO,
+                EstatValidacio.EN_REVISIO,
+            ]
+        ).count()
+
+        pending_admin_verifications = AdminFincaDocumentVerification.objects.filter(
+            status__in=[
+                AdminFincaDocumentVerification.Status.PENDING,
+                AdminFincaDocumentVerification.Status.RUNNING,
+                AdminFincaDocumentVerification.Status.REVIEW,
+            ]
+        ).count()
+
+        pending_housing_requests = Habitatge.objects.filter(
+            estatValidacio__in=[
+                EstatValidacio.PENDENT_DOCUMENTACIO,
+                EstatValidacio.EN_REVISIO,
+            ],
+            solicitant__isnull=False,
+        ).count()
+
+        active_season = None
+        if temporada_activa:
+            active_season = {
+                "id": temporada_activa.id_temporada,
+                "nom": temporada_activa.nom,
+                "dataInici": temporada_activa.dataInici,
+                "dataFi": temporada_activa.dataFi,
+                "estat": temporada_activa.estat,
+            }
+
+        return Response(
+            {
+                "users_total": User.objects.count(),
+                "buildings_total": Edifici.actius.count(),
+                "buildings_managed": Edifici.actius.filter(
+                    administradorFinca__isnull=False
+                ).count(),
+                "pending_improvements": pending_improvements,
+                "pending_admin_verifications": pending_admin_verifications,
+                "pending_housing_requests": pending_housing_requests,
+                "active_season": active_season,
+            },
+            status=status.HTTP_200_OK,
+        )
+

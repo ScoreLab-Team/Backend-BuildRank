@@ -29,3 +29,7 @@ celery==5.4.0
 redis==5.2.1
 django-celery-results==2.5.1
 
+# Coverage for testing
+coverage==7.14.0
+
+drf-spectacular

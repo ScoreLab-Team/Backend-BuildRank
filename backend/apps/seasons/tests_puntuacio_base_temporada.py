@@ -78,6 +78,7 @@ class PuntuacioBaseTemporadaTests(APITestCase):
             edifici=cls.edifici,
             lliga=cls.lliga,
             puntuacio=50.0,
+            puntuacio_inicial=30,
             posicio=1,
             divisio="Bronze",
         )

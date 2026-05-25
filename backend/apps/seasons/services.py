@@ -76,7 +76,10 @@ def _actualitzar_participacions_temporada(temporada: Temporada, edifici: Edifici
     return (
         Participacio.objects
         .filter(lliga__temporada=temporada, edifici=edifici)
-        .update(puntuacio=puntuacio)
+        .update(
+            puntuacio=puntuacio,
+            puntuacio_inicial=puntuacio,
+        )
     )
 
 
@@ -127,7 +130,14 @@ def actualitzar_puntuacions_base_inici_temporada(temporada: Temporada) -> Dict[s
     }
 
     with transaction.atomic():
-        edificis = Edifici.actius.select_for_update().all()
+        # Només processem edificis gestionats dins l'app.
+        # Això evita recalcular puntuació i crear historial BHS per milers
+        # d'edificis Open Data/CEE sense administrador assignat.
+        edificis = (
+            Edifici.actius
+            .select_for_update()
+            .filter(administradorFinca__isnull=False)
+        )
 
         for edifici in edificis:
             resum["edificis_processats"] += 1

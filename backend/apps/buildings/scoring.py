@@ -220,3 +220,142 @@ def calcular_bhs_opendata(edifici, version: str = "1.0"):
         return None
 
     return calcular_building_health_score(od, version=version)
+
+
+# ---------------------------------------------------------------------------
+# US17 — Càlcul del Heat Risk Index (HRI)
+# ---------------------------------------------------------------------------
+
+_CAMPS_CRITICS_HRI = ["energiaRefrigeracio", "aillamentTermic"]
+
+_ORIENTACIO_RISC = {
+    "Sud":  1.0,   # màxim risc
+    "Est":  0.6,
+    "Oest": 0.6,
+    "Nord": 0.0,   # mínim risc
+}
+
+_ANY_CONSTRUCCIO_MIN = 1900
+_ANY_CONSTRUCCIO_MAX = 2024
+
+
+def _normalitzar_any_construccio(any_c: int) -> float:
+    """
+    Edificis antics → més risc (pitjor aïllament).
+    Retorna 1.0 per edificis de 1900 o anteriors, 0.0 per edificis de 2024+.
+    """
+    any_c = max(_ANY_CONSTRUCCIO_MIN, min(_ANY_CONSTRUCCIO_MAX, any_c))
+    return 1.0 - (any_c - _ANY_CONSTRUCCIO_MIN) / (_ANY_CONSTRUCCIO_MAX - _ANY_CONSTRUCCIO_MIN)
+
+
+def _calcular_hri_des_de_dades(dades, any_construccio: int, orientacio: str) -> dict | None:
+    """
+    Núcli del càlcul. Rep un objecte amb camps energètics (DadesEnergetiques o
+    DadesEnergetiquesOpenData), l'any de construcció i l'orientació de l'edifici.
+
+    Retorna dict amb 'index' i 'detall', o None si manquen dades crítiques.
+    """
+    # Verificar camps crítics
+    camps_que_falten = []
+    for camp in _CAMPS_CRITICS_HRI:
+        valor = getattr(dades, camp, None)
+        if valor is None or valor == 0.0:
+            camps_que_falten.append(camp)
+
+    if camps_que_falten:
+        return {"index": None, "dades_insuficients": camps_que_falten}
+
+    # --- Components del risc ---
+    # 1. Refrigeració: consum alt → risc alt. Normalitzat 0–100 kWh/m²a → invertit
+    risc_refrigeracio = min(100.0, getattr(dades, "energiaRefrigeracio", 0)) / 100.0
+
+    # 2. Emissions refrigeració: emissions altes → risc alt. Normalitzat 0–50 kgCO2/m²a
+    risc_emissions = min(50.0, getattr(dades, "emissionsRefrigeracio", 0)) / 50.0
+
+    # 3. Aïllament: valor baix → risc alt (invertit). Normalitzat 0–5 W/m²K
+    aillament = getattr(dades, "aillamentTermic", 0)
+    risc_aillament = 1.0 - min(1.0, aillament / 5.0)
+
+    # 4. Any construcció: edifici antic → risc alt
+    risc_antiguitat = _normalitzar_any_construccio(any_construccio)
+
+    # 5. Orientació: Sud = risc màxim
+    risc_orientacio = _ORIENTACIO_RISC.get(orientacio, 0.5)
+
+    # --- Agregació ponderada ---
+    hri = (
+        risc_refrigeracio * 35 +
+        risc_emissions    * 20 +
+        risc_aillament    * 25 +
+        risc_antiguitat   * 10 +
+        risc_orientacio   * 10
+    )
+    hri = round(max(0.0, min(100.0, hri)), 2)
+
+    return {"index": hri, "dades_insuficients": []}
+
+
+def calcular_heat_risk_index(edifici) -> dict:
+    """
+    Calcula el Heat Risk Index (HRI) d'un edifici.
+
+    Prioritat de font (igual que qualificacio_efectiva):
+      1. Dades dels habitatges (font='usuaris')
+      2. Dades open data (font='opendata')
+      3. Sense dades → index=None
+
+    Retorna:
+      {
+        "index": float | None,       # 0–100
+        "font":  str | None,         # 'usuaris' | 'opendata' | None
+        "dades_insuficients": list,  # camps que falten, si és el cas
+      }
+    """
+    # --- Prioritat 1: dades d'habitatges ---
+    habitatges_amb_dades = edifici.habitatges.filter(
+        dadesEnergetiques__isnull=False
+    ).select_related('dadesEnergetiques')
+
+    if habitatges_amb_dades.exists():
+        resultats = []
+        camps_insuficients = set()
+
+        for h in habitatges_amb_dades:
+            res = _calcular_hri_des_de_dades(
+                h.dadesEnergetiques,
+                edifici.anyConstruccio,
+                edifici.orientacioPrincipal,
+            )
+            if res and res["index"] is not None:
+                resultats.append(res["index"])
+            elif res:
+                camps_insuficients.update(res["dades_insuficients"])
+
+        if resultats:
+            return {
+                "index": round(sum(resultats) / len(resultats), 2),
+                "font": "usuaris",
+                "dades_insuficients": [],
+            }
+        return {
+            "index": None,
+            "font": "usuaris",
+            "dades_insuficients": sorted(camps_insuficients),
+        }
+
+    # --- Prioritat 2: dades open data ---
+    od = getattr(edifici, 'dades_energetiques_opendata', None)
+    if od is not None:
+        res = _calcular_hri_des_de_dades(
+            od,
+            edifici.anyConstruccio,
+            edifici.orientacioPrincipal,
+        )
+        return {
+            "index": res["index"],
+            "font": "opendata",
+            "dades_insuficients": res.get("dades_insuficients", []),
+        }
+
+    # --- Sense dades ---
+    return {"index": None, "font": None, "dades_insuficients": []}

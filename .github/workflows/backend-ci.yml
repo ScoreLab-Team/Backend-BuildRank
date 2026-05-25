@@ -119,9 +119,9 @@ jobs:
       - name: Run tests with coverage
         run: |
           pip install coverage
-          coverage run manage.py test apps.accounts apps.buildings -v 2
-          coverage report
-          coverage xml
+          coverage run manage.py test -v 2
+          coverage report --ignore-errors
+          coverage xml --ignore-errors
 
       - name: Upload backend coverage artifact
         uses: actions/upload-artifact@v4

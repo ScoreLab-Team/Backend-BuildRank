@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction, IntegrityError
 from rest_framework import serializers
 
-from apps.accounts.models import Profile, RoleChoices, TokenLoginLog
+from apps.accounts.models import AccountStatus, Profile, RoleChoices, TokenLoginLog
 from apps.buildings.models import Edifici, Habitatge
 
 from django.contrib.auth import authenticate
@@ -18,6 +18,7 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes
 
 from django.conf import settings
+from django.core.mail import send_mail
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from google.auth.exceptions import GoogleAuthError
@@ -102,6 +103,16 @@ class LoginSerializer(serializers.Serializer):
         email = attrs.get("email")
         password = attrs.get("password")
 
+        user_obj = User.objects.filter(email=email).first()
+
+        if (
+            user_obj is not None
+            and user_obj.auth_provider == User.AuthProvider.GOOGLE
+        ):
+            raise serializers.ValidationError(
+                "Aquest compte es va crear amb Google. Inicia sessió amb Google."
+            )
+
         user = authenticate(username=email, password=password)
 
         if not user:
@@ -109,6 +120,25 @@ class LoginSerializer(serializers.Serializer):
 
         if not user.is_active:
             raise serializers.ValidationError("Aquest usuari està inactiu.")
+
+        profile = getattr(user, "profile", None)
+        if profile is not None:
+            if profile.account_status == AccountStatus.BLOCKED:
+                raise serializers.ValidationError(
+                    "Aquest compte ha estat bloquejat. Contacteu amb l'administrador."
+                )
+            if profile.account_status == AccountStatus.SUSPENDED:
+                from django.utils import timezone as tz
+                until = profile.suspended_until
+                if until is None or until > tz.now():
+                    raise serializers.ValidationError(
+                        "Aquest compte està suspès temporalment."
+                    )
+                # Suspension expired — auto-lift so the DB reflects reality.
+                profile.account_status = AccountStatus.ACTIVE
+                profile.suspension_reason = ""
+                profile.suspended_until = None
+                profile.save(update_fields=["account_status", "suspension_reason", "suspended_until"])
 
         refresh = RefreshToken.for_user(user)
         jti = str(refresh.get('jti'))
@@ -198,6 +228,8 @@ class LogoutSerializer(serializers.Serializer):
 class MeSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
     is_system_admin = serializers.SerializerMethodField()
+    account_status = serializers.SerializerMethodField()
+    avatar_url = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -210,6 +242,8 @@ class MeSerializer(serializers.ModelSerializer):
             "is_staff",
             "is_superuser",
             "is_system_admin",
+            "account_status",
+            "avatar_url",
         )
 
     def get_role(self, obj):
@@ -220,6 +254,25 @@ class MeSerializer(serializers.ModelSerializer):
 
     def get_is_system_admin(self, obj):
         return bool(obj.is_superuser)
+
+    def get_account_status(self, obj):
+        profile = getattr(obj, "profile", None)
+        if profile:
+            return profile.account_status
+        return AccountStatus.ACTIVE
+
+    def get_avatar_url(self, obj):
+        profile = getattr(obj, "profile", None)
+        if not profile or not profile.avatar:
+            return None
+
+        request = self.context.get("request")
+        url = profile.avatar.url
+
+        if request is not None:
+            return request.build_absolute_uri(url)
+
+        return url
 
 
 class LocalitzacioResum(serializers.Serializer):
@@ -267,9 +320,12 @@ class AssignarAdminSerializer(serializers.Serializer):
         return value
 
 class AccountUpdateSerializer(serializers.ModelSerializer):
+    avatar = serializers.ImageField(required=False, allow_null=True)
+    avatar_clear = serializers.BooleanField(write_only=True, required=False, default=False)
+
     class Meta:
         model = User
-        fields = ("email", "first_name", "last_name")
+        fields = ("email", "first_name", "last_name", "avatar", "avatar_clear")
         extra_kwargs = {
             "email": {"required": False},
             "first_name": {"required": False, "allow_blank": True},
@@ -282,6 +338,31 @@ class AccountUpdateSerializer(serializers.ModelSerializer):
         if User.objects.exclude(pk=self.instance.pk).filter(email=value).exists():
             raise serializers.ValidationError(
                 "Ja existeix un usuari amb aquest correu electrònic."
+            )
+
+        return value
+
+    def validate_avatar(self, value):
+        if value is None:
+            return value
+
+        max_size = 2 * 1024 * 1024
+        if value.size > max_size:
+            raise serializers.ValidationError(
+                "L'avatar no pot superar els 2 MB."
+            )
+
+        allowed_content_types = {
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/gif",
+        }
+        content_type = getattr(value, "content_type", "")
+
+        if content_type and content_type not in allowed_content_types:
+            raise serializers.ValidationError(
+                "Format d'imatge no permès. Usa JPG, PNG, WEBP o GIF."
             )
 
         return value
@@ -300,6 +381,29 @@ class AccountUpdateSerializer(serializers.ModelSerializer):
         if "last_name" in validated_data:
             instance.last_name = validated_data["last_name"]
             update_fields.append("last_name")
+
+        avatar_clear = validated_data.pop("avatar_clear", False)
+        avatar_provided = "avatar" in validated_data
+
+        if avatar_provided or avatar_clear:
+            try:
+                profile = instance.profile
+            except Profile.DoesNotExist:
+                profile = Profile.objects.create(user=instance)
+
+            old_avatar_name = profile.avatar.name if profile.avatar else None
+            new_avatar = validated_data.get("avatar") if avatar_provided else None
+
+            if old_avatar_name:
+                profile.avatar.delete(save=False)
+
+            if avatar_clear and not avatar_provided:
+                profile.avatar = None
+            elif avatar_provided:
+                profile.avatar = new_avatar
+
+            profile.save(update_fields=["avatar", "updated_at"])
+            instance._state.fields_cache["profile"] = profile
 
         if update_fields:
             try:
@@ -331,19 +435,36 @@ class PasswordResetRequestSerializer(serializers.Serializer):
         email = self.validated_data["email"].strip().lower()
         user = User.objects.filter(email=email, is_active=True).first()
 
-        # No enumeració de comptes: si no existeix, no retornem error.
+        # No enumeració de comptes: si no existeix, no retornem error ni enviem res.
         if not user:
             return {}
 
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = default_token_generator.make_token(user)
 
-        # MVP: retornem uid/token perquè el frontend pugui construir el flux.
-        # En producció això s'enviaria per email.
-        return {
-            "uid": uid,
-            "token": token,
-        }
+        reset_base_url = getattr(
+            settings,
+            "PASSWORD_RESET_FRONTEND_URL",
+            "http://localhost:3000/reset-password",
+        )
+        reset_url = f"{reset_base_url}?uid={uid}&token={token}"
+
+        message = (
+            "Has sol·licitat restablir la contrasenya del teu compte de BuildRank.\n\n"
+            f"Obre aquest enllaç per crear una contrasenya nova:\n{reset_url}\n\n"
+            "Si no has sol·licitat aquest canvi, pots ignorar aquest missatge."
+        )
+
+        send_mail(
+            subject="Restabliment de contrasenya de BuildRank",
+            message=message,
+            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@buildrank.local"),
+            recipient_list=[user.email],
+            fail_silently=True,
+        )
+
+        # Important: no retornem uid/token a l'API. Només viatgen per email.
+        return {}
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
@@ -379,11 +500,69 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         user = self.validated_data["user"]
         user.set_password(self.validated_data["password"])
         user.save(update_fields=["password"])
+
+        # Revocar refresh tokens actius després del canvi de contrasenya.
+        # Els access tokens ja emesos poden continuar fins a expirar, però no es podrà renovar sessió.
+        now = timezone.now()
+        for outstanding in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=outstanding)
+
+        TokenLoginLog.objects.filter(
+            user=user,
+            status=TokenLoginLog.LOGIN,
+            logout_at__isnull=True,
+        ).update(
+            status=TokenLoginLog.REVOKED,
+            logout_at=now,
+        )
+
         return user
+
+
+# ---------------------------------------------------------------------------
+# Gestió d'usuaris (US49) — només AdminSistema
+# ---------------------------------------------------------------------------
+
+class UserAdminSerializer(serializers.ModelSerializer):
+    """Representació completa d'un usuari per al panell d'administració."""
+    role = serializers.CharField(source="profile.role", read_only=True)
+    account_status = serializers.CharField(source="profile.account_status", read_only=True)
+    suspension_reason = serializers.CharField(source="profile.suspension_reason", read_only=True)
+    suspended_until = serializers.DateTimeField(source="profile.suspended_until", read_only=True)
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "is_active",
+            "is_superuser",
+            "date_joined",
+            "role",
+            "account_status",
+            "suspension_reason",
+            "suspended_until",
+        )
+
+
+class SuspendSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    suspended_until = serializers.DateTimeField(
+        required=False,
+        allow_null=True,
+        help_text="Null o omès = suspensió indefinida.",
+    )
 
 
 class GoogleOAuthSerializer(serializers.Serializer):
     id_token = serializers.CharField(write_only=True)
+    mode = serializers.ChoiceField(
+        choices=["login", "register"],
+        write_only=True,
+    )
+    role = serializers.ChoiceField(choices=RoleChoices.choices, required=False)
 
     def validate(self, attrs):
         token = attrs["id_token"]
@@ -423,30 +602,67 @@ class GoogleOAuthSerializer(serializers.Serializer):
     @transaction.atomic
     def save(self, **kwargs):
         info = self.validated_data["google_user_info"]
+        mode = self.validated_data["mode"]
 
-        user, created = User.objects.get_or_create(
-            email=info["email"],
-            defaults={
-                "first_name": info["first_name"],
-                "last_name": info["last_name"],
-                "is_active": True,
-            },
-        )
+        user = User.objects.filter(email=info["email"]).first()
 
-        updated_fields = []
-        if info["first_name"] and not user.first_name:
-            user.first_name = info["first_name"]
-            updated_fields.append("first_name")
-        if info["last_name"] and not user.last_name:
-            user.last_name = info["last_name"]
-            updated_fields.append("last_name")
-        if updated_fields:
-            user.save(update_fields=updated_fields)
+        if mode == "register":
+            if user is not None:
+                raise serializers.ValidationError(
+                    {
+                        "detail": "Aquest email ja té un compte. Inicia sessió amb el mètode utilitzat en el registre."
+                    }
+                )
 
-        profile, _ = Profile.objects.get_or_create(user=user)
-        if created:
-            profile.role = RoleChoices.OWNER
+            user = User.objects.create_user(
+                email=info["email"],
+                first_name=info["first_name"],
+                last_name=info["last_name"],
+                password=None,
+                auth_provider=User.AuthProvider.GOOGLE,
+                is_active=True,
+            )
+
+            profile, _ = Profile.objects.get_or_create(user=user)
+            profile.role = self.validated_data.get("role", RoleChoices.OWNER)
             profile.save(update_fields=["role"])
+
+        elif mode == "login":
+            if user is None:
+                raise serializers.ValidationError(
+                    {"detail": "No existeix cap compte amb aquest Google. Registra’t primer."}
+                )
+
+            if user.auth_provider != User.AuthProvider.GOOGLE:
+                raise serializers.ValidationError(
+                    {
+                        "detail": "Aquest compte es va crear amb email i contrasenya. Inicia sessió amb la contrasenya de BuildRank."
+                    }
+                )
+
+            profile, _ = Profile.objects.get_or_create(user=user)
+
+        else:
+            raise serializers.ValidationError({"mode": "Mode OAuth invàlid."})
+
+        user.profile.refresh_from_db()
+
+        if profile.account_status == AccountStatus.BLOCKED:
+            raise serializers.ValidationError(
+                "Aquest compte ha estat bloquejat. Contacteu amb l'administrador."
+            )
+        if profile.account_status == AccountStatus.SUSPENDED:
+            from django.utils import timezone as tz
+            until = profile.suspended_until
+            if until is None or until > tz.now():
+                raise serializers.ValidationError(
+                    "Aquest compte està suspès temporalment."
+                )
+            # Suspension expired — auto-lift so the DB reflects reality.
+            profile.account_status = AccountStatus.ACTIVE
+            profile.suspension_reason = ""
+            profile.suspended_until = None
+            profile.save(update_fields=["account_status", "suspension_reason", "suspended_until"])
 
         refresh = RefreshToken.for_user(user)
         jti = str(refresh.get("jti"))

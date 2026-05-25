@@ -1,0 +1,27 @@
+﻿name: SonarCloud
+
+on:
+  push:
+    branches:
+      - Desenvolupament
+  pull_request:
+    branches:
+      - Desenvolupament
+
+jobs:
+  sonarcloud:
+    name: SonarCloud analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: backend

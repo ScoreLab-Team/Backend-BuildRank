@@ -6,6 +6,7 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from rest_framework_simplejwt.views import TokenRefreshView as SimpleJWTTokenRefreshView
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
 
@@ -152,22 +153,29 @@ class PasswordResetConfirmView(APIView):
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get(self, request):
-        serializer = MeSerializer(request.user)
+        serializer = MeSerializer(request.user, context={"request": request})
         return Response(serializer.data)
 
     def put(self, request):
         serializer = AccountUpdateSerializer(request.user, data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        return Response(MeSerializer(user).data, status=status.HTTP_200_OK)
+        return Response(
+            MeSerializer(user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
     def patch(self, request):
         serializer = AccountUpdateSerializer(request.user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        return Response(MeSerializer(user).data, status=status.HTTP_200_OK)
+        return Response(
+            MeSerializer(user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +284,7 @@ class MeRoleView(APIView):
         profile.save(update_fields=["role", "updated_at"])
 
         return Response(
-            MeSerializer(request.user).data,
+            MeSerializer(request.user, context={"request": request}).data,
             status=status.HTTP_200_OK
         )
 

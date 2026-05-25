@@ -1,11 +1,14 @@
 from datetime import timedelta
 import re
+import base64
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import override_settings
 from django.core.cache import cache
 from django.core import mail
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -43,6 +46,10 @@ NO_THROTTLE_REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_CLASSES": [],
     "DEFAULT_THROTTLE_RATES": {},
 }
+
+SMALL_GIF_AVATAR = base64.b64decode(
+    "R0lGODdhAQABAIAAAAAAAP///ywAAAAAAQABAAACAkQBADs="
+)
 
 class BaseTestData(APITestCase):
     """Base class with shared test data creation utilities."""
@@ -406,6 +413,29 @@ class MeViewTests(BaseTestData):
         self.assertEqual(response.data["first_name"], "Marti")
         self.assertEqual(response.data["last_name"], "Borras")
 
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_authenticated_user_can_patch_own_avatar(self):
+        """Authenticated user can upload an avatar image for their own profile."""
+        self.client.force_authenticate(user=self.user)
+
+        avatar = SimpleUploadedFile(
+            "avatar.gif",
+            SMALL_GIF_AVATAR,
+            content_type="image/gif",
+        )
+
+        response = self.client.patch(
+            reverse("me"),
+            {"avatar": avatar},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertTrue(self.user.profile.avatar.name.startswith("avatars/"))
+        self.assertIn("avatar_url", response.data)
+        self.assertIn("/media/avatars/", response.data["avatar_url"])
+
     def test_unauthenticated_user_cannot_get_profile(self):
         """Unauthenticated requests to profile detail must return 401."""
         response = self.client.get(reverse("me"))
@@ -701,6 +731,25 @@ class AccountUpdateTests(BaseTestData):
         self.user.refresh_from_db()
         self.assertNotEqual(self.user.email, "duplicat@example.com")
         self.assertIn("email", response.data)
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_update_account_rejects_invalid_avatar_file(self):
+        self.client.force_authenticate(user=self.user)
+
+        avatar = SimpleUploadedFile(
+            "avatar.txt",
+            b"not-an-image",
+            content_type="text/plain",
+        )
+
+        response = self.client.patch(
+            reverse("me"),
+            {"avatar": avatar},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("avatar", response.data)
 
 
 

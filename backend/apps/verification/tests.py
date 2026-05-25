@@ -628,3 +628,613 @@ class ExtractorTests(BaseVerificationTest):
         result = extract_structured_data('', 'identificatiu')
         self.assertFalse(result['_ok'])
         self.assertIn('buit', result['_error'])
+# apps/verification/tests_tasks.py
+"""
+Tests de cobertura per a apps/verification/tasks.py
+Cobreix: process_verification, _run_ocr_pipeline, _run_extraction_pipeline,
+         _run_scoring_pipeline i _calcular_ocr_confidence.
+
+Estratègia:
+- process_verification: s'executa síncronament amb CELERY_TASK_ALWAYS_EAGER.
+- Les subpipelines internes (_run_ocr_pipeline, etc.) es testen directament
+  sense passar per Celery per aïllar cada branca.
+- Les crides externes (extract_text, extract_structured_data, compute_score)
+  es mockejen sempre per evitar dependències d'Ollama / OCR real.
+"""
+import tempfile
+from datetime import date
+from unittest.mock import MagicMock, patch, call
+
+from django.test import override_settings, TestCase
+
+from apps.verification.models import (
+    AdminFincaDocumentVerification,
+    AdminFincaVerificationDocument,
+)
+from apps.verification.tasks import (
+    process_verification,
+    _run_ocr_pipeline,
+    _run_extraction_pipeline,
+    _run_scoring_pipeline,
+    _calcular_ocr_confidence,
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers compartits
+# ---------------------------------------------------------------------------
+
+def make_score_result(score=0.85, flags=None, detall=None, suggeriment="Acceptable"):
+    """Crea un ScoreResult mock amb els atributs esperats per _run_scoring_pipeline."""
+    r = MagicMock()
+    r.score = score
+    r.flags = flags or []
+    r.detall = detall or {}
+    r.suggeriment = suggeriment
+    return r
+
+
+# ---------------------------------------------------------------------------
+# TC-TASK-001 a TC-TASK-005: _calcular_ocr_confidence
+# ---------------------------------------------------------------------------
+
+class TestCalcularOcrConfidence(TestCase):
+    """
+    Tests unitaris purs de _calcular_ocr_confidence.
+    No necessiten BD ni mocks externs.
+    """
+
+    def test_text_buit_retorna_zero(self):
+        """TC-TASK-001: Text buit → confidence 0.0."""
+        self.assertEqual(_calcular_ocr_confidence(""), 0.0)
+        self.assertEqual(_calcular_ocr_confidence("   "), 0.0)
+        self.assertEqual(_calcular_ocr_confidence(None), 0.0)
+
+    def test_text_curt_retorna_02(self):
+        """TC-TASK-002: Menys de 50 caràcters → confidence 0.2."""
+        self.assertEqual(_calcular_ocr_confidence("abc"), 0.2)
+        self.assertEqual(_calcular_ocr_confidence("x" * 49), 0.2)
+
+    def test_text_soroll_alt_retorna_04(self):
+        """TC-TASK-003: Ratio soroll > 30% → confidence 0.4."""
+        # Omplim de caràcters estranys (#, @, ^, etc.)
+        soroll = "#@^&*~" * 20          # 120 caràcters estranys
+        text = soroll + "a" * 50        # + 50 normals → ratio ~0.71
+        self.assertEqual(_calcular_ocr_confidence(text), 0.4)
+
+    def test_text_soroll_mig_retorna_065(self):
+        """TC-TASK-004: Ratio soroll entre 15% i 30% → confidence 0.65."""
+        # 20 estranys sobre 120 total → ratio ~0.167
+        text = "#" * 20 + "a" * 100
+        self.assertEqual(_calcular_ocr_confidence(text), 0.65)
+
+    def test_text_llarg_net_retorna_09(self):
+        """TC-TASK-005a: Més de 500 caràcters nets → confidence 0.9."""
+        text = "paraula " * 70          # 560 caràcters, tot net
+        self.assertEqual(_calcular_ocr_confidence(text), 0.9)
+
+    def test_text_curt_net_retorna_075(self):
+        """TC-TASK-005b: 50–500 caràcters nets → confidence 0.75."""
+        text = "a" * 200               # 200 caràcters nets, < 500
+        self.assertEqual(_calcular_ocr_confidence(text), 0.75)
+
+
+# ---------------------------------------------------------------------------
+# TC-TASK-010 a TC-TASK-016: _run_ocr_pipeline
+# ---------------------------------------------------------------------------
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class TestRunOcrPipeline(TestCase):
+    """Tests de _run_ocr_pipeline amb mocks de extract_text i BD mínima."""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from apps.buildings.models import Edifici, Localitzacio
+        User = get_user_model()
+
+        self.user = User.objects.create_user(email='ocr@test.com', password='pass')
+        self.loc = Localitzacio.objects.create(
+            carrer='Test', numero=1, codiPostal='08001', barri='Test'
+        )
+        self.edifici = Edifici.objects.create(
+            anyConstruccio=2000, tipologia='Residencial',
+            superficieTotal=100.0, nombrePlantes=2,
+            reglament='CTE', orientacioPrincipal='Sud',
+            localitzacio=self.loc,
+        )
+        self.verification = AdminFincaDocumentVerification.objects.create(
+            user=self.user, edifici=self.edifici,
+            status=AdminFincaDocumentVerification.Status.RUNNING,
+        )
+
+    def _crear_doc(self, doc_type='identificatiu'):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        return AdminFincaVerificationDocument.objects.create(
+            verification=self.verification,
+            fitxer=SimpleUploadedFile('doc.pdf', b'%PDF', content_type='application/pdf'),
+            doc_type=doc_type,
+        )
+
+    @patch('apps.verification.tasks.extract_text', return_value="Text OCR de prova " * 40)
+    def test_ocr_ok_desa_text_i_confidence(self, mock_ocr):
+        """TC-TASK-010: OCR exitós → desa ocr_text i confidence al document."""
+        doc = self._crear_doc()
+
+        resultats = _run_ocr_pipeline(self.verification)
+
+        doc.refresh_from_db()
+        self.assertEqual(len(resultats), 1)
+        self.assertTrue(resultats[0]['ok'])
+        self.assertEqual(resultats[0]['document_id'], doc.pk)
+        self.assertGreater(resultats[0]['chars_extrets'], 0)
+        self.assertGreater(doc.confidence, 0)
+        self.assertNotEqual(doc.ocr_text, '')
+
+    @patch('apps.verification.tasks.extract_text', return_value="Text OCR de prova " * 40)
+    def test_ocr_retorna_doc_type_al_resultat(self, mock_ocr):
+        """TC-TASK-011: El resultat inclou doc_type del document."""
+        self._crear_doc(doc_type='certificat')
+        resultats = _run_ocr_pipeline(self.verification)
+        self.assertEqual(resultats[0]['doc_type'], 'certificat')
+
+    @patch('apps.verification.tasks.extract_text', side_effect=Exception("Error OCR simulat"))
+    def test_ocr_error_continua_processant(self, mock_ocr):
+        """TC-TASK-012: Error OCR en un doc → ok=False, però no llança excepció."""
+        self._crear_doc()
+        resultats = _run_ocr_pipeline(self.verification)
+        self.assertEqual(len(resultats), 1)
+        self.assertFalse(resultats[0]['ok'])
+        self.assertIn('error', resultats[0])
+
+    @patch('apps.verification.tasks.extract_text', return_value="Text " * 40)
+    def test_ocr_multiples_docs(self, mock_ocr):
+        """TC-TASK-013: Dos documents → dos resultats."""
+        self._crear_doc(doc_type='identificatiu')
+        self._crear_doc(doc_type='certificat')
+        resultats = _run_ocr_pipeline(self.verification)
+        self.assertEqual(len(resultats), 2)
+
+    @patch('apps.verification.tasks.extract_text', return_value="Text " * 40)
+    def test_ocr_sense_documents_retorna_llista_buida(self, mock_ocr):
+        """TC-TASK-014: Verificació sense documents → llista buida."""
+        resultats = _run_ocr_pipeline(self.verification)
+        self.assertEqual(resultats, [])
+
+
+# ---------------------------------------------------------------------------
+# TC-TASK-020 a TC-TASK-025: _run_extraction_pipeline
+# ---------------------------------------------------------------------------
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class TestRunExtractionPipeline(TestCase):
+    """Tests de _run_extraction_pipeline."""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from apps.buildings.models import Edifici, Localitzacio
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        User = get_user_model()
+
+        self.user = User.objects.create_user(email='ext@test.com', password='pass')
+        loc = Localitzacio.objects.create(
+            carrer='Test', numero=1, codiPostal='08001', barri='Test'
+        )
+        edifici = Edifici.objects.create(
+            anyConstruccio=2000, tipologia='Residencial',
+            superficieTotal=100.0, nombrePlantes=2,
+            reglament='CTE', orientacioPrincipal='Sud',
+            localitzacio=loc,
+        )
+        self.verification = AdminFincaDocumentVerification.objects.create(
+            user=self.user, edifici=edifici,
+            status=AdminFincaDocumentVerification.Status.RUNNING,
+        )
+        self.doc = AdminFincaVerificationDocument.objects.create(
+            verification=self.verification,
+            fitxer=SimpleUploadedFile('doc.pdf', b'%PDF', content_type='application/pdf'),
+            doc_type='identificatiu',
+            ocr_text='Text OCR llarg per passar el filtre ocr_text__gt',
+        )
+
+    @patch('apps.verification.tasks.check_ollama_available', return_value=False)
+    def test_ollama_no_disponible_retorna_buit(self, mock_check):
+        """TC-TASK-020: Ollama no disponible → llista buida, sense processar."""
+        resultats = _run_extraction_pipeline(self.verification)
+        self.assertEqual(resultats, [])
+
+    @patch('apps.verification.tasks.check_ollama_available', return_value=True)
+    @patch('apps.verification.tasks.extract_structured_data')
+    def test_extraccio_ok_desa_extracted_data(self, mock_extract, mock_check):
+        """TC-TASK-021: Extracció exitosa → desa extracted_data al document."""
+        mock_extract.return_value = {
+            '_ok': True,
+            'nom_complet': 'Joan Pérez',
+            'dni_nie': '12345678Z',
+        }
+
+        resultats = _run_extraction_pipeline(self.verification)
+
+        self.doc.refresh_from_db()
+        self.assertEqual(len(resultats), 1)
+        self.assertTrue(resultats[0]['ok'])
+        self.assertIsNotNone(self.doc.extracted_data)
+        self.assertEqual(self.doc.extracted_data['nom_complet'], 'Joan Pérez')
+
+    @patch('apps.verification.tasks.check_ollama_available', return_value=True)
+    @patch('apps.verification.tasks.extract_structured_data')
+    def test_extraccio_camps_trobats_exclou_privats(self, mock_extract, mock_check):
+        """TC-TASK-022: El camp 'camps_trobats' no inclou claus que comencen per '_'."""
+        mock_extract.return_value = {
+            '_ok': True,
+            '_error': None,
+            'nom_complet': 'Joan',
+            'dni_nie': None,       # None → no compta com trobat
+        }
+
+        resultats = _run_extraction_pipeline(self.verification)
+
+        self.assertIn('nom_complet', resultats[0]['camps_trobats'])
+        self.assertNotIn('_ok', resultats[0]['camps_trobats'])
+        self.assertNotIn('_error', resultats[0]['camps_trobats'])
+        self.assertNotIn('dni_nie', resultats[0]['camps_trobats'])  # era None
+
+    @patch('apps.verification.tasks.check_ollama_available', return_value=True)
+    @patch('apps.verification.tasks.extract_structured_data', side_effect=Exception("Timeout"))
+    def test_extraccio_error_continua(self, mock_extract, mock_check):
+        """TC-TASK-023: Error extracció → ok=False, pipeline no s'atura."""
+        resultats = _run_extraction_pipeline(self.verification)
+        self.assertEqual(len(resultats), 1)
+        self.assertFalse(resultats[0]['ok'])
+        self.assertIn('error', resultats[0])
+
+    @patch('apps.verification.tasks.check_ollama_available', return_value=True)
+    @patch('apps.verification.tasks.extract_structured_data')
+    def test_extraccio_doc_sense_ocr_text_saltat(self, mock_extract, mock_check):
+        """TC-TASK-024: Document amb ocr_text buit és ignorat pel filtre ocr_text__gt=''."""
+        # Creem un segon doc sense OCR text
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        AdminFincaVerificationDocument.objects.create(
+            verification=self.verification,
+            fitxer=SimpleUploadedFile('doc2.pdf', b'%PDF', content_type='application/pdf'),
+            doc_type='certificat',
+            ocr_text='',   # buit → el filtre ocr_text__gt='' l'exclou
+        )
+        mock_extract.return_value = {'_ok': True, 'nom_complet': 'Joan'}
+
+        resultats = _run_extraction_pipeline(self.verification)
+
+        # Només el doc amb text ha de ser processat
+        self.assertEqual(len(resultats), 1)
+        self.assertEqual(mock_extract.call_count, 1)
+
+
+# ---------------------------------------------------------------------------
+# TC-TASK-030 a TC-TASK-038: _run_scoring_pipeline
+# ---------------------------------------------------------------------------
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class TestRunScoringPipeline(TestCase):
+    """Tests de _run_scoring_pipeline."""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from apps.buildings.models import Edifici, Localitzacio
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        User = get_user_model()
+
+        self.user = User.objects.create_user(email='score@test.com', password='pass')
+        loc = Localitzacio.objects.create(
+            carrer='Test', numero=1, codiPostal='08001', barri='Test'
+        )
+        edifici = Edifici.objects.create(
+            anyConstruccio=2000, tipologia='Residencial',
+            superficieTotal=100.0, nombrePlantes=2,
+            reglament='CTE', orientacioPrincipal='Sud',
+            localitzacio=loc,
+        )
+        self.verification = AdminFincaDocumentVerification.objects.create(
+            user=self.user, edifici=edifici,
+            status=AdminFincaDocumentVerification.Status.RUNNING,
+        )
+
+    def _crear_doc_amb_dades(self, extracted=None):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        return AdminFincaVerificationDocument.objects.create(
+            verification=self.verification,
+            fitxer=SimpleUploadedFile('doc.pdf', b'%PDF', content_type='application/pdf'),
+            doc_type='identificatiu',
+            ocr_text='text',
+            extracted_data=extracted or {'_ok': True, 'nom_complet': 'Joan'},
+        )
+
+    def test_sense_resultats_extraccio_score_zero(self):
+        """TC-TASK-030: Lista resultats_extraccio buida → score=0.0, flags informatives."""
+        resultat = _run_scoring_pipeline(self.verification, resultats_extraccio=[])
+
+        self.verification.refresh_from_db()
+        self.assertEqual(resultat['score_final'], 0.0)
+        self.assertEqual(resultat['scores_per_document'], [])
+        self.assertEqual(self.verification.score, 0.0)
+        self.assertTrue(len(self.verification.score_flags) > 0)
+
+    @patch('apps.verification.tasks.compute_score')
+    def test_sense_docs_puntuables_score_zero(self, mock_compute):
+        """TC-TASK-031: Verificació sense documents amb extracted_data → score=0.0."""
+        # No creem cap document → el queryset filtered és buit
+        resultat = _run_scoring_pipeline(
+            self.verification,
+            resultats_extraccio=[{'document_id': 999, 'ok': True}],
+        )
+
+        self.assertEqual(resultat['score_final'], 0.0)
+        mock_compute.assert_not_called()
+
+    @patch('apps.verification.tasks.compute_score')
+    def test_score_alt_suggeriment_acceptable(self, mock_compute):
+        """TC-TASK-032: Score >= LLINDAR_APROVAT → suggeriment conté 'Acceptable'."""
+        from apps.verification.services.scorer import LLINDAR_APROVAT
+        self._crear_doc_amb_dades()
+        mock_compute.return_value = make_score_result(score=LLINDAR_APROVAT)
+
+        _run_scoring_pipeline(
+            self.verification,
+            resultats_extraccio=[{'document_id': 1, 'ok': True}],
+        )
+
+        self.verification.refresh_from_db()
+        self.assertIn('Acceptable', self.verification.suggeriment)
+
+    @patch('apps.verification.tasks.compute_score')
+    def test_score_mig_suggeriment_revisio(self, mock_compute):
+        """TC-TASK-033: LLINDAR_REVISAR <= score < LLINDAR_APROVAT → 'Revisió'."""
+        from apps.verification.services.scorer import LLINDAR_APROVAT, LLINDAR_REVISAR
+        self._crear_doc_amb_dades()
+        score_mig = (LLINDAR_APROVAT + LLINDAR_REVISAR) / 2
+        mock_compute.return_value = make_score_result(score=score_mig)
+
+        _run_scoring_pipeline(
+            self.verification,
+            resultats_extraccio=[{'document_id': 1, 'ok': True}],
+        )
+
+        self.verification.refresh_from_db()
+        self.assertIn('Revisió', self.verification.suggeriment)
+
+    @patch('apps.verification.tasks.compute_score')
+    def test_score_baix_suggeriment_rebuig(self, mock_compute):
+        """TC-TASK-034: Score < LLINDAR_REVISAR → suggeriment conté 'Rebuig'."""
+        from apps.verification.services.scorer import LLINDAR_REVISAR
+        self._crear_doc_amb_dades()
+        mock_compute.return_value = make_score_result(score=LLINDAR_REVISAR - 0.01)
+
+        _run_scoring_pipeline(
+            self.verification,
+            resultats_extraccio=[{'document_id': 1, 'ok': True}],
+        )
+
+        self.verification.refresh_from_db()
+        self.assertIn('Rebuig', self.verification.suggeriment)
+
+    @patch('apps.verification.tasks.compute_score')
+    def test_score_final_es_el_maxim(self, mock_compute):
+        """TC-TASK-035: Amb 2 docs, el score final és el del document amb score més alt."""
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        # Dos documents
+        self._crear_doc_amb_dades(extracted={'_ok': True, 'nom_complet': 'A'})
+        AdminFincaVerificationDocument.objects.create(
+            verification=self.verification,
+            fitxer=SimpleUploadedFile('d2.pdf', b'%PDF', content_type='application/pdf'),
+            doc_type='certificat',
+            ocr_text='text',
+            extracted_data={'_ok': True, 'nom_complet': 'B'},
+        )
+        # El primer retorna 0.5, el segon 0.9
+        mock_compute.side_effect = [
+            make_score_result(score=0.5),
+            make_score_result(score=0.9),
+        ]
+
+        resultat = _run_scoring_pipeline(
+            self.verification,
+            resultats_extraccio=[{'d': 1}, {'d': 2}],
+        )
+
+        self.assertAlmostEqual(resultat['score_final'], 0.9)
+
+    @patch('apps.verification.tasks.compute_score')
+    def test_scoring_desa_score_i_flags_al_document(self, mock_compute):
+        """TC-TASK-036: El score i les flags es desen a cada document individual."""
+        doc = self._crear_doc_amb_dades()
+        mock_compute.return_value = make_score_result(score=0.8, flags=['flag1'])
+
+        _run_scoring_pipeline(
+            self.verification,
+            resultats_extraccio=[{'document_id': doc.pk, 'ok': True}],
+        )
+
+        doc.refresh_from_db()
+        self.assertAlmostEqual(doc.score, 0.8)
+        self.assertIn('flag1', doc.score_flags)
+
+    @patch('apps.verification.tasks.compute_score')
+    def test_scoring_doc_amb_extracted_data_none_es_salta(self, mock_compute):
+        """TC-TASK-037: Document amb extracted_data=None (o {}) no es puntua."""
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        AdminFincaVerificationDocument.objects.create(
+            verification=self.verification,
+            fitxer=SimpleUploadedFile('d.pdf', b'%PDF', content_type='application/pdf'),
+            doc_type='identificatiu',
+            ocr_text='text',
+            extracted_data=None,
+        )
+
+        # Passem un resultat_extraccio fictici per no entrar a la branca "sense resultats"
+        _run_scoring_pipeline(
+            self.verification,
+            resultats_extraccio=[{'document_id': 99, 'ok': False}],
+        )
+
+        mock_compute.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TC-TASK-040 a TC-TASK-047: process_verification (task Celery)
+# ---------------------------------------------------------------------------
+
+@override_settings(
+    MEDIA_ROOT=tempfile.mkdtemp(),
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=False,   # Deixem que la task gestioni els errors
+)
+class TestProcessVerification(TestCase):
+    """
+    Tests de la task Celery process_verification executada síncronament.
+    Les subpipelines es mockejen per aïllar la lògica d'orquestració.
+    """
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from apps.buildings.models import Edifici, Localitzacio
+        User = get_user_model()
+
+        self.user = User.objects.create_user(email='task@test.com', password='pass')
+        loc = Localitzacio.objects.create(
+            carrer='Test', numero=1, codiPostal='08001', barri='Test'
+        )
+        self.edifici = Edifici.objects.create(
+            anyConstruccio=2000, tipologia='Residencial',
+            superficieTotal=100.0, nombrePlantes=2,
+            reglament='CTE', orientacioPrincipal='Sud',
+            localitzacio=loc,
+        )
+
+    def _crear_verificacio(self):
+        return AdminFincaDocumentVerification.objects.create(
+            user=self.user, edifici=self.edifici,
+            status=AdminFincaDocumentVerification.Status.PENDING,
+        )
+
+    @patch('apps.verification.tasks._run_ocr_pipeline', return_value=[{'ok': True}])
+    @patch('apps.verification.tasks._run_extraction_pipeline', return_value=[{'ok': True}])
+    @patch('apps.verification.tasks._run_scoring_pipeline',
+           return_value={'score_final': 0.85, 'scores_per_document': [{'score': 0.85}]})
+    def test_flux_feliç_retorna_dict_correcte(self, mock_score, mock_extract, mock_ocr):
+        """TC-TASK-040: Pipeline complet OK → retorna dict amb totes les claus."""
+        v = self._crear_verificacio()
+        resultat = process_verification(v.pk)
+
+        self.assertEqual(resultat['verification_id'], v.pk)
+        self.assertIn('documents_processats', resultat)
+        self.assertIn('resultats_ocr', resultat)
+        self.assertIn('resultats_extraccio', resultat)
+        self.assertIn('scoring', resultat)
+
+    @patch('apps.verification.tasks._run_ocr_pipeline', return_value=[])
+    @patch('apps.verification.tasks._run_extraction_pipeline', return_value=[])
+    @patch('apps.verification.tasks._run_scoring_pipeline',
+           return_value={'score_final': 0.0, 'scores_per_document': []})
+    def test_flux_feliç_estat_passa_a_review(self, mock_score, mock_extract, mock_ocr):
+        """TC-TASK-041: Pipeline OK → status passa a REVIEW."""
+        v = self._crear_verificacio()
+        process_verification(v.pk)
+
+        v.refresh_from_db()
+        self.assertEqual(v.status, AdminFincaDocumentVerification.Status.REVIEW)
+
+    @patch('apps.verification.tasks._run_ocr_pipeline', return_value=[])
+    @patch('apps.verification.tasks._run_extraction_pipeline', return_value=[])
+    @patch('apps.verification.tasks._run_scoring_pipeline',
+           return_value={'score_final': 0.0, 'scores_per_document': []})
+    def test_flux_feliç_status_running_durant_pipeline(self, mock_score, mock_extract, mock_ocr):
+        """TC-TASK-042: Mentre s'executa, status és RUNNING abans del canvi a REVIEW."""
+        v = self._crear_verificacio()
+
+        status_durant = []
+
+        def captura_status(*args, **kwargs):
+            v.refresh_from_db()
+            status_durant.append(v.status)
+            return []
+
+        mock_ocr.side_effect = captura_status
+
+        process_verification(v.pk)
+
+        self.assertIn(AdminFincaDocumentVerification.Status.RUNNING, status_durant)
+
+    def test_verificacio_no_trobada_retorna_error(self):
+        """TC-TASK-043: ID inexistent → retorna {'error': 'not_found'}."""
+        resultat = process_verification(99999)
+        self.assertEqual(resultat, {'error': 'not_found'})
+
+    @patch('apps.verification.tasks.logger')
+    @patch('apps.verification.tasks._run_ocr_pipeline', side_effect=Exception("Error inesperat"))
+    def test_error_pipeline_despres_max_retries_estat_rejected(self, mock_ocr, mock_logger):
+        """TC-TASK-044: Excepció no recuperable → status REJECTED després de max retries.
+
+        Amb CELERY_TASK_ALWAYS_EAGER=True, self.retry() relança l'excepció original
+        en lloc d'encuar el reintent, de manera que MaxRetriesExceededError mai
+        s'arriba a disparar de forma natural.
+
+        Estratègia: mockejem self.retry() perquè llanci MaxRetriesExceededError
+        directament, simulant que ja s'han esgotat els 3 reintents configurats.
+        """
+        from celery.exceptions import MaxRetriesExceededError
+
+        v = self._crear_verificacio()
+
+        with patch.object(process_verification, 'retry',
+                          side_effect=MaxRetriesExceededError()):
+            resultat = process_verification(v.pk)
+
+        v.refresh_from_db()
+        self.assertEqual(v.status, AdminFincaDocumentVerification.Status.REJECTED)
+        self.assertIn('error', resultat)
+
+    @patch('apps.verification.tasks._run_ocr_pipeline', return_value=[{'ok': True}])
+    @patch('apps.verification.tasks._run_extraction_pipeline', return_value=[{'ok': True}])
+    @patch('apps.verification.tasks._run_scoring_pipeline',
+           return_value={'score_final': 0.9, 'scores_per_document': []})
+    def test_crida_les_tres_subpipelines(self, mock_score, mock_extract, mock_ocr):
+        """TC-TASK-045: Les tres subpipelines es criden exactament una vegada."""
+        v = self._crear_verificacio()
+        process_verification(v.pk)
+
+        mock_ocr.assert_called_once()
+        mock_extract.assert_called_once()
+        mock_score.assert_called_once()
+
+    @patch('apps.verification.tasks._run_ocr_pipeline', return_value=[{'ok': True}])
+    @patch('apps.verification.tasks._run_extraction_pipeline', return_value=[{'ok': True}])
+    @patch('apps.verification.tasks._run_scoring_pipeline',
+           return_value={'score_final': 0.85, 'scores_per_document': []})
+    def test_documents_processats_reflexa_len_ocr(self, mock_score, mock_extract, mock_ocr):
+        """TC-TASK-046: 'documents_processats' és la longitud de resultats_ocr."""
+        mock_ocr.return_value = [{'ok': True}, {'ok': True}, {'ok': False}]
+        v = self._crear_verificacio()
+        resultat = process_verification(v.pk)
+        self.assertEqual(resultat['documents_processats'], 3)
+
+    @patch('apps.verification.tasks._run_ocr_pipeline', return_value=[])
+    @patch('apps.verification.tasks._run_extraction_pipeline', return_value=[])
+    @patch('apps.verification.tasks._run_scoring_pipeline',
+           return_value={'score_final': 0.0, 'scores_per_document': []})
+    def test_resultats_extraccio_es_passa_a_scoring(self, mock_score, mock_extract, mock_ocr):
+        """TC-TASK-047: Els resultats d'extracció es passen com a argument al scoring."""
+        extraccio_retorn = [{'document_id': 1, 'ok': True}]
+        mock_extract.return_value = extraccio_retorn
+
+        v = self._crear_verificacio()
+        process_verification(v.pk)
+
+        # El primer argument posicional de _run_scoring_pipeline és la verificació,
+        # el segon és els resultats d'extracció
+        _, kwargs = mock_score.call_args
+        args_positionals = mock_score.call_args[0]
+        # Acceptem tant args posicionals com kwargs
+        resultats_passats = (
+            kwargs.get('resultats_extraccio')
+            if 'resultats_extraccio' in kwargs
+            else args_positionals[1]
+        )
+        self.assertEqual(resultats_passats, extraccio_retorn)

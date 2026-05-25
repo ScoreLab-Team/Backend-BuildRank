@@ -62,6 +62,9 @@ services:
       DB_PASSWORD:        buildrank_pass
       CELERY_BROKER_URL:  redis://redis:6379/0
       OLLAMA_BASE_URL:    http://ollama:11434
+      GETSTREAM_APP_ID: ${GETSTREAM_APP_ID:-}
+      GETSTREAM_API_KEY: ${GETSTREAM_API_KEY:-}
+      GETSTREAM_API_SECRET: ${GETSTREAM_API_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
@@ -87,6 +90,9 @@ services:
       DB_PASSWORD:        buildrank_pass
       CELERY_BROKER_URL:  redis://redis:6379/0
       OLLAMA_BASE_URL:    http://ollama:11434
+      GETSTREAM_APP_ID: ${GETSTREAM_APP_ID:-}
+      GETSTREAM_API_KEY: ${GETSTREAM_API_KEY:-}
+      GETSTREAM_API_SECRET: ${GETSTREAM_API_SECRET:-}
     depends_on:
       db:
         condition: service_healthy

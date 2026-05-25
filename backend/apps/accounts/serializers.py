@@ -321,10 +321,11 @@ class AssignarAdminSerializer(serializers.Serializer):
 
 class AccountUpdateSerializer(serializers.ModelSerializer):
     avatar = serializers.ImageField(required=False, allow_null=True)
+    avatar_clear = serializers.BooleanField(write_only=True, required=False, default=False)
 
     class Meta:
         model = User
-        fields = ("email", "first_name", "last_name", "avatar")
+        fields = ("email", "first_name", "last_name", "avatar", "avatar_clear")
         extra_kwargs = {
             "email": {"required": False},
             "first_name": {"required": False, "allow_blank": True},
@@ -381,13 +382,26 @@ class AccountUpdateSerializer(serializers.ModelSerializer):
             instance.last_name = validated_data["last_name"]
             update_fields.append("last_name")
 
-        if "avatar" in validated_data:
+        avatar_clear = validated_data.pop("avatar_clear", False)
+        avatar_provided = "avatar" in validated_data
+
+        if avatar_provided or avatar_clear:
             try:
                 profile = instance.profile
             except Profile.DoesNotExist:
                 profile = Profile.objects.create(user=instance)
 
-            profile.avatar = validated_data["avatar"]
+            old_avatar_name = profile.avatar.name if profile.avatar else None
+            new_avatar = validated_data.get("avatar") if avatar_provided else None
+
+            if old_avatar_name:
+                profile.avatar.delete(save=False)
+
+            if avatar_clear and not avatar_provided:
+                profile.avatar = None
+            elif avatar_provided:
+                profile.avatar = new_avatar
+
             profile.save(update_fields=["avatar", "updated_at"])
             instance._state.fields_cache["profile"] = profile
 

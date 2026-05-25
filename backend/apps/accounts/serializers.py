@@ -229,6 +229,7 @@ class MeSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
     is_system_admin = serializers.SerializerMethodField()
     account_status = serializers.SerializerMethodField()
+    avatar_url = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -242,6 +243,7 @@ class MeSerializer(serializers.ModelSerializer):
             "is_superuser",
             "is_system_admin",
             "account_status",
+            "avatar_url",
         )
 
     def get_role(self, obj):
@@ -258,6 +260,19 @@ class MeSerializer(serializers.ModelSerializer):
         if profile:
             return profile.account_status
         return AccountStatus.ACTIVE
+
+    def get_avatar_url(self, obj):
+        profile = getattr(obj, "profile", None)
+        if not profile or not profile.avatar:
+            return None
+
+        request = self.context.get("request")
+        url = profile.avatar.url
+
+        if request is not None:
+            return request.build_absolute_uri(url)
+
+        return url
 
 
 class LocalitzacioResum(serializers.Serializer):
@@ -305,9 +320,11 @@ class AssignarAdminSerializer(serializers.Serializer):
         return value
 
 class AccountUpdateSerializer(serializers.ModelSerializer):
+    avatar = serializers.ImageField(required=False, allow_null=True)
+
     class Meta:
         model = User
-        fields = ("email", "first_name", "last_name")
+        fields = ("email", "first_name", "last_name", "avatar")
         extra_kwargs = {
             "email": {"required": False},
             "first_name": {"required": False, "allow_blank": True},
@@ -320,6 +337,31 @@ class AccountUpdateSerializer(serializers.ModelSerializer):
         if User.objects.exclude(pk=self.instance.pk).filter(email=value).exists():
             raise serializers.ValidationError(
                 "Ja existeix un usuari amb aquest correu electrònic."
+            )
+
+        return value
+
+    def validate_avatar(self, value):
+        if value is None:
+            return value
+
+        max_size = 2 * 1024 * 1024
+        if value.size > max_size:
+            raise serializers.ValidationError(
+                "L'avatar no pot superar els 2 MB."
+            )
+
+        allowed_content_types = {
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/gif",
+        }
+        content_type = getattr(value, "content_type", "")
+
+        if content_type and content_type not in allowed_content_types:
+            raise serializers.ValidationError(
+                "Format d'imatge no permès. Usa JPG, PNG, WEBP o GIF."
             )
 
         return value
@@ -338,6 +380,16 @@ class AccountUpdateSerializer(serializers.ModelSerializer):
         if "last_name" in validated_data:
             instance.last_name = validated_data["last_name"]
             update_fields.append("last_name")
+
+        if "avatar" in validated_data:
+            try:
+                profile = instance.profile
+            except Profile.DoesNotExist:
+                profile = Profile.objects.create(user=instance)
+
+            profile.avatar = validated_data["avatar"]
+            profile.save(update_fields=["avatar", "updated_at"])
+            instance._state.fields_cache["profile"] = profile
 
         if update_fields:
             try:

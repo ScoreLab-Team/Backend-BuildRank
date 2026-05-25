@@ -2029,6 +2029,7 @@ paths:
   /api/leagues/:
     get:
       operationId: leagues_list
+      description: Obtain a list of all existing leagues.
       tags:
       - leagues
       responses:
@@ -2042,6 +2043,7 @@ paths:
           description: ''
     post:
       operationId: leagues_create
+      description: Create a new league.
       tags:
       - leagues
       requestBody:
@@ -2066,6 +2068,7 @@ paths:
   /api/leagues/{id}/:
     get:
       operationId: leagues_retrieve
+      description: Obtain an existing league identified by its id.
       parameters:
       - in: path
         name: id
@@ -2084,6 +2087,7 @@ paths:
           description: ''
     put:
       operationId: leagues_update
+      description: Change all parameters of an existing league identified by its id.
       parameters:
       - in: path
         name: id
@@ -2114,6 +2118,7 @@ paths:
           description: ''
     patch:
       operationId: leagues_partial_update
+      description: Change some parameters of an existing league identified by its id.
       parameters:
       - in: path
         name: id
@@ -2143,6 +2148,7 @@ paths:
           description: ''
     delete:
       operationId: leagues_destroy
+      description: Delete an existing league identified by its id.
       parameters:
       - in: path
         name: id
@@ -2189,7 +2195,7 @@ paths:
   /api/leagues/{id}/posicio_edifici/:
     get:
       operationId: leagues_posicio_edifici_retrieve
-      description: Deprecated, a fully functional version of this call can be found in /api/seasons/{id_temporada}/posicio_edifici.
+      description: Deprecated and unusable, a fully functional version of this call can be found in /api/seasons/{id_temporada}/posicio_edifici.
       parameters:
       - in: path
         name: id
@@ -2209,7 +2215,7 @@ paths:
   /api/leagues/{id}/ranking/:
     get:
       operationId: leagues_ranking_retrieve
-      description: Deprecated, a fully functional version of this call can be found in /api/seasons/{id_temporada}/ranking.
+      description: Deprecated and unsusable, a fully functional version of this call can be found in /api/seasons/{id_temporada}/ranking.
       parameters:
       - in: path
         name: id

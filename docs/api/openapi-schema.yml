@@ -1,20 +1,31 @@
 openapi: 3.0.3
 info:
-  title: ''
-  version: 0.0.0
+  title: BuildRank API
+  version: 1.0.0
+  description: BuildRank backend API for sustainable energy management in buildings.
+    Includes accounts, buildings, seasons, leagues, participations, community voting,
+    chat, verification, notifications and audit endpoints.
 paths:
   /api/accounts/admin/dashboard-summary/:
     get:
-      operationId: accounts_admin_dashboard_summary_retrieve
+      operationId: accounts_admin_dashboard_summary
       description: Mètriques agregades per al panell d'administració del sistema.
+      summary: Consultar metriques agregades del panell d'administracio
       tags:
       - accounts
+      security:
+      - BearerAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminDashboardSummary'
+          description: ''
   /api/accounts/edificis/{id_edifici}/assignar-admin/:
     patch:
-      operationId: accounts_edificis_assignar_admin_partial_update
+      operationId: accounts_assignar_admin_edifici
+      summary: Assignar administrador de finca a un edifici
       parameters:
       - in: path
         name: id_edifici
@@ -23,12 +34,35 @@ paths:
         required: true
       tags:
       - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAssignarAdmin'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAssignarAdmin'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAssignarAdmin'
+      security:
+      - BearerAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EdificiResum'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
   /api/accounts/habitatges/{ref_cadastral}/assignar-resident/:
     patch:
-      operationId: accounts_habitatges_assignar_resident_partial_update
+      operationId: accounts_assignar_resident
       description: |-
         Mixin per a vistes DRF que necessiten validació ABAC.
 
@@ -37,6 +71,7 @@ paths:
                 def get(self, request, edifici_id):
                     self.check_edifici_access(request, edifici_id)
                     ...
+      summary: Assignar un resident a un habitatge
       parameters:
       - in: path
         name: ref_cadastral
@@ -45,95 +80,279 @@ paths:
         required: true
       tags:
       - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAssignarResident'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAssignarResident'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAssignarResident'
+      security:
+      - BearerAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HabitatgeResum'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
   /api/accounts/login/:
     post:
-      operationId: accounts_login_create
+      operationId: accounts_login
+      summary: Iniciar sessio
       tags:
       - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Login'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Login'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Login'
+        required: true
       security:
+      - BearerAuth: []
       - {}
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+          description: ''
   /api/accounts/logout/:
     post:
-      operationId: accounts_logout_create
+      operationId: accounts_logout
+      summary: Tancar sessio
       tags:
       - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Logout'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Logout'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Logout'
+        required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
   /api/accounts/me/:
     get:
       operationId: accounts_me_retrieve
+      summary: Consultar el perfil autenticat
       tags:
       - accounts
+      security:
+      - BearerAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
     put:
       operationId: accounts_me_update
+      summary: Actualitzar completament el perfil autenticat
       tags:
       - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AccountUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AccountUpdate'
+      security:
+      - BearerAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
     patch:
       operationId: accounts_me_partial_update
+      summary: Actualitzar parcialment el perfil autenticat
       tags:
       - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAccountUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAccountUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAccountUpdate'
+      security:
+      - BearerAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
   /api/accounts/me/edificis/:
     get:
-      operationId: accounts_me_edificis_retrieve
+      operationId: accounts_me_edificis_list
+      summary: Llistar edificis accessibles per l'usuari autenticat
       tags:
       - accounts
+      security:
+      - BearerAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EdificiResum'
+          description: ''
   /api/accounts/me/role/:
     patch:
-      operationId: accounts_me_role_partial_update
+      operationId: accounts_me_role_update
+      summary: Canviar el rol propi entre owner i tenant
       tags:
       - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedRoleUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedRoleUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedRoleUpdate'
+      security:
+      - BearerAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
   /api/accounts/oauth/google/:
     post:
-      operationId: accounts_oauth_google_create
+      operationId: accounts_google_oauth
+      summary: Autenticacio amb Google OAuth
       tags:
       - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleOAuth'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/GoogleOAuth'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/GoogleOAuth'
+        required: true
       security:
+      - BearerAuth: []
       - {}
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+          description: ''
   /api/accounts/password-reset/:
     post:
-      operationId: accounts_password_reset_create
+      operationId: accounts_password_reset_request
+      summary: Sol·licitar restabliment de contrasenya
       tags:
       - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+        required: true
       security:
+      - BearerAuth: []
       - {}
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
   /api/accounts/password-reset-confirm/:
     post:
-      operationId: accounts_password_reset_confirm_create
+      operationId: accounts_password_reset_confirm
+      summary: Confirmar nova contrasenya
       tags:
       - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirm'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirm'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirm'
+        required: true
       security:
+      - BearerAuth: []
       - {}
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
   /api/accounts/refresh/:
     post:
       operationId: accounts_refresh_create
@@ -179,6 +398,7 @@ paths:
               $ref: '#/components/schemas/Register'
         required: true
       security:
+      - BearerAuth: []
       - {}
       responses:
         '201':
@@ -193,6 +413,8 @@ paths:
       description: Llista tots els usuaris de la plataforma.
       tags:
       - accounts
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -214,6 +436,8 @@ paths:
         required: true
       tags:
       - accounts
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -223,10 +447,11 @@ paths:
           description: ''
   /api/accounts/users/{id}/block/:
     post:
-      operationId: accounts_users_block_create
+      operationId: accounts_user_block
       description: |-
         Bloqueja permanentment un compte.
         Revoca immediatament totes les sessions actives de l'usuari.
+      summary: Bloquejar un usuari
       parameters:
       - in: path
         name: id
@@ -235,16 +460,35 @@ paths:
         required: true
       tags:
       - accounts
+      security:
+      - BearerAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdmin'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
   /api/accounts/users/{id}/suspend/:
     post:
-      operationId: accounts_users_suspend_create
+      operationId: accounts_user_suspend
       description: |-
         Suspèn temporalment un compte.
         Camps opcionals: reason (text), suspended_until (datetime; null = indefinit).
         Revoca immediatament totes les sessions actives.
+      summary: Suspendre un usuari
       parameters:
       - in: path
         name: id
@@ -253,13 +497,43 @@ paths:
         required: true
       tags:
       - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Suspend'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Suspend'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Suspend'
+      security:
+      - BearerAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdmin'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
   /api/accounts/users/{id}/unblock/:
     post:
-      operationId: accounts_users_unblock_create
+      operationId: accounts_user_unblock
       description: Desbloqueja un compte i el torna a l'estat actiu.
+      summary: Desbloquejar un usuari
       parameters:
       - in: path
         name: id
@@ -268,13 +542,32 @@ paths:
         required: true
       tags:
       - accounts
+      security:
+      - BearerAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdmin'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
   /api/accounts/users/{id}/unsuspend/:
     post:
-      operationId: accounts_users_unsuspend_create
+      operationId: accounts_user_unsuspend
       description: Aixeca la suspensió d'un compte i el torna a l'estat actiu.
+      summary: Aixecar la suspensio d'un usuari
       parameters:
       - in: path
         name: id
@@ -283,9 +576,27 @@ paths:
         required: true
       tags:
       - accounts
+      security:
+      - BearerAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdmin'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
   /api/audit/logs/:
     get:
       operationId: audit_logs_list
@@ -314,6 +625,8 @@ paths:
           type: integer
       tags:
       - audit
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -333,6 +646,8 @@ paths:
       summary: Alta i reclamació d'edifici per part d'un administrador de finca
       tags:
       - Administrador de finca
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -367,6 +682,8 @@ paths:
         required: true
       tags:
       - Utilitats
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -381,6 +698,8 @@ paths:
       operationId: buildings_dades_energetiques_list
       tags:
       - buildings
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -406,6 +725,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DadesEnergetiques'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '201':
           content:
@@ -425,6 +746,8 @@ paths:
         required: true
       tags:
       - buildings
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -455,6 +778,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DadesEnergetiques'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -484,6 +809,8 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/PatchedDadesEnergetiques'
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -502,6 +829,8 @@ paths:
         required: true
       tags:
       - buildings
+      security:
+      - BearerAuth: []
       responses:
         '204':
           description: No response body
@@ -523,6 +852,8 @@ paths:
         description: Només superuser. Inclou edificis desactivats.
       tags:
       - Edificis
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -555,6 +886,8 @@ paths:
             schema:
               $ref: '#/components/schemas/EdificiDetail'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '201':
           content:
@@ -579,6 +912,8 @@ paths:
         required: true
       tags:
       - Edificis
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -616,6 +951,8 @@ paths:
             schema:
               $ref: '#/components/schemas/EdificiDetail'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -652,6 +989,8 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/PatchedEdificiDetail'
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -677,6 +1016,8 @@ paths:
         required: true
       tags:
       - Edificis
+      security:
+      - BearerAuth: []
       responses:
         '204':
           description: Eliminat correctament.
@@ -704,6 +1045,8 @@ paths:
         description: ID de temporada per filtrar.
       tags:
       - Badges
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -737,6 +1080,8 @@ paths:
             schema:
               $ref: '#/components/schemas/EdificiDetail'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -761,6 +1106,8 @@ paths:
         required: true
       tags:
       - Edificis
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: Llista de dades energètiques per habitatge.
@@ -801,6 +1148,8 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/DesactivarBody'
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -826,6 +1175,8 @@ paths:
         required: true
       tags:
       - Edificis
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -854,6 +1205,8 @@ paths:
         required: true
       tags:
       - Edificis
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -896,6 +1249,8 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/PatchedEdificiDetail'
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -922,6 +1277,8 @@ paths:
         required: true
       tags:
       - Simulacions
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -957,6 +1314,8 @@ paths:
             schema:
               $ref: '#/components/schemas/EdificiDetail'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -985,6 +1344,8 @@ paths:
         required: true
       tags:
       - Simulacions
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1032,6 +1393,8 @@ paths:
             schema:
               $ref: '#/components/schemas/EdificiDetail'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1086,6 +1449,8 @@ paths:
             schema:
               $ref: '#/components/schemas/EdificiDetail'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '201':
           content:
@@ -1136,6 +1501,8 @@ paths:
             schema:
               $ref: '#/components/schemas/EdificiDetail'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '201':
           content:
@@ -1178,6 +1545,8 @@ paths:
             schema:
               $ref: '#/components/schemas/EdificiDetail'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: Resultat de la simulació (abans/després + deltes).
@@ -1196,6 +1565,8 @@ paths:
         required: true
       tags:
       - Votacions
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1240,6 +1611,8 @@ paths:
             schema:
               $ref: '#/components/schemas/EdificiDetail'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1267,6 +1640,8 @@ paths:
         required: true
       tags:
       - Edificis
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1282,6 +1657,8 @@ paths:
       summary: '[Legacy] Llista tots els edificis'
       tags:
       - Edificis (legacy)
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1311,6 +1688,8 @@ paths:
         required: true
       tags:
       - Edificis (legacy)
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1367,6 +1746,8 @@ paths:
           type: string
       tags:
       - Edificis
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1382,6 +1763,8 @@ paths:
       summary: Llista els habitatges de l'usuari
       tags:
       - Habitatges
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1414,6 +1797,8 @@ paths:
             schema:
               $ref: '#/components/schemas/HabitatgeDetail'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1448,6 +1833,8 @@ paths:
         required: true
       tags:
       - Habitatges
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1483,6 +1870,8 @@ paths:
             schema:
               $ref: '#/components/schemas/HabitatgeDetail'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1513,6 +1902,8 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/PatchedHabitatgeDetail'
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1532,6 +1923,8 @@ paths:
         required: true
       tags:
       - Habitatges
+      security:
+      - BearerAuth: []
       responses:
         '204':
           description: No response body
@@ -1562,6 +1955,8 @@ paths:
             schema:
               $ref: '#/components/schemas/HabitatgeDetail'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1601,6 +1996,8 @@ paths:
             schema:
               $ref: '#/components/schemas/HabitatgeDetail'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: Sol·licitud aprovada o rebutjada.
@@ -1616,6 +2013,8 @@ paths:
       summary: Habitatges amb sol·licituds d'accés pendents
       tags:
       - Habitatges
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1632,6 +2031,8 @@ paths:
       operationId: buildings_localitzacions_list
       tags:
       - buildings
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1657,6 +2058,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Localitzacio'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '201':
           content:
@@ -1676,6 +2079,8 @@ paths:
         required: true
       tags:
       - buildings
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1706,6 +2111,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Localitzacio'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1735,6 +2142,8 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/PatchedLocalitzacio'
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1753,6 +2162,8 @@ paths:
         required: true
       tags:
       - buildings
+      security:
+      - BearerAuth: []
       responses:
         '204':
           description: No response body
@@ -1771,6 +2182,8 @@ paths:
         description: Filtra per categoria de millora.
       tags:
       - Catàleg de millores
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1788,6 +2201,8 @@ paths:
       description: Llista millores implementades per al panell d'administració.
       tags:
       - buildings
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1821,6 +2236,8 @@ paths:
             schema:
               $ref: '#/components/schemas/MilloraImplementada'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1834,6 +2251,8 @@ paths:
       description: Llista millores pendents de revisió/validació final.
       tags:
       - buildings
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1856,6 +2275,8 @@ paths:
         required: true
       tags:
       - Catàleg de millores
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1889,6 +2310,8 @@ paths:
           type: integer
       tags:
       - Ranking
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1931,6 +2354,8 @@ paths:
         required: true
       tags:
       - Ranking
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1957,6 +2382,8 @@ paths:
         description: Objectiu de top N (defecte 5).
       tags:
       - Ranking
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -1972,6 +2399,8 @@ paths:
         en les dades de Django. Cap crida a l'API de GetStream.
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -1984,6 +2413,8 @@ paths:
         la garantia que els canals ja existeixen a GetStream.
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -1999,6 +2430,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '204':
           description: No response body
@@ -2014,6 +2447,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2029,6 +2464,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2044,6 +2481,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2059,6 +2498,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2074,6 +2515,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2090,6 +2533,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2106,6 +2551,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2121,6 +2568,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2137,6 +2586,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2153,6 +2604,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2168,6 +2621,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2183,6 +2638,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2198,6 +2655,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2210,6 +2669,8 @@ paths:
         Sincronitza les dades de l'usuari a GetStream abans d'emetre el token.
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2228,6 +2689,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2245,6 +2708,8 @@ paths:
         required: true
       tags:
       - chat
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2253,6 +2718,8 @@ paths:
       operationId: community_votacions_list
       tags:
       - community
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2278,6 +2745,8 @@ paths:
             schema:
               $ref: '#/components/schemas/VotacioCreate'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '201':
           content:
@@ -2296,6 +2765,8 @@ paths:
         required: true
       tags:
       - community
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2324,6 +2795,8 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/VotacioUpdate'
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2352,6 +2825,8 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/PatchedVotacioUpdate'
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2369,6 +2844,8 @@ paths:
         required: true
       tags:
       - community
+      security:
+      - BearerAuth: []
       responses:
         '204':
           description: No response body
@@ -2383,6 +2860,8 @@ paths:
         required: true
       tags:
       - community
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2401,6 +2880,8 @@ paths:
         required: true
       tags:
       - community
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2409,6 +2890,8 @@ paths:
       operationId: leagues_list
       tags:
       - leagues
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2434,6 +2917,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Lliga'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '201':
           content:
@@ -2453,6 +2938,8 @@ paths:
         required: true
       tags:
       - leagues
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2483,6 +2970,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Lliga'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2512,6 +3001,8 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/PatchedLliga'
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2530,6 +3021,8 @@ paths:
         required: true
       tags:
       - leagues
+      security:
+      - BearerAuth: []
       responses:
         '204':
           description: No response body
@@ -2557,6 +3050,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Lliga'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2576,6 +3071,8 @@ paths:
         required: true
       tags:
       - leagues
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2595,6 +3092,8 @@ paths:
         required: true
       tags:
       - leagues
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2607,6 +3106,8 @@ paths:
       operationId: leagues_evolucio_retrieve
       tags:
       - leagues
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2619,6 +3120,8 @@ paths:
       operationId: notifications_list
       tags:
       - notifications
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2639,6 +3142,8 @@ paths:
         required: true
       tags:
       - notifications
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2647,6 +3152,8 @@ paths:
       operationId: notifications_llegir_totes_create
       tags:
       - notifications
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2655,6 +3162,8 @@ paths:
       operationId: notifications_no_llegides_retrieve
       tags:
       - notifications
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: No response body
@@ -2663,6 +3172,8 @@ paths:
       operationId: participations_list
       tags:
       - participations
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2688,6 +3199,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Participacio'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '201':
           content:
@@ -2707,6 +3220,8 @@ paths:
         required: true
       tags:
       - participations
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2737,6 +3252,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Participacio'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2766,6 +3283,8 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/PatchedParticipacio'
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2784,6 +3303,8 @@ paths:
         required: true
       tags:
       - participations
+      security:
+      - BearerAuth: []
       responses:
         '204':
           description: No response body
@@ -2811,6 +3332,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Participacio'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2823,6 +3346,8 @@ paths:
       operationId: participations_current_retrieve
       tags:
       - participations
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2835,6 +3360,8 @@ paths:
       operationId: participations_evolucio_puntuacio_retrieve
       tags:
       - participations
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -2847,156 +3374,14 @@ paths:
       operationId: participations_progres_anual_retrieve
       tags:
       - participations
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Participacio'
-          description: ''
-  /api/schema/:
-    get:
-      operationId: schema_retrieve
-      description: |-
-        OpenApi3 schema for this API. Format can be selected via content negotiation.
-
-        - YAML: application/vnd.oai.openapi
-        - JSON: application/vnd.oai.openapi+json
-      parameters:
-      - in: query
-        name: format
-        schema:
-          type: string
-          enum:
-          - json
-          - yaml
-      - in: query
-        name: lang
-        schema:
-          type: string
-          enum:
-          - af
-          - ar
-          - ar-dz
-          - ast
-          - az
-          - be
-          - bg
-          - bn
-          - br
-          - bs
-          - ca
-          - ckb
-          - cs
-          - cy
-          - da
-          - de
-          - dsb
-          - el
-          - en
-          - en-au
-          - en-gb
-          - eo
-          - es
-          - es-ar
-          - es-co
-          - es-mx
-          - es-ni
-          - es-ve
-          - et
-          - eu
-          - fa
-          - fi
-          - fr
-          - fy
-          - ga
-          - gd
-          - gl
-          - he
-          - hi
-          - hr
-          - hsb
-          - hu
-          - hy
-          - ia
-          - id
-          - ig
-          - io
-          - is
-          - it
-          - ja
-          - ka
-          - kab
-          - kk
-          - km
-          - kn
-          - ko
-          - ky
-          - lb
-          - lt
-          - lv
-          - mk
-          - ml
-          - mn
-          - mr
-          - ms
-          - my
-          - nb
-          - ne
-          - nl
-          - nn
-          - os
-          - pa
-          - pl
-          - pt
-          - pt-br
-          - ro
-          - ru
-          - sk
-          - sl
-          - sq
-          - sr
-          - sr-latn
-          - sv
-          - sw
-          - ta
-          - te
-          - tg
-          - th
-          - tk
-          - tr
-          - tt
-          - udm
-          - ug
-          - uk
-          - ur
-          - uz
-          - vi
-          - zh-hans
-          - zh-hant
-      tags:
-      - schema
-      security:
-      - {}
-      responses:
-        '200':
-          content:
-            application/vnd.oai.openapi:
-              schema:
-                type: object
-                additionalProperties: {}
-            application/yaml:
-              schema:
-                type: object
-                additionalProperties: {}
-            application/vnd.oai.openapi+json:
-              schema:
-                type: object
-                additionalProperties: {}
-            application/json:
-              schema:
-                type: object
-                additionalProperties: {}
           description: ''
   /api/seasons/:
     get:
@@ -3008,6 +3393,8 @@ paths:
         perquè encara no formen part del cicle visible de ranking/progrés.
       tags:
       - seasons
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3033,6 +3420,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Temporada'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '201':
           content:
@@ -3052,6 +3441,8 @@ paths:
         required: true
       tags:
       - seasons
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3082,6 +3473,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Temporada'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3111,6 +3504,8 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/PatchedTemporada'
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3129,6 +3524,8 @@ paths:
         required: true
       tags:
       - seasons
+      security:
+      - BearerAuth: []
       responses:
         '204':
           description: No response body
@@ -3156,6 +3553,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Temporada'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3175,6 +3574,8 @@ paths:
         required: true
       tags:
       - seasons
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3194,6 +3595,8 @@ paths:
         required: true
       tags:
       - seasons
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3213,6 +3616,8 @@ paths:
         required: true
       tags:
       - seasons
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3244,6 +3649,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Temporada'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3256,6 +3663,8 @@ paths:
       operationId: seasons_anteriors_retrieve
       tags:
       - seasons
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3280,6 +3689,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Temporada'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3292,6 +3703,8 @@ paths:
       operationId: seasons_previous_retrieve
       tags:
       - seasons
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3341,6 +3754,8 @@ paths:
             schema:
               $ref: '#/components/schemas/ThirdPartyRequest'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3382,6 +3797,8 @@ paths:
       summary: Llistar verificacions documentals
       tags:
       - Verificació
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: Llista de verificacions obtinguda correctament.
@@ -3407,6 +3824,8 @@ paths:
         required: true
       tags:
       - Verificació
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: Detall de la verificació obtingut correctament.
@@ -3461,6 +3880,8 @@ paths:
             schema:
               $ref: '#/components/schemas/RevisioRequest'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '200':
           content:
@@ -3527,6 +3948,8 @@ paths:
             schema:
               $ref: '#/components/schemas/VerificationCreateMultipart'
         required: true
+      security:
+      - BearerAuth: []
       responses:
         '201':
           description: Verificació creada correctament. El pipeline asíncron ja ha
@@ -3549,6 +3972,52 @@ components:
       description: |-
         * `aprovar` - aprovar
         * `rebutjar` - rebutjar
+    AccountUpdate:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        avatar:
+          type: string
+          format: uri
+          nullable: true
+        avatar_clear:
+          type: boolean
+          writeOnly: true
+          default: false
+    AdminDashboardSummary:
+      type: object
+      properties:
+        users_total:
+          type: integer
+        buildings_total:
+          type: integer
+        buildings_managed:
+          type: integer
+        pending_improvements:
+          type: integer
+        pending_admin_verifications:
+          type: integer
+        pending_housing_requests:
+          type: integer
+        active_season:
+          nullable: true
+      required:
+      - active_season
+      - buildings_managed
+      - buildings_total
+      - pending_admin_verifications
+      - pending_housing_requests
+      - pending_improvements
+      - users_total
     AdminFincaAltaResponse:
       type: object
       properties:
@@ -3623,6 +4092,40 @@ components:
       - status_code
       - timestamp
       - user_email
+    AuthTokenResponse:
+      type: object
+      properties:
+        access:
+          type: string
+        refresh:
+          type: string
+        user:
+          $ref: '#/components/schemas/AuthUserResponse'
+      required:
+      - access
+      - refresh
+      - user
+    AuthUserResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+          format: email
+        first_name:
+          type: string
+        last_name:
+          type: string
+        role:
+          type: string
+          nullable: true
+      required:
+      - email
+      - first_name
+      - id
+      - last_name
+      - role
     AutocompleteCarrerItem:
       type: object
       properties:
@@ -3917,6 +4420,13 @@ components:
       - detail
       - edifici_id
       - pot_desactivar
+    DetailResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+      required:
+      - detail
     DivisioEnum:
       enum:
       - Bronze
@@ -4048,6 +4558,32 @@ components:
       - superficieTotal
       - tipologia
       - tipologia_open_data
+    EdificiResum:
+      type: object
+      properties:
+        idEdifici:
+          type: integer
+          readOnly: true
+        tipologia:
+          $ref: '#/components/schemas/TipologiaEnum'
+        superficieTotal:
+          type: number
+          format: double
+        puntuacioBase:
+          type: number
+          format: double
+          readOnly: true
+          nullable: true
+        localitzacio:
+          allOf:
+          - $ref: '#/components/schemas/LocalitzacioResum'
+          readOnly: true
+      required:
+      - idEdifici
+      - localitzacio
+      - puntuacioBase
+      - superficieTotal
+      - tipologia
     ErrorRevisio:
       type: object
       properties:
@@ -4078,6 +4614,21 @@ components:
         * `EnRevisió` - En revisió
         * `Validada` - Validada
         * `Rebutjada` - Rebutjada
+    GoogleOAuth:
+      type: object
+      properties:
+        id_token:
+          type: string
+          writeOnly: true
+        mode:
+          allOf:
+          - $ref: '#/components/schemas/ModeEnum'
+          writeOnly: true
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+      required:
+      - id_token
+      - mode
     HabitatgeDetail:
       type: object
       properties:
@@ -4141,6 +4692,30 @@ components:
       - solicitant
       - superficie
       - usuari
+    HabitatgeResum:
+      type: object
+      properties:
+        referenciaCadastral:
+          type: string
+          maxLength: 50
+        planta:
+          type: string
+          maxLength: 10
+        porta:
+          type: string
+          maxLength: 10
+        superficie:
+          type: number
+          format: double
+        edifici_id:
+          type: string
+          readOnly: true
+      required:
+      - edifici_id
+      - planta
+      - porta
+      - referenciaCadastral
+      - superficie
     Lliga:
       type: object
       properties:
@@ -4209,6 +4784,44 @@ components:
       - codiPostal
       - id
       - numero
+    LocalitzacioResum:
+      type: object
+      properties:
+        carrer:
+          type: string
+        numero:
+          type: integer
+        codiPostal:
+          type: string
+        barri:
+          type: string
+        zonaClimatica:
+          type: string
+      required:
+      - barri
+      - carrer
+      - codiPostal
+      - numero
+      - zonaClimatica
+    Login:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          writeOnly: true
+      required:
+      - email
+      - password
+    Logout:
+      type: object
+      properties:
+        refresh:
+          type: string
+      required:
+      - refresh
     MapaResponse:
       type: object
       properties:
@@ -4239,6 +4852,52 @@ components:
         * `exacta` - exacta
         * `carrer` - carrer
         * `cap` - cap
+    Me:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        role:
+          type: string
+          nullable: true
+          readOnly: true
+        is_staff:
+          type: boolean
+          title: Staff status
+          description: Designates whether the user can log into this admin site.
+        is_superuser:
+          type: boolean
+          title: Superuser status
+          description: Designates that this user has all permissions without explicitly
+            assigning them.
+        is_system_admin:
+          type: boolean
+          readOnly: true
+        account_status:
+          type: string
+          readOnly: true
+        avatar_url:
+          type: string
+          nullable: true
+          readOnly: true
+      required:
+      - account_status
+      - avatar_url
+      - email
+      - id
+      - is_system_admin
+      - role
     MilloraImplementada:
       type: object
       properties:
@@ -4281,6 +4940,14 @@ components:
       - id
       - millora
       - simulacio_id
+    ModeEnum:
+      enum:
+      - login
+      - register
+      type: string
+      description: |-
+        * `login` - login
+        * `register` - register
     NivellConfiancaEnum:
       enum:
       - Baix
@@ -4415,6 +5082,67 @@ components:
       - posicio
       - puntuacio
       - puntuacio_inicial
+    PasswordResetConfirm:
+      type: object
+      properties:
+        uid:
+          type: string
+        token:
+          type: string
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        password_confirm:
+          type: string
+          writeOnly: true
+      required:
+      - password
+      - password_confirm
+      - token
+      - uid
+    PasswordResetRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+      required:
+      - email
+    PatchedAccountUpdate:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        avatar:
+          type: string
+          format: uri
+          nullable: true
+        avatar_clear:
+          type: boolean
+          writeOnly: true
+          default: false
+    PatchedAssignarAdmin:
+      type: object
+      description: Assigna un administrador de finca a un edifici.
+      properties:
+        user_id:
+          type: integer
+          nullable: true
+    PatchedAssignarResident:
+      type: object
+      description: Assigna un usuari (resident) a un habitatge.
+      properties:
+        user_id:
+          type: integer
     PatchedDadesEnergetiques:
       type: object
       properties:
@@ -4729,6 +5457,11 @@ components:
           type: integer
         lliga:
           type: integer
+    PatchedRoleUpdate:
+      type: object
+      properties:
+        role:
+          $ref: '#/components/schemas/RoleEnum'
     PatchedTemporada:
       type: object
       properties:
@@ -4991,6 +5724,17 @@ components:
       required:
       - detail
       - rolSolicitat
+    Suspend:
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 500
+        suspended_until:
+          type: string
+          format: date-time
+          nullable: true
+          description: Null o omÃ¨s = suspensiÃ³ indefinida.
     Temporada:
       type: object
       properties:
@@ -5128,7 +5872,7 @@ components:
         * `edifici` - Edifici
     UserAdmin:
       type: object
-      description: Representació completa d'un usuari per al panell d'administració.
+      description: RepresentaciÃ³ completa d'un usuari per al panell d'administraciÃ³.
       properties:
         id:
           type: integer
@@ -5330,3 +6074,31 @@ components:
           nullable: true
         estat:
           $ref: '#/components/schemas/Estat002Enum'
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 'JWT Bearer token. Use the Authorization header with value: Bearer
+        <access_token>.'
+tags:
+- name: accounts
+  description: Authentication, profile and user administration.
+- name: buildings
+  description: Buildings, homes, energy data, improvements, simulations and rankings.
+- name: seasons
+  description: Season management.
+- name: leagues
+  description: League management and rankings.
+- name: participations
+  description: Building participation in leagues and seasons.
+- name: community
+  description: Community voting features.
+- name: chat
+  description: Chat integration and moderation endpoints.
+- name: verification
+  description: Document verification workflows.
+- name: notifications
+  description: User notifications.
+- name: audit
+  description: Audit logs and traceability.

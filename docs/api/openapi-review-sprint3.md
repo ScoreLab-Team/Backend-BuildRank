@@ -3,74 +3,131 @@
 ## Informacio general
 
 Data: 25/05/2026
-Branca: qa/backend-openapi-sprint3
+Branca: qa/openapi-schema-improvements-sprint3
 Base: Desenvolupament actualitzat
 Entorn: Backend local amb Docker Compose
 Eina: drf-spectacular
 
 ## Objectiu
 
-Generar i revisar l'esquema OpenAPI del backend de BuildRank per validar el contracte API disponible per frontend, proves manuals, documentacio tecnica i futures integracions.
+Generar, revisar i millorar l'esquema OpenAPI del backend de BuildRank per deixar un contracte API mes complet, util per frontend, proves manuals, documentacio tecnica i futures integracions.
 
-## Comanda executada
+## Comandes executades
 
-docker compose exec web python manage.py spectacular --file openapi-schema.yml --validate
+- docker compose exec web python manage.py check
+- docker compose exec web python manage.py test apps.accounts -v 2
+- docker compose exec web python manage.py spectacular --file openapi-schema.yml --validate
 
-## Fitxers generats
+## Fitxers generats o actualitzats
 
-- docs/api/openapi-generation-sprint3.txt
+- backend/apps/accounts/schema.py
+- backend/apps/accounts/apps.py
+- backend/apps/accounts/serializers.py
+- backend/apps/accounts/views.py
+- backend/config/settings.py
+- docs/api/openapi-generation-after-improvements-sprint3.txt
+- docs/api/openapi-generation-after-accounts-schema-final-sprint3.txt
 - docs/api/openapi-schema.yml
 - docs/api/openapi-review-sprint3.md
 
-## Resultat de generacio
+## Millores aplicades
 
-| Metrica | Resultat |
+### 1. Documentacio de l'autenticador JWT custom
+
+S'ha afegit una OpenApiAuthenticationExtension per AccountStatusJWTAuthentication.
+
+Aixo permet a drf-spectacular entendre que l'autenticacio custom del projecte equival a un esquema HTTP Bearer JWT.
+
+Resultat:
+
+- Abans: multiples warnings de could not resolve authenticator.
+- Despres: 0 warnings de could not resolve authenticator.
+
+### 2. Metadata general de l'API
+
+S'ha afegit SPECTACULAR_SETTINGS a settings.py per evitar que el schema surti amb title buit i version 0.0.0.
+
+Metadata configurada:
+
+- TITLE: BuildRank API
+- VERSION: 1.0.0
+- DESCRIPTION: descripcio general del backend BuildRank
+- TAGS: accounts, buildings, seasons, leagues, participations, community, chat, verification, notifications i audit
+
+### 3. Documentacio dels endpoints principals d'accounts
+
+S'han afegit anotacions @extend_schema als APIViews principals d'accounts, reutilitzant serializers existents i afegint serializers de resposta nomes per documentacio quan era necessari.
+
+Endpoints millorats:
+
+- login
+- Google OAuth
+- logout
+- password reset request
+- password reset confirm
+- me GET/PUT/PATCH
+- me/edificis
+- me/role
+- assignacio de resident
+- assignacio d'administrador de finca
+- bloqueig, desbloqueig, suspensio i aixecament de suspensio d'usuaris
+- dashboard summary d'administracio
+
+### 4. Type hints en camps calculats de MeSerializer
+
+S'han afegit type hints als SerializerMethodField de MeSerializer per evitar warnings de tipus no inferible.
+
+## Resultat comparatiu
+
+| Fase | Warnings totals | Warnings unics | Errors totals | Errors unics |
+|---|---:|---:|---:|---:|
+| Schema inicial documentat | 197 | 110 | 160 | 39 |
+| Despres d'autenticador custom i metadata | 48 | 44 | 160 | 39 |
+| Despres d'anotar accounts i MeSerializer | 48 | 44 | 92 | 24 |
+
+## Validacio
+
+| Comprovacio | Resultat |
 |---|---:|
-| Schema generat | Si |
-| Mida del schema | 147857 bytes |
-| Warnings totals | 197 |
-| Warnings unics | 110 |
-| Errors totals | 160 |
-| Errors unics | 39 |
+| manage.py check | OK |
+| Tests apps.accounts | 102 OK |
+| Schema OpenAPI generat | Si |
+| Warnings autenticador custom | 0 |
+| unable to guess serializer restants | 23 |
 
 ## Interpretacio
 
-L'esquema OpenAPI es genera, pero drf-spectacular informa de diversos problemes de documentacio automatica. Aquests avisos no indiquen necessariament errors funcionals del backend, sino punts on l'eina no pot inferir correctament serializers, autenticacio, tipus de camps calculats o parametres.
+La millora ha reduit substancialment els problemes del schema. Primer s'ha eliminat el soroll transversal causat per l'autenticador custom AccountStatusJWTAuthentication. Despres s'han documentat els principals endpoints d'accounts, reduint els errors totals de 160 a 92.
 
-El fitxer generat comenca amb openapi: 3.0.3 i inclou paths del backend, per tant es considera una base valida de contracte API, encara que incompleta o poc precisa en alguns endpoints.
+Els errors restants continuen relacionats sobretot amb APIViews i endpoints d'altres apps, especialment chat, notifications, community i algun endpoint de buildings. Aixo no indica necessariament errors funcionals del backend, sino manca d'anotacions explicites de contracte API en aquestes parts.
 
-## Categories principals detectades
+## Categories encara pendents
 
 | Categoria | Exemples | Severitat QA | Decisio |
 |---|---|---|---|
-| Autenticador custom no documentat | AccountStatusJWTAuthentication sense OpenApiAuthenticationExtension | Medium | Afegir extensio OpenAPI per JWT custom. |
-| APIViews sense serializer inferible | LoginView, MeView, ChatTokenView, EmetreVotView, endpoints de moderacio de chat | Medium | Afegir serializer_class o @extend_schema en endpoints principals. |
+| APIViews sense serializer inferible | ChatTokenView, endpoints de moderacio de chat, EmetreVotView, notificacions | Medium | Afegir serializer_class o @extend_schema en endpoints principals. |
 | Serializers no resolts en ViewSets | EdificiViewSet, HabitatgeViewSet, RankingViewSet, CatalegMilloraViewSet | Medium | Revisar anotacions @extend_schema i evitar strings no resolubles. |
-| SerializerMethodField sense tipus explicit | get_heat_risk, get_habitatges, get_num_vots_total, get_ha_votat | Low | Afegir type hints o @extend_schema_field. |
+| SerializerMethodField sense tipus explicit | camps calculats de buildings i community | Low | Afegir type hints o @extend_schema_field. |
 | Path parameters no tipats | id en alguns viewsets, ranking/{id}, millores/{id} | Low/Medium | Anotar parametres amb @extend_schema o tipar rutes. |
 | Col·lisions operationId | habitatges_retrieve, edificis_manual_retrieve | Low | Ajustar operation_id en endpoints col·lisionats. |
 | Col·lisions enum | camps estat en diferents components | Low | Afegir ENUM_NAME_OVERRIDES si es vol netejar el schema. |
 
-## Endpoints o arees mes afectades
-
-- Accounts: login, logout, me, reset password, assignacions, bloqueig/suspensio d'usuaris i dashboard admin.
-- Buildings: edificis, habitatges, millores, ranking, simulacions, votacions de simulacions i endpoints manuals.
-- Chat: token, canals, moderacio, bans, mutes, shadowban i canals d'edificis similars.
-- Community: emetre vot i serializers amb camps calculats.
-- Notifications: llegir notificacio, llegir totes i comptador de no llegides.
-- Verification, seasons, leagues, participations i audit: sobretot warning d'autenticador custom.
-
 ## Decisio de qualitat
 
-No es considera un blocker de release perque el backend ja ha passat regressio, coverage, k6 i SonarCloud. Tot i aixo, es considera deute tecnic de documentacio API.
+Aquesta millora no canvia funcionalitat de negoci ni autenticacio real. Nomes millora el contracte OpenAPI generat i la documentacio tecnica de l'API.
 
-Per una millora professional, la prioritat recomanada es:
+Es considera una millora segura perque Django check passa i els 102 tests d'accounts continuen passant correctament.
 
-1. Afegir OpenApiAuthenticationExtension per AccountStatusJWTAuthentication.
-2. Documentar amb @extend_schema els endpoints critics d'accounts, buildings, seasons, leagues, community i chat.
-3. Afegir type hints o @extend_schema_field als SerializerMethodField principals.
-4. Resoldre operationId duplicats i enums si es vol publicar una documentacio API neta.
+No es considera necessari resoldre tots els errors de schema en aquesta mateixa PR, perque els errors restants pertanyen principalment a altres apps i requeririen una segona passada especifica.
 
 ## Conclusio
 
-La generacio OpenAPI queda documentada i versionada com a evidencia de contracte API del Sprint 3. El schema generat es pot utilitzar com a base, pero no s'ha de considerar una especificacio final completament depurada fins resoldre els warnings principals.
+El schema OpenAPI queda mes complet i mes professional. Ara inclou metadata real del projecte, autenticacio Bearer JWT documentada correctament i endpoints principals d'accounts descrits amb @extend_schema. Els warnings totals s'han reduit de 197 a 48 i els errors totals de 160 a 92.
+
+## Ajust CI/SonarCloud
+
+Durant la PR, SonarCloud ha fallat inicialment el Quality Gate per Coverage on New Code 0.0%. La causa no era un error funcional, sino que el workflow de SonarCloud no generava coverage.xml actualitzat abans de l'analisi.
+
+S'ha ajustat el workflow per executar coverage dins del contenidor web abans del SonarCloud Scan i generar backend/coverage.xml en temps de CI.
+
+Aquest canvi permet que SonarCloud avaluï la cobertura real del codi nou modificat en aquesta PR.

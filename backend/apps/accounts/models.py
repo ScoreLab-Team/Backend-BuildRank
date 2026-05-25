@@ -67,6 +67,13 @@ class Profile(models.Model):
         help_text="Document acreditatiu de l'administrador de finca."
     )
 
+    avatar = models.ImageField(
+        upload_to="avatars/",
+        null=True,
+        blank=True,
+        help_text="Imatge/avatar del perfil de l'usuari."
+    )
+
     account_status = models.CharField(
         max_length=20,
         choices=AccountStatus.choices,

@@ -1,0 +1,6104 @@
+openapi: 3.0.3
+info:
+  title: BuildRank API
+  version: 1.0.0
+  description: BuildRank backend API for sustainable energy management in buildings.
+    Includes accounts, buildings, seasons, leagues, participations, community voting,
+    chat, verification, notifications and audit endpoints.
+paths:
+  /api/accounts/admin/dashboard-summary/:
+    get:
+      operationId: accounts_admin_dashboard_summary
+      description: Mètriques agregades per al panell d'administració del sistema.
+      summary: Consultar metriques agregades del panell d'administracio
+      tags:
+      - accounts
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminDashboardSummary'
+          description: ''
+  /api/accounts/edificis/{id_edifici}/assignar-admin/:
+    patch:
+      operationId: accounts_assignar_admin_edifici
+      summary: Assignar administrador de finca a un edifici
+      parameters:
+      - in: path
+        name: id_edifici
+        schema:
+          type: integer
+        required: true
+      tags:
+      - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAssignarAdmin'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAssignarAdmin'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAssignarAdmin'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EdificiResum'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /api/accounts/habitatges/{ref_cadastral}/assignar-resident/:
+    patch:
+      operationId: accounts_assignar_resident
+      description: |-
+        Mixin per a vistes DRF que necessiten validació ABAC.
+
+        Ús a la vista:
+            class MevaVista(ABACMixin, APIView):
+                def get(self, request, edifici_id):
+                    self.check_edifici_access(request, edifici_id)
+                    ...
+      summary: Assignar un resident a un habitatge
+      parameters:
+      - in: path
+        name: ref_cadastral
+        schema:
+          type: string
+        required: true
+      tags:
+      - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAssignarResident'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAssignarResident'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAssignarResident'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HabitatgeResum'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /api/accounts/login/:
+    post:
+      operationId: accounts_login
+      summary: Iniciar sessio
+      tags:
+      - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Login'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Login'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Login'
+        required: true
+      security:
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+          description: ''
+  /api/accounts/logout/:
+    post:
+      operationId: accounts_logout
+      summary: Tancar sessio
+      tags:
+      - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Logout'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Logout'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Logout'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /api/accounts/me/:
+    get:
+      operationId: accounts_me_retrieve
+      summary: Consultar el perfil autenticat
+      tags:
+      - accounts
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
+    put:
+      operationId: accounts_me_update
+      summary: Actualitzar completament el perfil autenticat
+      tags:
+      - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AccountUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AccountUpdate'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
+    patch:
+      operationId: accounts_me_partial_update
+      summary: Actualitzar parcialment el perfil autenticat
+      tags:
+      - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAccountUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAccountUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAccountUpdate'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
+  /api/accounts/me/edificis/:
+    get:
+      operationId: accounts_me_edificis_list
+      summary: Llistar edificis accessibles per l'usuari autenticat
+      tags:
+      - accounts
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EdificiResum'
+          description: ''
+  /api/accounts/me/role/:
+    patch:
+      operationId: accounts_me_role_update
+      summary: Canviar el rol propi entre owner i tenant
+      tags:
+      - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedRoleUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedRoleUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedRoleUpdate'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
+  /api/accounts/oauth/google/:
+    post:
+      operationId: accounts_google_oauth
+      summary: Autenticacio amb Google OAuth
+      tags:
+      - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleOAuth'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/GoogleOAuth'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/GoogleOAuth'
+        required: true
+      security:
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+          description: ''
+  /api/accounts/password-reset/:
+    post:
+      operationId: accounts_password_reset_request
+      summary: Sol·licitar restabliment de contrasenya
+      tags:
+      - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /api/accounts/password-reset-confirm/:
+    post:
+      operationId: accounts_password_reset_confirm
+      summary: Confirmar nova contrasenya
+      tags:
+      - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirm'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirm'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirm'
+        required: true
+      security:
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /api/accounts/refresh/:
+    post:
+      operationId: accounts_refresh_create
+      description: |-
+        Takes a refresh type JSON web token and returns an access type JSON web
+        token if the refresh token is valid.
+      tags:
+      - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRefresh'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRefresh'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenRefresh'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefresh'
+          description: ''
+  /api/accounts/register/:
+    post:
+      operationId: accounts_register_create
+      tags:
+      - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Register'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Register'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Register'
+        required: true
+      security:
+      - BearerAuth: []
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Register'
+          description: ''
+  /api/accounts/users/:
+    get:
+      operationId: accounts_users_list
+      description: Llista tots els usuaris de la plataforma.
+      tags:
+      - accounts
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserAdmin'
+          description: ''
+  /api/accounts/users/{id}/:
+    get:
+      operationId: accounts_users_retrieve
+      description: Detall d'un usuari concret.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - accounts
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdmin'
+          description: ''
+  /api/accounts/users/{id}/block/:
+    post:
+      operationId: accounts_user_block
+      description: |-
+        Bloqueja permanentment un compte.
+        Revoca immediatament totes les sessions actives de l'usuari.
+      summary: Bloquejar un usuari
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - accounts
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdmin'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /api/accounts/users/{id}/suspend/:
+    post:
+      operationId: accounts_user_suspend
+      description: |-
+        Suspèn temporalment un compte.
+        Camps opcionals: reason (text), suspended_until (datetime; null = indefinit).
+        Revoca immediatament totes les sessions actives.
+      summary: Suspendre un usuari
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Suspend'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Suspend'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Suspend'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdmin'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /api/accounts/users/{id}/unblock/:
+    post:
+      operationId: accounts_user_unblock
+      description: Desbloqueja un compte i el torna a l'estat actiu.
+      summary: Desbloquejar un usuari
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - accounts
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdmin'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /api/accounts/users/{id}/unsuspend/:
+    post:
+      operationId: accounts_user_unsuspend
+      description: Aixeca la suspensió d'un compte i el torna a l'estat actiu.
+      summary: Aixecar la suspensio d'un usuari
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - accounts
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdmin'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /api/audit/logs/:
+    get:
+      operationId: audit_logs_list
+      description: |-
+        GET /api/audit/logs/
+
+        Paràmetres de filtratge (query params):
+          - user_id       : filtra per usuari
+          - method        : GET, POST, PUT, PATCH, DELETE
+          - resource_type : buildings, accounts, verification...
+          - status_code   : codi de resposta HTTP
+          - from_date     : ISO 8601, ex. 2026-05-01
+          - to_date       : ISO 8601, ex. 2026-05-31
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      tags:
+      - audit
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAuditLogList'
+          description: ''
+  /api/buildings/admin-finca/edificis/alta/:
+    post:
+      operationId: buildings_admin_finca_edificis_alta_create
+      description: |-
+        Un administrador de finca (amb verificació documental aprovada) pot reclamar la gestió d'un edifici.
+
+        - Si l'edifici ja existeix i no té admin: s'inicia el procés de verificació.
+        - Si l'edifici no existeix: es crea i s'inicia la verificació.
+        - Si ja té un altre admin assignat: retorna `409 Conflict`.
+      summary: Alta i reclamació d'edifici per part d'un administrador de finca
+      tags:
+      - Administrador de finca
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminFincaAltaResponse'
+          description: Edifici existent localitzat. Cal verificació documental.
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminFincaAltaResponse'
+          description: Edifici nou creat. Cal verificació documental.
+        '400':
+          description: Dades invàlides.
+        '403':
+          description: Compte d'admin pendent de validació o rebutjat.
+        '409':
+          description: L'edifici ja té un administrador assignat.
+  /api/buildings/carrers/autocomplete/:
+    get:
+      operationId: buildings_carrers_autocomplete_list
+      description: Cerca tolerant per nom oficial i curt, ignorant stopwords comunes
+        (`carrer`, `avinguda`, `de`, etc.). Retorna màxim 10 resultats.
+      summary: Suggeriments de carrers per a formularis
+      parameters:
+      - in: query
+        name: q
+        schema:
+          type: string
+        description: Text a cercar (mínim 2 caràcters).
+        required: true
+      tags:
+      - Utilitats
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AutocompleteCarrerItem'
+          description: ''
+  /api/buildings/dades_energetiques/:
+    get:
+      operationId: buildings_dades_energetiques_list
+      tags:
+      - buildings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DadesEnergetiques'
+          description: ''
+    post:
+      operationId: buildings_dades_energetiques_create
+      tags:
+      - buildings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DadesEnergetiques'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/DadesEnergetiques'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/DadesEnergetiques'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DadesEnergetiques'
+          description: ''
+  /api/buildings/dades_energetiques/{id}/:
+    get:
+      operationId: buildings_dades_energetiques_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this dades energetiques.
+        required: true
+      tags:
+      - buildings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DadesEnergetiques'
+          description: ''
+    put:
+      operationId: buildings_dades_energetiques_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this dades energetiques.
+        required: true
+      tags:
+      - buildings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DadesEnergetiques'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/DadesEnergetiques'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/DadesEnergetiques'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DadesEnergetiques'
+          description: ''
+    patch:
+      operationId: buildings_dades_energetiques_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this dades energetiques.
+        required: true
+      tags:
+      - buildings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedDadesEnergetiques'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedDadesEnergetiques'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedDadesEnergetiques'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DadesEnergetiques'
+          description: ''
+    delete:
+      operationId: buildings_dades_energetiques_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this dades energetiques.
+        required: true
+      tags:
+      - buildings
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/buildings/edificis/:
+    get:
+      operationId: buildings_edificis_list
+      description: |-
+        Retorna els edificis als quals l'usuari té accés segons el seu rol.
+
+        - **Superuser:** tots els edificis (actius per defecte; `?inclou_desactivats=true` per veure'ls tots).
+        - **Admin finca:** edificis que administra (verificació documental aprovada).
+        - **Owner/Tenant:** edificis on té habitatge vinculat.
+      summary: Llista els edificis accessibles per l'usuari autenticat
+      parameters:
+      - in: query
+        name: inclou_desactivats
+        schema:
+          type: boolean
+        description: Només superuser. Inclou edificis desactivats.
+      tags:
+      - Edificis
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: {}
+                  description: Unspecified response body
+          description: ''
+        '401':
+          description: No autenticat.
+    post:
+      operationId: buildings_edificis_create
+      description: Només admins de finca o superusers. La vinculació efectiva es produeix
+        un cop aprovada la verificació documental.
+      summary: Crea un nou edifici
+      tags:
+      - Edificis
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '400':
+          description: Dades invàlides.
+  /api/buildings/edificis/{idEdifici}/:
+    get:
+      operationId: buildings_edificis_retrieve
+      summary: Detall d'un edifici
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Edificis
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '403':
+          description: Sense permisos.
+        '404':
+          description: No trobat.
+    put:
+      operationId: buildings_edificis_update
+      summary: Actualitza un edifici (PUT)
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Edificis
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '400':
+          description: Dades invàlides.
+        '403':
+          description: Sense permisos.
+    patch:
+      operationId: buildings_edificis_partial_update
+      summary: Actualitza parcialment un edifici (PATCH)
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Edificis
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedEdificiDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedEdificiDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedEdificiDetail'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '400':
+          description: Dades invàlides.
+        '403':
+          description: Sense permisos.
+    delete:
+      operationId: buildings_edificis_destroy
+      summary: Elimina un edifici
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Edificis
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: Eliminat correctament.
+        '403':
+          description: Sense permisos.
+  /api/buildings/edificis/{idEdifici}/badges/:
+    get:
+      operationId: buildings_edificis_badges_retrieve
+      description: |-
+        Retorna les insígnies actives de l'edifici.
+
+        Amb `?temporada=<id>` retorna les permanents + les d'aquella temporada.
+      summary: Insígnies assignades a un edifici
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      - in: query
+        name: temporada
+        schema:
+          type: integer
+        description: ID de temporada per filtrar.
+      tags:
+      - Badges
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BadgesResponse'
+          description: ''
+  /api/buildings/edificis/{idEdifici}/badges/recalcular/:
+    post:
+      operationId: buildings_edificis_badges_recalcular_create
+      description: Accessible per admin de sistema o administrador de finca de l'edifici.
+      summary: Recalcula les insígnies d'un edifici
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Badges
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecalcularBadgesResponse'
+          description: ''
+        '403':
+          description: Sense permisos.
+  /api/buildings/edificis/{idEdifici}/dades_energetiques/:
+    get:
+      operationId: buildings_edificis_dades_energetiques_retrieve
+      description: Retorna les dades energètiques filtrades per rol. Admin veu totes;
+        Owner/Tenant les seves.
+      summary: Dades energètiques dels habitatges d'un edifici
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Edificis
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Llista de dades energètiques per habitatge.
+        '404':
+          description: No hi ha dades energètiques disponibles.
+  /api/buildings/edificis/{idEdifici}/desactivar/:
+    post:
+      operationId: buildings_edificis_desactivar_create
+      description: |-
+        Sense `?confirmat=true` → **dry-run**: retorna advertències sense executar res.
+
+        Amb `?confirmat=true` → executa la desactivació i registra l'auditoria.
+
+        Requereix rol **admin sistema**.
+      summary: Desactiva un edifici
+      parameters:
+      - in: query
+        name: confirmat
+        schema:
+          type: boolean
+        description: Si `true`, executa la desactivació. Si no, dry-run.
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Edificis
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DesactivarBody'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/DesactivarBody'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/DesactivarBody'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesactivarDryRunResponse'
+          description: Dry-run (sense confirmat) o desactivació executada.
+        '400':
+          description: L'edifici ja estava desactivat.
+        '403':
+          description: Sense permisos (cal admin sistema).
+  /api/buildings/edificis/{idEdifici}/habitatges/:
+    get:
+      operationId: buildings_edificis_habitatges_retrieve
+      description: Admin finca veu tots. Owner/Tenant veu només els seus.
+      summary: Llista els habitatges d'un edifici
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Edificis
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+  /api/buildings/edificis/{idEdifici}/habitatges/{referenciaCadastral}/:
+    get:
+      operationId: buildings_edificis_habitatges_retrieve_2
+      summary: Detall d'un habitatge concret d'un edifici
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      - in: path
+        name: referenciaCadastral
+        schema:
+          type: string
+        description: Referència cadastral de l'habitatge.
+        required: true
+      tags:
+      - Edificis
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '403':
+          description: Sense permisos.
+        '404':
+          description: Habitatge no trobat.
+  /api/buildings/edificis/{idEdifici}/me/habitatge/{referenciaCadastral}/:
+    patch:
+      operationId: buildings_edificis_me_habitatge_partial_update
+      summary: Actualitza les dades del propi habitatge (PATCH)
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      - in: path
+        name: referenciaCadastral
+        schema:
+          type: string
+        required: true
+      tags:
+      - Edificis
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedEdificiDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedEdificiDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedEdificiDetail'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '403':
+          description: Sense permisos.
+        '404':
+          description: Habitatge no trobat.
+  /api/buildings/edificis/{idEdifici}/millores-implementades/:
+    get:
+      operationId: buildings_edificis_millores_implementades_retrieve
+      summary: Llista les millores implementades d'un edifici
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Simulacions
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+  /api/buildings/edificis/{idEdifici}/reactivar/:
+    post:
+      operationId: buildings_edificis_reactivar_create
+      description: Requereix rol **admin sistema**.
+      summary: Reactiva un edifici desactivat
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Edificis
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReactivarResponse'
+          description: Edifici reactivat.
+        '400':
+          description: L'edifici ja estava actiu.
+        '403':
+          description: Sense permisos.
+  /api/buildings/edificis/{idEdifici}/simulacions/:
+    get:
+      operationId: buildings_edificis_simulacions_retrieve
+      description: |-
+        **GET:** Retorna totes les simulacions guardades de l'edifici.
+
+        **POST:** Calcula i guarda una simulació. Retorna el resultat complet amb tots els ítems.
+      summary: Llista o crea simulacions de millores
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Simulacions
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '400':
+          description: Dades invàlides.
+    post:
+      operationId: buildings_edificis_simulacions_create
+      description: |-
+        **GET:** Retorna totes les simulacions guardades de l'edifici.
+
+        **POST:** Calcula i guarda una simulació. Retorna el resultat complet amb tots els ítems.
+      summary: Llista o crea simulacions de millores
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Simulacions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '400':
+          description: Dades invàlides.
+  /api/buildings/edificis/{idEdifici}/simulacions/{simulacio_id}/acreditar-implementacio/:
+    post:
+      operationId: buildings_edificis_simulacions_acreditar_implementacio_create
+      description: |-
+        L'**administrador de finca** puja les evidències de l'execució real de les millores.
+
+        La simulació ha d'estar en estat `APROVADA`. La validació final la fa l'admin de sistema a `/millores-implementades/{id}/validar/`.
+      summary: Acredita la implementació d'una simulació aprovada
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      - in: path
+        name: simulacio_id
+        schema:
+          type: string
+          pattern: ^\d+$
+        required: true
+      tags:
+      - Simulacions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '400':
+          description: Simulació no aprovada o sense ítems.
+        '403':
+          description: Sense permisos.
+  /api/buildings/edificis/{idEdifici}/simulacions/{simulacio_id}/sotmetre-votacio/:
+    post:
+      operationId: buildings_edificis_simulacions_sotmetre_votacio_create
+      description: |-
+        Crea una `VotacioSimulacioMillora` associada a la simulació i canvia el seu estat a `EN_VOTACIO`.
+
+        Només ho pot fer l'**administrador de finca** de l'edifici.
+
+        La simulació ha d'estar en estat `ESBORRANY` o `REBUTJADA`.
+      summary: Sotmet una simulació a votació comunitària
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      - in: path
+        name: simulacio_id
+        schema:
+          type: string
+          pattern: ^\d+$
+        required: true
+      tags:
+      - Votacions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '400':
+          description: La simulació ja té votació o estat incorrecte.
+        '403':
+          description: Sense permisos.
+        '404':
+          description: Simulació no trobada.
+  /api/buildings/edificis/{idEdifici}/simulacions/preview/:
+    post:
+      operationId: buildings_edificis_simulacions_preview_create
+      description: Calcula l'impacte estimat de les millores seleccionades sense persistir
+        res a la BD.
+      summary: Preview d'una simulació de millores (sense guardar)
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Simulacions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Resultat de la simulació (abans/després + deltes).
+        '400':
+          description: Dades de millores invàlides.
+  /api/buildings/edificis/{idEdifici}/votacions-simulacions/:
+    get:
+      operationId: buildings_edificis_votacions_simulacions_retrieve
+      summary: Llista les votacions de simulacions d'un edifici
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      tags:
+      - Votacions
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+  /api/buildings/edificis/{idEdifici}/votacions-simulacions/{votacio_id}/votar/:
+    post:
+      operationId: buildings_edificis_votacions_simulacions_votar_create
+      description: |-
+        Registra o actualitza el vot de l'usuari (`A_FAVOR` / `EN_CONTRA` / `ABSTENCIO`).
+
+        La votació ha d'estar en estat `ACTIVA` i no haver superat `dataFi`.
+      summary: Emet un vot en una votació de simulació
+      parameters:
+      - in: path
+        name: idEdifici
+        schema:
+          type: integer
+        description: A unique integer value identifying this edifici.
+        required: true
+      - in: path
+        name: votacio_id
+        schema:
+          type: string
+          pattern: ^\d+$
+        required: true
+      tags:
+      - Votacions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EdificiDetail'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '403':
+          description: Sense permisos per votar.
+        '409':
+          description: Votació ja tancada o finalitzada.
+  /api/buildings/edificis/cerca/:
+    get:
+      operationId: buildings_edificis_cerca_retrieve
+      description: Endpoint per buscar edificis pel nom del carrer.
+      summary: Cerca edificis per nom de carrer
+      parameters:
+      - in: query
+        name: q
+        schema:
+          type: string
+        description: Text a cercar (mínim 3 caràcters).
+        required: true
+      tags:
+      - Edificis
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+  /api/buildings/edificis/manual/:
+    get:
+      operationId: buildings_edificis_manual_retrieve
+      summary: '[Legacy] Llista tots els edificis'
+      tags:
+      - Edificis (legacy)
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+  /api/buildings/edificis/manual/{id}/:
+    get:
+      operationId: buildings_edificis_manual_retrieve_2
+      description: |-
+        Mixin per a vistes DRF que necessiten validació ABAC.
+
+        Ús a la vista:
+            class MevaVista(ABACMixin, APIView):
+                def get(self, request, edifici_id):
+                    self.check_edifici_access(request, edifici_id)
+                    ...
+      summary: '[Legacy] Detall d''un edifici'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - Edificis (legacy)
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '403':
+          description: Sense permisos.
+        '404':
+          description: No trobat.
+  /api/buildings/edificis/mapa/:
+    get:
+      operationId: buildings_edificis_mapa_retrieve
+      description: |-
+        Retorna edificis actius amb coordenades vàlides en format GeoJSON `FeatureCollection`.
+
+        **Query params:**
+        - `scope`: `public` (tots els actius, defecte) | `mine` (els de l'usuari).
+        - `bbox`: `minLng,minLat,maxLng,maxLat` — filtra per bounding box.
+        - `tipologia`: ex. `Residencial`.
+        - `score_min`: puntuació mínima (float).
+        - `q`: cerca per carrer, barri o codi postal.
+        - `limit`: màxim de resultats (1–1000, defecte 500).
+      summary: Edificis en format GeoJSON per al mapa
+      parameters:
+      - in: query
+        name: bbox
+        schema:
+          type: string
+        description: 'Format: minLng,minLat,maxLng,maxLat'
+      - in: query
+        name: limit
+        schema:
+          type: integer
+      - in: query
+        name: q
+        schema:
+          type: string
+      - in: query
+        name: scope
+        schema:
+          type: string
+      - in: query
+        name: score_min
+        schema:
+          type: number
+          format: float
+      - in: query
+        name: tipologia
+        schema:
+          type: string
+      tags:
+      - Edificis
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MapaResponse'
+          description: GeoJSON FeatureCollection.
+        '400':
+          description: Paràmetre bbox o score_min invàlid.
+  /api/buildings/habitatges/:
+    get:
+      operationId: buildings_habitatges_list
+      summary: Llista els habitatges de l'usuari
+      tags:
+      - Habitatges
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: {}
+                  description: Unspecified response body
+          description: ''
+    post:
+      operationId: buildings_habitatges_create
+      description: |-
+        Propietaris i llogaters poden sol·licitar vincular-se a un habitatge per referència cadastral.
+
+        Si l'habitatge ja existeix, actualitza la sol·licitud. Si no, el crea.
+      summary: Sol·licita accés a un habitatge
+      tags:
+      - Habitatges
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HabitatgeDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/HabitatgeDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/HabitatgeDetail'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '400':
+          description: Referència cadastral absent o rol ja ocupat.
+        '409':
+          description: Sol·licitud pendent d'un altre usuari.
+  /api/buildings/habitatges/{referenciaCadastral}/:
+    get:
+      operationId: buildings_habitatges_retrieve
+      summary: Detall d'un habitatge
+      parameters:
+      - in: path
+        name: referenciaCadastral
+        schema:
+          type: string
+        description: A unique value identifying this habitatge.
+        required: true
+      tags:
+      - Habitatges
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '403':
+          description: Sense permisos.
+    put:
+      operationId: buildings_habitatges_update
+      summary: Actualitza un habitatge (PUT)
+      parameters:
+      - in: path
+        name: referenciaCadastral
+        schema:
+          type: string
+        description: A unique value identifying this habitatge.
+        required: true
+      tags:
+      - Habitatges
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HabitatgeDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/HabitatgeDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/HabitatgeDetail'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HabitatgeDetail'
+          description: ''
+    patch:
+      operationId: buildings_habitatges_partial_update
+      summary: Actualitza parcialment un habitatge (PATCH)
+      parameters:
+      - in: path
+        name: referenciaCadastral
+        schema:
+          type: string
+        description: A unique value identifying this habitatge.
+        required: true
+      tags:
+      - Habitatges
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedHabitatgeDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedHabitatgeDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedHabitatgeDetail'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HabitatgeDetail'
+          description: ''
+    delete:
+      operationId: buildings_habitatges_destroy
+      summary: Elimina un habitatge
+      parameters:
+      - in: path
+        name: referenciaCadastral
+        schema:
+          type: string
+        description: A unique value identifying this habitatge.
+        required: true
+      tags:
+      - Habitatges
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/buildings/habitatges/{referenciaCadastral}/solicitar-acces/:
+    post:
+      operationId: buildings_habitatges_solicitar_acces_create
+      description: Envia una sol·licitud de vinculació com a propietari o llogater.
+        Pendent d'aprovació per l'admin de finca.
+      summary: Sol·licita vincular-se a un habitatge existent
+      parameters:
+      - in: path
+        name: referenciaCadastral
+        schema:
+          type: string
+        description: A unique value identifying this habitatge.
+        required: true
+      tags:
+      - Habitatges
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HabitatgeDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/HabitatgeDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/HabitatgeDetail'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SolicitudAccesResponse'
+          description: ''
+        '400':
+          description: Rol ja ocupat.
+        '403':
+          description: Sense perfil o rol no permès.
+        '409':
+          description: Ja hi ha una sol·licitud pendent.
+  /api/buildings/habitatges/{referenciaCadastral}/validar-acces/:
+    post:
+      operationId: buildings_habitatges_validar_acces_create
+      description: Acció exclusiva de l'**administrador de finca** de l'edifici.
+      summary: Aprova o rebutja una sol·licitud d'accés a un habitatge
+      parameters:
+      - in: path
+        name: referenciaCadastral
+        schema:
+          type: string
+        description: A unique value identifying this habitatge.
+        required: true
+      tags:
+      - Habitatges
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HabitatgeDetail'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/HabitatgeDetail'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/HabitatgeDetail'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Sol·licitud aprovada o rebutjada.
+        '400':
+          description: Sense sol·licitud pendent o estat invàlid.
+        '403':
+          description: Sense permisos.
+  /api/buildings/habitatges/pendents/:
+    get:
+      operationId: buildings_habitatges_pendents_retrieve
+      description: Retorna els habitatges en estat `EN_REVISIO` dels edificis que
+        administra l'usuari.
+      summary: Habitatges amb sol·licituds d'accés pendents
+      tags:
+      - Habitatges
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+        '403':
+          description: Sense permisos (cal rol admin).
+  /api/buildings/localitzacions/:
+    get:
+      operationId: buildings_localitzacions_list
+      tags:
+      - buildings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Localitzacio'
+          description: ''
+    post:
+      operationId: buildings_localitzacions_create
+      tags:
+      - buildings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Localitzacio'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Localitzacio'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Localitzacio'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Localitzacio'
+          description: ''
+  /api/buildings/localitzacions/{id}/:
+    get:
+      operationId: buildings_localitzacions_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this localitzacio.
+        required: true
+      tags:
+      - buildings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Localitzacio'
+          description: ''
+    put:
+      operationId: buildings_localitzacions_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this localitzacio.
+        required: true
+      tags:
+      - buildings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Localitzacio'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Localitzacio'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Localitzacio'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Localitzacio'
+          description: ''
+    patch:
+      operationId: buildings_localitzacions_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this localitzacio.
+        required: true
+      tags:
+      - buildings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedLocalitzacio'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedLocalitzacio'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedLocalitzacio'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Localitzacio'
+          description: ''
+    delete:
+      operationId: buildings_localitzacions_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this localitzacio.
+        required: true
+      tags:
+      - buildings
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/buildings/millores/:
+    get:
+      operationId: buildings_millores_list
+      description: |-
+        Endpoint de catàleg de millores per al frontend.
+        Permet listar i consultar les millores actives disponibles per simular.
+      summary: Llista les millores actives del catàleg
+      parameters:
+      - in: query
+        name: categoria
+        schema:
+          type: string
+        description: Filtra per categoria de millora.
+      tags:
+      - Catàleg de millores
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: {}
+                  description: Unspecified response body
+          description: ''
+  /api/buildings/millores-implementades/:
+    get:
+      operationId: buildings_millores_implementades_list
+      description: Llista millores implementades per al panell d'administració.
+      tags:
+      - buildings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MilloraImplementada'
+          description: ''
+  /api/buildings/millores-implementades/{id}/validar/:
+    post:
+      operationId: buildings_millores_implementades_validar_create
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this millora implementada.
+        required: true
+      tags:
+      - buildings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MilloraImplementada'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/MilloraImplementada'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/MilloraImplementada'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MilloraImplementada'
+          description: ''
+  /api/buildings/millores-implementades/pendents/:
+    get:
+      operationId: buildings_millores_implementades_pendents_retrieve
+      description: Llista millores pendents de revisió/validació final.
+      tags:
+      - buildings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MilloraImplementada'
+          description: ''
+  /api/buildings/millores/{id}/:
+    get:
+      operationId: buildings_millores_retrieve
+      description: |-
+        Endpoint de catàleg de millores per al frontend.
+        Permet listar i consultar les millores actives disponibles per simular.
+      summary: Detall d'una millora del catàleg
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - Catàleg de millores
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+  /api/buildings/ranking/:
+    get:
+      operationId: buildings_ranking_list
+      summary: Ranking global d'edificis per puntuació
+      parameters:
+      - in: query
+        name: liga
+        schema:
+          type: string
+        description: Filtra per liga (ex. `oro`, `plata`).
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      tags:
+      - Ranking
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - count
+                - results
+                properties:
+                  count:
+                    type: integer
+                    example: 123
+                  next:
+                    type: string
+                    nullable: true
+                    format: uri
+                    example: http://api.example.org/accounts/?page=4
+                  previous:
+                    type: string
+                    nullable: true
+                    format: uri
+                    example: http://api.example.org/accounts/?page=2
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: {}
+                      description: Unspecified response body
+          description: ''
+  /api/buildings/ranking/{id}/:
+    get:
+      operationId: buildings_ranking_retrieve
+      summary: Detall de posició d'un edifici al ranking
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - Ranking
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+                description: Unspecified response body
+          description: ''
+  /api/buildings/ranking/{id}/posicion/:
+    get:
+      operationId: buildings_ranking_posicion_retrieve
+      summary: Posició d'un edifici dins la seva lliga
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: top
+        schema:
+          type: integer
+        description: Objectiu de top N (defecte 5).
+      tags:
+      - Ranking
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PosicioRankingResponse'
+          description: ''
+  /api/chat/channels/:
+    get:
+      operationId: chat_channels_retrieve
+      description: |-
+        GET: retorna els canals accessibles per l'usuari basant-se únicament
+        en les dades de Django. Cap crida a l'API de GetStream.
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/channels/provision/:
+    post:
+      operationId: chat_channels_provision_create
+      description: |-
+        POST: crea els canals a GetStream si no existeixen i afegeix l'usuari
+        com a membre. Retorna la mateixa llista que GET /channels/ però amb
+        la garantia que els canals ja existeixen a GetStream.
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/moderation/messages/{message_id}/:
+    delete:
+      operationId: chat_moderation_messages_destroy
+      description: DELETE /chat/moderation/messages/{message_id}/  — author or ADMIN/superuser.
+      parameters:
+      - in: path
+        name: message_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/chat/moderation/messages/{message_id}/dismiss-flag/:
+    post:
+      operationId: chat_moderation_messages_dismiss_flag_create
+      description: POST /chat/moderation/messages/{message_id}/dismiss-flag/  — ADMIN/superuser.
+      parameters:
+      - in: path
+        name: message_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/moderation/messages/{message_id}/flag/:
+    post:
+      operationId: chat_moderation_messages_flag_create
+      description: POST /chat/moderation/messages/{message_id}/flag/  — any member.
+      parameters:
+      - in: path
+        name: message_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/moderation/messages/{message_id}/hide/:
+    post:
+      operationId: chat_moderation_messages_hide_create
+      description: POST /chat/moderation/messages/{message_id}/hide/  — ADMIN/superuser.
+      parameters:
+      - in: path
+        name: message_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/moderation/messages/{message_id}/restore/:
+    post:
+      operationId: chat_moderation_messages_restore_create
+      description: POST /chat/moderation/messages/{message_id}/restore/  — ADMIN/superuser.
+      parameters:
+      - in: path
+        name: message_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/moderation/users/{user_id}/ban/:
+    post:
+      operationId: chat_moderation_users_ban_create
+      description: POST /chat/moderation/users/{user_id}/ban/  — ADMIN/superuser.
+      parameters:
+      - in: path
+        name: user_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/moderation/users/{user_id}/global-ban/:
+    post:
+      operationId: chat_moderation_users_global_ban_create
+      description: POST /chat/moderation/users/{user_id}/global-ban/  — superuser
+        only.
+      parameters:
+      - in: path
+        name: user_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/moderation/users/{user_id}/global-unban/:
+    post:
+      operationId: chat_moderation_users_global_unban_create
+      description: POST /chat/moderation/users/{user_id}/global-unban/  — superuser
+        only.
+      parameters:
+      - in: path
+        name: user_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/moderation/users/{user_id}/mute/:
+    post:
+      operationId: chat_moderation_users_mute_create
+      description: POST /chat/moderation/users/{user_id}/mute/  — ADMIN/superuser.
+      parameters:
+      - in: path
+        name: user_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/moderation/users/{user_id}/shadow-ban/:
+    post:
+      operationId: chat_moderation_users_shadow_ban_create
+      description: POST /chat/moderation/users/{user_id}/shadow-ban/  — superuser
+        only.
+      parameters:
+      - in: path
+        name: user_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/moderation/users/{user_id}/shadow-unban/:
+    post:
+      operationId: chat_moderation_users_shadow_unban_create
+      description: POST /chat/moderation/users/{user_id}/shadow-unban/  — superuser
+        only.
+      parameters:
+      - in: path
+        name: user_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/moderation/users/{user_id}/unban/:
+    post:
+      operationId: chat_moderation_users_unban_create
+      description: POST /chat/moderation/users/{user_id}/unban/  — ADMIN/superuser.
+      parameters:
+      - in: path
+        name: user_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/moderation/users/{user_id}/unmute/:
+    post:
+      operationId: chat_moderation_users_unmute_create
+      description: POST /chat/moderation/users/{user_id}/unmute/  — ADMIN/superuser.
+      parameters:
+      - in: path
+        name: user_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/moderation/users/{user_id}/warn/:
+    post:
+      operationId: chat_moderation_users_warn_create
+      description: POST /chat/moderation/users/{user_id}/warn/  — ADMIN/superuser.
+      parameters:
+      - in: path
+        name: user_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/token/:
+    post:
+      operationId: chat_token_create
+      description: |-
+        Retorna un token de GetStream per a l'usuari autenticat.
+
+        Sincronitza les dades de l'usuari a GetStream abans d'emetre el token.
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/twin-buildings/{edifici_id}/admins/:
+    get:
+      operationId: chat_twin_buildings_admins_retrieve
+      description: |-
+        GET: retorna administradors de finca d'edificis del mateix GrupComparable.
+
+        Només pot consultar-ho l'administrador de finca de l'edifici origen.
+      parameters:
+      - in: path
+        name: edifici_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/chat/twin-buildings/{edifici_id}/channels/:
+    post:
+      operationId: chat_twin_buildings_channels_create
+      description: |-
+        POST: crea o obté un canal directe entre dos administradors de finca
+        d'edificis del mateix GrupComparable.
+      parameters:
+      - in: path
+        name: edifici_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - chat
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/community/votacions/:
+    get:
+      operationId: community_votacions_list
+      tags:
+      - community
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VotacioList'
+          description: ''
+    post:
+      operationId: community_votacions_create
+      tags:
+      - community
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VotacioCreate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VotacioCreate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VotacioCreate'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VotacioCreate'
+          description: ''
+  /api/community/votacions/{id}/:
+    get:
+      operationId: community_votacions_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - community
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VotacioDetail'
+          description: ''
+    put:
+      operationId: community_votacions_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - community
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VotacioUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VotacioUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VotacioUpdate'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VotacioUpdate'
+          description: ''
+    patch:
+      operationId: community_votacions_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - community
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedVotacioUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedVotacioUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedVotacioUpdate'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VotacioUpdate'
+          description: ''
+    delete:
+      operationId: community_votacions_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - community
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/community/votacions/{id}/resultats/:
+    get:
+      operationId: community_votacions_resultats_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - community
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultatsVotacio'
+          description: ''
+  /api/community/votacions/{id}/votar/:
+    post:
+      operationId: community_votacions_votar_create
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - community
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/leagues/:
+    get:
+      operationId: leagues_list
+      tags:
+      - leagues
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Lliga'
+          description: ''
+    post:
+      operationId: leagues_create
+      tags:
+      - leagues
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Lliga'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Lliga'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Lliga'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lliga'
+          description: ''
+  /api/leagues/{id}/:
+    get:
+      operationId: leagues_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this lliga.
+        required: true
+      tags:
+      - leagues
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lliga'
+          description: ''
+    put:
+      operationId: leagues_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this lliga.
+        required: true
+      tags:
+      - leagues
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Lliga'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Lliga'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Lliga'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lliga'
+          description: ''
+    patch:
+      operationId: leagues_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this lliga.
+        required: true
+      tags:
+      - leagues
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedLliga'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedLliga'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedLliga'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lliga'
+          description: ''
+    delete:
+      operationId: leagues_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this lliga.
+        required: true
+      tags:
+      - leagues
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/leagues/{id}/generar_snapshot/:
+    post:
+      operationId: leagues_generar_snapshot_create
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this lliga.
+        required: true
+      tags:
+      - leagues
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Lliga'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Lliga'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Lliga'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lliga'
+          description: ''
+  /api/leagues/{id}/posicio_edifici/:
+    get:
+      operationId: leagues_posicio_edifici_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this lliga.
+        required: true
+      tags:
+      - leagues
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lliga'
+          description: ''
+  /api/leagues/{id}/ranking/:
+    get:
+      operationId: leagues_ranking_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this lliga.
+        required: true
+      tags:
+      - leagues
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lliga'
+          description: ''
+  /api/leagues/evolucio/:
+    get:
+      operationId: leagues_evolucio_retrieve
+      tags:
+      - leagues
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lliga'
+          description: ''
+  /api/notifications/:
+    get:
+      operationId: notifications_list
+      tags:
+      - notifications
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Notificacio'
+          description: ''
+  /api/notifications/{id}/llegir/:
+    post:
+      operationId: notifications_llegir_create
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - notifications
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/notifications/llegir-totes/:
+    post:
+      operationId: notifications_llegir_totes_create
+      tags:
+      - notifications
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/notifications/no-llegides/:
+    get:
+      operationId: notifications_no_llegides_retrieve
+      tags:
+      - notifications
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/participations/:
+    get:
+      operationId: participations_list
+      tags:
+      - participations
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Participacio'
+          description: ''
+    post:
+      operationId: participations_create
+      tags:
+      - participations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Participacio'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Participacio'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Participacio'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Participacio'
+          description: ''
+  /api/participations/{id}/:
+    get:
+      operationId: participations_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this participacio.
+        required: true
+      tags:
+      - participations
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Participacio'
+          description: ''
+    put:
+      operationId: participations_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this participacio.
+        required: true
+      tags:
+      - participations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Participacio'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Participacio'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Participacio'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Participacio'
+          description: ''
+    patch:
+      operationId: participations_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this participacio.
+        required: true
+      tags:
+      - participations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedParticipacio'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedParticipacio'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedParticipacio'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Participacio'
+          description: ''
+    delete:
+      operationId: participations_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this participacio.
+        required: true
+      tags:
+      - participations
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/participations/{id}/update_score/:
+    post:
+      operationId: participations_update_score_create
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this participacio.
+        required: true
+      tags:
+      - participations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Participacio'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Participacio'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Participacio'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Participacio'
+          description: ''
+  /api/participations/current/:
+    get:
+      operationId: participations_current_retrieve
+      tags:
+      - participations
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Participacio'
+          description: ''
+  /api/participations/evolucio_puntuacio/:
+    get:
+      operationId: participations_evolucio_puntuacio_retrieve
+      tags:
+      - participations
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Participacio'
+          description: ''
+  /api/participations/progres_anual/:
+    get:
+      operationId: participations_progres_anual_retrieve
+      tags:
+      - participations
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Participacio'
+          description: ''
+  /api/seasons/:
+    get:
+      operationId: seasons_list
+      description: |-
+        Retorna la temporada actual i les temporades anteriors.
+
+        La llista està pensada pel frontend: no inclou temporades pendents,
+        perquè encara no formen part del cicle visible de ranking/progrés.
+      tags:
+      - seasons
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Temporada'
+          description: ''
+    post:
+      operationId: seasons_create
+      tags:
+      - seasons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Temporada'
+          description: ''
+  /api/seasons/{id_temporada}/:
+    get:
+      operationId: seasons_retrieve
+      parameters:
+      - in: path
+        name: id_temporada
+        schema:
+          type: integer
+        description: A unique integer value identifying this temporada.
+        required: true
+      tags:
+      - seasons
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Temporada'
+          description: ''
+    put:
+      operationId: seasons_update
+      parameters:
+      - in: path
+        name: id_temporada
+        schema:
+          type: integer
+        description: A unique integer value identifying this temporada.
+        required: true
+      tags:
+      - seasons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Temporada'
+          description: ''
+    patch:
+      operationId: seasons_partial_update
+      parameters:
+      - in: path
+        name: id_temporada
+        schema:
+          type: integer
+        description: A unique integer value identifying this temporada.
+        required: true
+      tags:
+      - seasons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedTemporada'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedTemporada'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedTemporada'
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Temporada'
+          description: ''
+    delete:
+      operationId: seasons_destroy
+      parameters:
+      - in: path
+        name: id_temporada
+        schema:
+          type: integer
+        description: A unique integer value identifying this temporada.
+        required: true
+      tags:
+      - seasons
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/seasons/{id_temporada}/iniciar/:
+    post:
+      operationId: seasons_iniciar_create
+      parameters:
+      - in: path
+        name: id_temporada
+        schema:
+          type: integer
+        description: A unique integer value identifying this temporada.
+        required: true
+      tags:
+      - seasons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Temporada'
+          description: ''
+  /api/seasons/{id_temporada}/posicio_edifici/:
+    get:
+      operationId: seasons_posicio_edifici_retrieve
+      parameters:
+      - in: path
+        name: id_temporada
+        schema:
+          type: integer
+        description: A unique integer value identifying this temporada.
+        required: true
+      tags:
+      - seasons
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Temporada'
+          description: ''
+  /api/seasons/{id_temporada}/ranking/:
+    get:
+      operationId: seasons_ranking_retrieve
+      parameters:
+      - in: path
+        name: id_temporada
+        schema:
+          type: integer
+        description: A unique integer value identifying this temporada.
+        required: true
+      tags:
+      - seasons
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Temporada'
+          description: ''
+  /api/seasons/{id_temporada}/ranking/progres/:
+    get:
+      operationId: seasons_ranking_progres_retrieve
+      parameters:
+      - in: path
+        name: id_temporada
+        schema:
+          type: integer
+        description: A unique integer value identifying this temporada.
+        required: true
+      tags:
+      - seasons
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Temporada'
+          description: ''
+  /api/seasons/{id_temporada}/tancar/:
+    post:
+      operationId: seasons_tancar_create
+      parameters:
+      - in: path
+        name: id_temporada
+        schema:
+          type: integer
+        description: A unique integer value identifying this temporada.
+        required: true
+      tags:
+      - seasons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Temporada'
+          description: ''
+  /api/seasons/anteriors/:
+    get:
+      operationId: seasons_anteriors_retrieve
+      tags:
+      - seasons
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Temporada'
+          description: ''
+  /api/seasons/crear-i-iniciar/:
+    post:
+      operationId: seasons_crear_i_iniciar_create
+      tags:
+      - seasons
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Temporada'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Temporada'
+          description: ''
+  /api/seasons/previous/:
+    get:
+      operationId: seasons_previous_retrieve
+      tags:
+      - seasons
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Temporada'
+          description: ''
+  /api/third-party-service/:
+    post:
+      operationId: third_party_service_create
+      description: |-
+        Rep una llista de parells de coordenades (lat/lng) i retorna el **Building Health Score (BHS)** de l'edifici corresponent.
+
+        **Flux intern per cada punt:**
+        1. Geocodificació inversa via OpenStreetMap (Nominatim).
+        2. Validació que les coordenades pertanyen a Barcelona.
+        3. Cerca de l'edifici (coincidència exacta → carrer com a fallback).
+
+        Si no es troba l'edifici, `score` és aleatori i `match_type` és `cap`.
+
+        **Rate limiting:** 1 req/s per Nominatim. Per a volums >500 punts, contacteu-nos.
+
+        **Autenticació:** `Authorization: Api-Key <token>`.
+      summary: Consulta el Building Health Score per coordenades
+      tags:
+      - Third-party
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThirdPartyRequest'
+            examples:
+              RequestD'exemple:
+                value:
+                  points:
+                  - lat: 41.3901
+                    lng: 2.1542
+                  - lat: 41.3875
+                    lng: 2.1601
+                  - lat: 40.4168
+                    lng: -3.7038
+                summary: Request d'exemple
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ThirdPartyRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ThirdPartyRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThirdPartyResponse'
+              examples:
+                RespostaMixta:
+                  value:
+                    results:
+                    - lat: 41.3901
+                      lng: 2.1542
+                      score: 73.4
+                      match_type: exacta
+                    - lat: 41.3875
+                      lng: 2.1601
+                      score: 55.2
+                      match_type: carrer
+                    - lat: 40.4168
+                      lng: -3.7038
+                      score: 42.1
+                      match_type: cap
+                  summary: Resposta mixta
+          description: Llista de resultats en el mateix ordre que els punts d'entrada.
+        '400':
+          description: El camp `points` no és una llista vàlida.
+        '403':
+          description: API Key absent o invàlida.
+  /api/verification/:
+    get:
+      operationId: verification_list
+      description: |-
+        Retorna la llista de verificacions documentals paginada.
+
+        - **AdminSistema**: veu totes les verificacions del sistema.
+        - **AdminFinca**: veu únicament les seves pròpies verificacions.
+
+        Cada element inclou el detall de l'usuari, l'edifici, els documents adjunts i el resultat de la verificació si ja s'ha processat.
+      summary: Llistar verificacions documentals
+      tags:
+      - Verificació
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Llista de verificacions obtinguda correctament.
+        '401':
+          description: No autenticat. Cal proporcionar credencials vàlides.
+        '403':
+          description: Sense permisos. Només accessible per AdminFinca o AdminSistema.
+  /api/verification/{id}/:
+    get:
+      operationId: verification_retrieve
+      description: |-
+        Retorna el detall complet d'una verificació documental: informació de l'usuari, l'edifici, tots els documents adjunts (amb text OCR i dades extretes), el resultat agregat i el scoring calculat.
+
+        - **AdminSistema**: pot consultar qualsevol verificació.
+        - **AdminFinca**: només pot consultar les seves pròpies verificacions.
+      summary: Obtenir el detall d'una verificació
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: Identificador únic de la verificació.
+        required: true
+      tags:
+      - Verificació
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Detall de la verificació obtingut correctament.
+        '401':
+          description: No autenticat. Cal proporcionar credencials vàlides.
+        '403':
+          description: Sense permisos. Només accessible per AdminFinca o AdminSistema.
+        '404':
+          description: Verificació no trobada.
+  /api/verification/{id}/revisar/:
+    post:
+      operationId: verification_revisar_create
+      description: |-
+        Permet a un **AdminSistema** (superusuari) aprovar o rebutjar una verificació que es trobi en estat `review` (revisió manual pendent).
+
+        En cas d'aprovació, s'assigna l'administrador de finca a l'edifici corresponent. En cas de rebuig, cal indicar obligatòriament un motiu que quedarà registrat.
+
+        **Estats possibles de la verificació:**
+        - `pending` — pendent de processament
+        - `running` — pipeline en execució
+        - `review` — pendent de revisió manual, únic estat des del qual es pot revisar
+        - `approved` — aprovada
+        - `rejected` — rebutjada
+      summary: Aprovar o rebutjar una verificació (revisió manual)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: Identificador únic de la verificació a revisar.
+        required: true
+      tags:
+      - Verificació
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevisioRequest'
+            examples:
+              Aprovació:
+                value:
+                  accio: aprovar
+              RebuigAmbMotiu:
+                value:
+                  accio: rebutjar
+                  motiu: El certificat aportat ha caducat.
+                summary: Rebuig amb motiu
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RevisioRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RevisioRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevisioOk'
+              examples:
+                RespostaAprovació:
+                  value:
+                    detail: 'Verificació #42 aprovada.'
+                    edifici: 7
+                    administrador_assignat: admin@finca.cat
+                  summary: Resposta aprovació
+                RespostaRebuig:
+                  value:
+                    detail: 'Verificació #42 rebutjada.'
+                    motiu: El certificat aportat ha caducat.
+                  summary: Resposta rebuig
+          description: Decisió aplicada. Consulta els exemples per veure el cos de
+            resposta.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorRevisio'
+              examples:
+                AccióInvàlida:
+                  value:
+                    detail: El camp 'accio' ha de ser 'aprovar' o 'rebutjar'.
+                  summary: Acció invàlida
+                MotiuAbsentEnRebuig:
+                  value:
+                    detail: Cal indicar un 'motiu' quan es rebutja una verificació.
+                  summary: Motiu absent en rebuig
+          description: Dades invàlides. Pot ser perquè 'accio' no és 'aprovar' ni
+            'rebutjar', o perquè s'ha intentat rebutjar sense indicar 'motiu'.
+        '401':
+          description: No autenticat. Cal proporcionar credencials vàlides.
+        '403':
+          description: Sense permisos. Només accessible per AdminFinca o AdminSistema.
+        '404':
+          description: Verificació no trobada.
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflicteEstat'
+          description: Conflicte d'estat. La verificació no es troba en estat 'review'.
+  /api/verification/create/:
+    post:
+      operationId: verification_create_create
+      description: |-
+        Crea una nova sol·licitud de verificació d'administrador de finca per a un edifici concret. S'han d'adjuntar entre 1 i 10 documents (PDF, JPEG, PNG o WEBP, màxim 10 MB cadascun). Cada fitxer ha d'anar acompanyat del seu tipus declarat (`documents_doc_type`).
+
+        Un cop creada la verificació, es llança automàticament el pipeline asíncron de Celery que executa OCR, extracció estructurada via LLM i scoring. La verificació transitarà pels estats `pending` → `running` → `review` (o `rejected` si el pipeline falla de manera definitiva).
+
+        **Restricció:** No es pot crear una nova verificació si ja n'existeix una en curs (`pending`, `running` o `review`) per al mateix usuari i edifici.
+      summary: Crear una nova verificació documental
+      tags:
+      - Verificació
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VerificationCreateMultipart'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '201':
+          description: Verificació creada correctament. El pipeline asíncron ja ha
+            estat llançat.
+        '400':
+          description: 'Error de validació. Possibles causes: cap fitxer adjuntat,
+            més de 10 documents, tipus de fitxer no permès, mida superior a 10 MB,
+            nombre de fitxers i tipus que no coincideix, o verificació en curs existent.'
+        '401':
+          description: No autenticat. Cal proporcionar credencials vàlides.
+        '403':
+          description: Sense permisos. Només accessible per AdminFinca o AdminSistema.
+components:
+  schemas:
+    AccioEnum:
+      enum:
+      - aprovar
+      - rebutjar
+      type: string
+      description: |-
+        * `aprovar` - aprovar
+        * `rebutjar` - rebutjar
+    AccountUpdate:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        avatar:
+          type: string
+          format: uri
+          nullable: true
+        avatar_clear:
+          type: boolean
+          writeOnly: true
+          default: false
+    AdminDashboardSummary:
+      type: object
+      properties:
+        users_total:
+          type: integer
+        buildings_total:
+          type: integer
+        buildings_managed:
+          type: integer
+        pending_improvements:
+          type: integer
+        pending_admin_verifications:
+          type: integer
+        pending_housing_requests:
+          type: integer
+        active_season:
+          nullable: true
+      required:
+      - active_season
+      - buildings_managed
+      - buildings_total
+      - pending_admin_verifications
+      - pending_housing_requests
+      - pending_improvements
+      - users_total
+    AdminFincaAltaResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        edifici_id:
+          type: integer
+        requereix_verificacio:
+          type: boolean
+      required:
+      - edifici_id
+      - message
+      - requereix_verificacio
+    AmbitEnum:
+      enum:
+      - Privat
+      - Comu
+      - Edifici
+      type: string
+      description: |-
+        * `Privat` - Habitatge privat
+        * `Comu` - Element comú
+        * `Edifici` - Edifici complet
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        user:
+          type: integer
+          nullable: true
+        user_email:
+          type: string
+          format: email
+          readOnly: true
+        method:
+          type: string
+          maxLength: 10
+        endpoint:
+          type: string
+          maxLength: 500
+        resource_type:
+          type: string
+          maxLength: 100
+        resource_id:
+          type: string
+          maxLength: 100
+        status_code:
+          type: integer
+          maximum: 32767
+          minimum: 0
+        ip_address:
+          type: string
+          nullable: true
+        user_agent:
+          type: string
+          maxLength: 500
+        duration_ms:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        timestamp:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - duration_ms
+      - endpoint
+      - id
+      - method
+      - status_code
+      - timestamp
+      - user_email
+    AuthTokenResponse:
+      type: object
+      properties:
+        access:
+          type: string
+        refresh:
+          type: string
+        user:
+          $ref: '#/components/schemas/AuthUserResponse'
+      required:
+      - access
+      - refresh
+      - user
+    AuthUserResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+          format: email
+        first_name:
+          type: string
+        last_name:
+          type: string
+        role:
+          type: string
+          nullable: true
+      required:
+      - email
+      - first_name
+      - id
+      - last_name
+      - role
+    AutocompleteCarrerItem:
+      type: object
+      properties:
+        codi_via:
+          type: integer
+        codi_carrer_ine:
+          type: string
+        nom_oficial:
+          type: string
+        nom_curt:
+          type: string
+        tipus_via:
+          type: string
+        nre_min:
+          type: integer
+          nullable: true
+        nre_max:
+          type: integer
+          nullable: true
+      required:
+      - codi_carrer_ine
+      - codi_via
+      - nom_curt
+      - nom_oficial
+      - nre_max
+      - nre_min
+      - tipus_via
+    BadgesResponse:
+      type: object
+      properties:
+        edifici:
+          type: integer
+        temporada:
+          type: string
+          nullable: true
+        count:
+          type: integer
+        summary:
+          type: object
+          additionalProperties: {}
+        results:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+      required:
+      - count
+      - edifici
+      - results
+      - summary
+      - temporada
+    BlankEnum:
+      enum:
+      - ''
+    CatalegMillora:
+      type: object
+      properties:
+        idMillora:
+          type: integer
+          readOnly: true
+        slug:
+          type: string
+          nullable: true
+          description: Identificador estable per seeds, frontend i motor de simulació.
+          maxLength: 120
+          pattern: ^[-a-zA-Z0-9_]+$
+        nom:
+          type: string
+          maxLength: 255
+        descripcio:
+          type: string
+        categoria:
+          $ref: '#/components/schemas/CatalegMilloraCategoriaEnum'
+        activa:
+          type: boolean
+        unitatBase:
+          $ref: '#/components/schemas/UnitatBaseEnum'
+        costEstimatBase:
+          type: number
+          format: double
+          description: Cost orientatiu per unitat base. No és pressupost oficial.
+        costOrientatiuUnitari:
+          type: number
+          format: double
+          readOnly: true
+        mantenimentAnual:
+          type: number
+          format: double
+          description: Cost orientatiu anual de manteniment per unitat base.
+        vidaUtil:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          description: Vida útil orientativa en anys.
+        estalviEnergeticEstimat:
+          type: number
+          format: double
+          description: '% d''estalvi'
+        impactePunts:
+          type: number
+          format: double
+          description: Punts que aporta al rànquing
+        nivellConfianca:
+          $ref: '#/components/schemas/NivellConfiancaEnum'
+        ambit:
+          $ref: '#/components/schemas/AmbitEnum'
+        requereixAcordComunitat:
+          type: boolean
+        tipusAcordEstimat:
+          $ref: '#/components/schemas/TipusAcordEstimatEnum'
+        requereixLlicenciaMunicipal:
+          type: boolean
+        requereixTecnicCompetent:
+          type: boolean
+        requereixCeePrePost:
+          type: boolean
+          description: Certificat Energètic abans i després
+        bloquejadorsFrequents:
+          description: 'Ex: Edifici protegit, façana catalogada.'
+        parametresBase:
+          description: Paràmetres tècnics simplificats que utilitza el motor de simulació.
+      required:
+      - costOrientatiuUnitari
+      - idMillora
+      - nom
+    CatalegMilloraCategoriaEnum:
+      enum:
+      - envolupant
+      - instal_lacio_termica
+      - renovables
+      - electricitat
+      - mobilitat
+      - control_i_monitoratge
+      type: string
+      description: |-
+        * `envolupant` - Envolupant tèrmica
+        * `instal_lacio_termica` - Instal·lació tèrmica
+        * `renovables` - Energies renovables
+        * `electricitat` - Electricitat
+        * `mobilitat` - Mobilitat
+        * `control_i_monitoratge` - Control i monitoratge
+    ConflicteEstat:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: Descripció de l'error de conflicte.
+        status_actual:
+          type: string
+          description: Estat actual de la verificació (p.ex. 'pending', 'running',
+            'approved', 'rejected').
+      required:
+      - detail
+      - status_actual
+    DadesEnergetiques:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        qualificacioGlobal:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/QualificacioGlobalEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+          - $ref: '#/components/schemas/NullEnum'
+        consumEnergiaPrimaria:
+          type: number
+          format: double
+          maximum: 600.0
+          minimum: 0.0
+        consumEnergiaFinal:
+          type: number
+          format: double
+          maximum: 450.0
+          minimum: 0.0
+        emissionsCO2:
+          type: number
+          format: double
+          maximum: 150.0
+          minimum: 0.0
+        costAnualEnergia:
+          type: number
+          format: double
+          maximum: 15000.0
+          minimum: 0.0
+        energiaCalefaccio:
+          type: number
+          format: double
+          maximum: 250.0
+          minimum: 0.0
+        energiaRefrigeracio:
+          type: number
+          format: double
+          maximum: 120.0
+          minimum: 0.0
+        energiaACS:
+          type: number
+          format: double
+          maximum: 80.0
+          minimum: 0.0
+        energiaEnllumenament:
+          type: number
+          format: double
+          maximum: 50.0
+          minimum: 0.0
+        emissionsCalefaccio:
+          type: number
+          format: double
+          maximum: 100.0
+          minimum: 0.0
+        emissionsRefrigeracio:
+          type: number
+          format: double
+          maximum: 50.0
+          minimum: 0.0
+        emissionsACS:
+          type: number
+          format: double
+          maximum: 40.0
+          minimum: 0.0
+        emissionsEnllumenament:
+          type: number
+          format: double
+          maximum: 25.0
+          minimum: 0.0
+        aillamentTermic:
+          type: number
+          format: double
+          maximum: 5.0
+          minimum: 0.05
+        valorFinestres:
+          type: number
+          format: double
+          maximum: 8.0
+          minimum: 0.5
+        normativa:
+          type: string
+          maxLength: 255
+        einaCertificacio:
+          type: string
+          maxLength: 255
+        motiuCertificacio:
+          type: string
+          maxLength: 255
+        rehabilitacioEnergetica:
+          type: boolean
+        dataEntrada:
+          type: string
+          format: date
+      required:
+      - aillamentTermic
+      - consumEnergiaFinal
+      - consumEnergiaPrimaria
+      - costAnualEnergia
+      - dataEntrada
+      - einaCertificacio
+      - emissionsACS
+      - emissionsCO2
+      - emissionsCalefaccio
+      - emissionsEnllumenament
+      - emissionsRefrigeracio
+      - energiaACS
+      - energiaCalefaccio
+      - energiaEnllumenament
+      - energiaRefrigeracio
+      - id
+      - motiuCertificacio
+      - normativa
+      - valorFinestres
+    DesactivarBody:
+      type: object
+      properties:
+        motiu:
+          type: string
+          description: Motiu de la desactivació (opcional).
+    DesactivarDryRunResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+        edifici_id:
+          type: integer
+        advertencies:
+          type: array
+          items:
+            type: string
+        pot_desactivar:
+          type: boolean
+      required:
+      - advertencies
+      - detail
+      - edifici_id
+      - pot_desactivar
+    DetailResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+      required:
+      - detail
+    DivisioEnum:
+      enum:
+      - Bronze
+      - Silver
+      - Gold
+      type: string
+      description: |-
+        * `Bronze` - Bronze
+        * `Silver` - Silver
+        * `Gold` - Gold
+    EdificiDetail:
+      type: object
+      properties:
+        idEdifici:
+          type: integer
+          readOnly: true
+        anyConstruccio:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+        tipologia:
+          $ref: '#/components/schemas/TipologiaEnum'
+        superficieTotal:
+          type: number
+          format: double
+        nombrePlantes:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+        reglament:
+          type: string
+          maxLength: 100
+        orientacioPrincipal:
+          $ref: '#/components/schemas/OrientacioPrincipalEnum'
+        puntuacioBase:
+          type: number
+          format: double
+          readOnly: true
+          nullable: true
+        puntuacioBaseOpenData:
+          type: number
+          format: double
+          readOnly: true
+          nullable: true
+          description: Building Health Score calculat a partir de les dades open data
+            (CEE). Null si no hi ha dades open data associades.
+        classificacioEstimada:
+          type: string
+          readOnly: true
+          nullable: true
+          description: Classificació energètica estimada (A–G). Null si no hi ha dades
+            suficients.
+        classificacioFont:
+          type: string
+          readOnly: true
+          nullable: true
+          description: 'Origen de la classificació: oficial, estimada o insuficient.'
+        font_open_data:
+          type: boolean
+          readOnly: true
+          description: True si les dades bàsiques provenen d'open data CEE
+        num_cas_origen:
+          type: string
+          readOnly: true
+          description: Identificador CEE d'origen
+        tipologia_open_data:
+          allOf:
+          - $ref: '#/components/schemas/TipologiaOpenDataEnum'
+          readOnly: true
+        classificacio_energetica:
+          type: string
+          readOnly: true
+          description: Classificació energètica de l'edifici. Pot ser oficial, estimada
+            o insuficient.
+        heat_risk:
+          type: string
+          readOnly: true
+          description: Heat Risk Index de l'edifici (0–100). Null si manquen dades.
+        actiu:
+          type: boolean
+          readOnly: true
+        dataDesactivacio:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        motivDesactivacio:
+          type: string
+          readOnly: true
+        localitzacio:
+          allOf:
+          - $ref: '#/components/schemas/Localitzacio'
+          readOnly: true
+        localitzacioId:
+          type: integer
+          writeOnly: true
+          nullable: true
+        administradorFinca:
+          type: integer
+          readOnly: true
+          nullable: true
+        grupComparable:
+          type: integer
+          readOnly: true
+          nullable: true
+        habitatges:
+          type: string
+          readOnly: true
+      required:
+      - actiu
+      - administradorFinca
+      - anyConstruccio
+      - classificacioEstimada
+      - classificacioFont
+      - classificacio_energetica
+      - dataDesactivacio
+      - font_open_data
+      - grupComparable
+      - habitatges
+      - heat_risk
+      - idEdifici
+      - localitzacio
+      - motivDesactivacio
+      - num_cas_origen
+      - orientacioPrincipal
+      - puntuacioBase
+      - puntuacioBaseOpenData
+      - reglament
+      - superficieTotal
+      - tipologia
+      - tipologia_open_data
+    EdificiResum:
+      type: object
+      properties:
+        idEdifici:
+          type: integer
+          readOnly: true
+        tipologia:
+          $ref: '#/components/schemas/TipologiaEnum'
+        superficieTotal:
+          type: number
+          format: double
+        puntuacioBase:
+          type: number
+          format: double
+          readOnly: true
+          nullable: true
+        localitzacio:
+          allOf:
+          - $ref: '#/components/schemas/LocalitzacioResum'
+          readOnly: true
+      required:
+      - idEdifici
+      - localitzacio
+      - puntuacioBase
+      - superficieTotal
+      - tipologia
+    ErrorRevisio:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: Descripció de l'error de validació.
+      required:
+      - detail
+    Estat002Enum:
+      enum:
+      - oberta
+      - tancada
+      - cancel·lada
+      type: string
+      description: |-
+        * `oberta` - Oberta
+        * `tancada` - Tancada
+        * `cancel·lada` - Cancel·lada
+    EstatValidacioEnum:
+      enum:
+      - PendentDocumentacio
+      - EnRevisió
+      - Validada
+      - Rebutjada
+      type: string
+      description: |-
+        * `PendentDocumentacio` - Pendent de documentació
+        * `EnRevisió` - En revisió
+        * `Validada` - Validada
+        * `Rebutjada` - Rebutjada
+    GoogleOAuth:
+      type: object
+      properties:
+        id_token:
+          type: string
+          writeOnly: true
+        mode:
+          allOf:
+          - $ref: '#/components/schemas/ModeEnum'
+          writeOnly: true
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+      required:
+      - id_token
+      - mode
+    HabitatgeDetail:
+      type: object
+      properties:
+        referenciaCadastral:
+          type: string
+          maxLength: 50
+        dadesEnergetiques:
+          allOf:
+          - $ref: '#/components/schemas/DadesEnergetiques'
+          readOnly: true
+        solicitant:
+          allOf:
+          - $ref: '#/components/schemas/UsuariBasic'
+          readOnly: true
+        propietari:
+          allOf:
+          - $ref: '#/components/schemas/UsuariBasic'
+          readOnly: true
+        llogater:
+          allOf:
+          - $ref: '#/components/schemas/UsuariBasic'
+          readOnly: true
+        rolSolicitat:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/RolSolicitatEnum'
+          - $ref: '#/components/schemas/NullEnum'
+        planta:
+          type: string
+          maxLength: 10
+        porta:
+          type: string
+          maxLength: 10
+        superficie:
+          type: number
+          format: double
+        anyReforma:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
+        estatValidacio:
+          allOf:
+          - $ref: '#/components/schemas/EstatValidacioEnum'
+          readOnly: true
+        edifici:
+          type: integer
+        usuari:
+          type: integer
+          readOnly: true
+          nullable: true
+      required:
+      - dadesEnergetiques
+      - edifici
+      - estatValidacio
+      - llogater
+      - planta
+      - porta
+      - propietari
+      - referenciaCadastral
+      - solicitant
+      - superficie
+      - usuari
+    HabitatgeResum:
+      type: object
+      properties:
+        referenciaCadastral:
+          type: string
+          maxLength: 50
+        planta:
+          type: string
+          maxLength: 10
+        porta:
+          type: string
+          maxLength: 10
+        superficie:
+          type: number
+          format: double
+        edifici_id:
+          type: string
+          readOnly: true
+      required:
+      - edifici_id
+      - planta
+      - porta
+      - referenciaCadastral
+      - superficie
+    Lliga:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        nom:
+          type: string
+          maxLength: 100
+        categoria:
+          $ref: '#/components/schemas/LligaCategoriaEnum'
+        divisio:
+          $ref: '#/components/schemas/DivisioEnum'
+        temporada:
+          type: integer
+      required:
+      - categoria
+      - divisio
+      - id
+      - nom
+      - temporada
+    LligaCategoriaEnum:
+      enum:
+      - EFICIENCIA
+      - RESILIENCIA
+      - PROGRES
+      type: string
+      description: |-
+        * `EFICIENCIA` - Eficiencia
+        * `RESILIENCIA` - Resiliencia
+        * `PROGRES` - Progres
+    Localitzacio:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        carrer:
+          type: string
+          maxLength: 255
+        numero:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+        codiPostal:
+          type: string
+          maxLength: 10
+        barri:
+          type: string
+          maxLength: 100
+        latitud:
+          type: number
+          format: double
+          nullable: true
+        longitud:
+          type: number
+          format: double
+          nullable: true
+        zonaClimatica:
+          type: string
+          nullable: true
+          maxLength: 10
+      required:
+      - barri
+      - carrer
+      - codiPostal
+      - id
+      - numero
+    LocalitzacioResum:
+      type: object
+      properties:
+        carrer:
+          type: string
+        numero:
+          type: integer
+        codiPostal:
+          type: string
+        barri:
+          type: string
+        zonaClimatica:
+          type: string
+      required:
+      - barri
+      - carrer
+      - codiPostal
+      - numero
+      - zonaClimatica
+    Login:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          writeOnly: true
+      required:
+      - email
+      - password
+    Logout:
+      type: object
+      properties:
+        refresh:
+          type: string
+      required:
+      - refresh
+    MapaResponse:
+      type: object
+      properties:
+        type:
+          type: string
+          default: FeatureCollection
+        count:
+          type: integer
+        features:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        meta:
+          type: object
+          additionalProperties: {}
+      required:
+      - count
+      - features
+      - meta
+    MatchTypeEnum:
+      enum:
+      - exacta
+      - carrer
+      - cap
+      type: string
+      description: |-
+        * `exacta` - exacta
+        * `carrer` - carrer
+        * `cap` - cap
+    Me:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        role:
+          type: string
+          nullable: true
+          readOnly: true
+        is_staff:
+          type: boolean
+          title: Staff status
+          description: Designates whether the user can log into this admin site.
+        is_superuser:
+          type: boolean
+          title: Superuser status
+          description: Designates that this user has all permissions without explicitly
+            assigning them.
+        is_system_admin:
+          type: boolean
+          readOnly: true
+        account_status:
+          type: string
+          readOnly: true
+        avatar_url:
+          type: string
+          nullable: true
+          readOnly: true
+      required:
+      - account_status
+      - avatar_url
+      - email
+      - id
+      - is_system_admin
+      - role
+    MilloraImplementada:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        millora:
+          allOf:
+          - $ref: '#/components/schemas/CatalegMillora'
+          readOnly: true
+        edifici_id:
+          type: integer
+          readOnly: true
+        edifici_adreca:
+          type: string
+          readOnly: true
+        simulacio_id:
+          type: integer
+          readOnly: true
+        dataExecucio:
+          type: string
+          format: date
+        costReal:
+          type: number
+          format: double
+        estatValidacio:
+          $ref: '#/components/schemas/EstatValidacioEnum'
+        observacionsAdmin:
+          type: string
+          description: Motiu del rebutj o indicacions
+        documentacioAdjunta:
+          type: string
+          format: uri
+          nullable: true
+      required:
+      - costReal
+      - dataExecucio
+      - edifici_adreca
+      - edifici_id
+      - id
+      - millora
+      - simulacio_id
+    ModeEnum:
+      enum:
+      - login
+      - register
+      type: string
+      description: |-
+        * `login` - login
+        * `register` - register
+    NivellConfiancaEnum:
+      enum:
+      - Baix
+      - Mig
+      - Alt
+      type: string
+      description: |-
+        * `Baix` - Baix
+        * `Mig` - Mig
+        * `Alt` - Alt
+    Notificacio:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        tipus:
+          allOf:
+          - $ref: '#/components/schemas/TipusEnum'
+          readOnly: true
+        titol:
+          type: string
+          readOnly: true
+        cos:
+          type: string
+          readOnly: true
+        llegida:
+          type: boolean
+          readOnly: true
+        dataCreacio:
+          type: string
+          format: date-time
+          readOnly: true
+        objecte_id:
+          type: integer
+          readOnly: true
+          nullable: true
+      required:
+      - cos
+      - dataCreacio
+      - id
+      - llegida
+      - objecte_id
+      - tipus
+      - titol
+    NullEnum:
+      enum:
+      - null
+    OpcioVot:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        text:
+          type: string
+          maxLength: 200
+        ordre:
+          type: integer
+          maximum: 32767
+          minimum: 0
+        num_vots:
+          type: string
+          readOnly: true
+      required:
+      - id
+      - num_vots
+      - text
+    OrientacioPrincipalEnum:
+      enum:
+      - Nord
+      - Sud
+      - Est
+      - Oest
+      type: string
+      description: |-
+        * `Nord` - Nord
+        * `Sud` - Sud
+        * `Est` - Est
+        * `Oest` - Oest
+    PaginatedAuditLogList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLog'
+    Participacio:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        puntuacio_inicial:
+          type: number
+          format: double
+        puntuacio:
+          type: number
+          format: double
+        posicio:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+        divisio:
+          type: string
+          maxLength: 50
+        edifici:
+          type: integer
+        lliga:
+          type: integer
+      required:
+      - divisio
+      - edifici
+      - id
+      - lliga
+      - posicio
+      - puntuacio
+      - puntuacio_inicial
+    PasswordResetConfirm:
+      type: object
+      properties:
+        uid:
+          type: string
+        token:
+          type: string
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        password_confirm:
+          type: string
+          writeOnly: true
+      required:
+      - password
+      - password_confirm
+      - token
+      - uid
+    PasswordResetRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+      required:
+      - email
+    PatchedAccountUpdate:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        avatar:
+          type: string
+          format: uri
+          nullable: true
+        avatar_clear:
+          type: boolean
+          writeOnly: true
+          default: false
+    PatchedAssignarAdmin:
+      type: object
+      description: Assigna un administrador de finca a un edifici.
+      properties:
+        user_id:
+          type: integer
+          nullable: true
+    PatchedAssignarResident:
+      type: object
+      description: Assigna un usuari (resident) a un habitatge.
+      properties:
+        user_id:
+          type: integer
+    PatchedDadesEnergetiques:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        qualificacioGlobal:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/QualificacioGlobalEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+          - $ref: '#/components/schemas/NullEnum'
+        consumEnergiaPrimaria:
+          type: number
+          format: double
+          maximum: 600.0
+          minimum: 0.0
+        consumEnergiaFinal:
+          type: number
+          format: double
+          maximum: 450.0
+          minimum: 0.0
+        emissionsCO2:
+          type: number
+          format: double
+          maximum: 150.0
+          minimum: 0.0
+        costAnualEnergia:
+          type: number
+          format: double
+          maximum: 15000.0
+          minimum: 0.0
+        energiaCalefaccio:
+          type: number
+          format: double
+          maximum: 250.0
+          minimum: 0.0
+        energiaRefrigeracio:
+          type: number
+          format: double
+          maximum: 120.0
+          minimum: 0.0
+        energiaACS:
+          type: number
+          format: double
+          maximum: 80.0
+          minimum: 0.0
+        energiaEnllumenament:
+          type: number
+          format: double
+          maximum: 50.0
+          minimum: 0.0
+        emissionsCalefaccio:
+          type: number
+          format: double
+          maximum: 100.0
+          minimum: 0.0
+        emissionsRefrigeracio:
+          type: number
+          format: double
+          maximum: 50.0
+          minimum: 0.0
+        emissionsACS:
+          type: number
+          format: double
+          maximum: 40.0
+          minimum: 0.0
+        emissionsEnllumenament:
+          type: number
+          format: double
+          maximum: 25.0
+          minimum: 0.0
+        aillamentTermic:
+          type: number
+          format: double
+          maximum: 5.0
+          minimum: 0.05
+        valorFinestres:
+          type: number
+          format: double
+          maximum: 8.0
+          minimum: 0.5
+        normativa:
+          type: string
+          maxLength: 255
+        einaCertificacio:
+          type: string
+          maxLength: 255
+        motiuCertificacio:
+          type: string
+          maxLength: 255
+        rehabilitacioEnergetica:
+          type: boolean
+        dataEntrada:
+          type: string
+          format: date
+    PatchedEdificiDetail:
+      type: object
+      properties:
+        idEdifici:
+          type: integer
+          readOnly: true
+        anyConstruccio:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+        tipologia:
+          $ref: '#/components/schemas/TipologiaEnum'
+        superficieTotal:
+          type: number
+          format: double
+        nombrePlantes:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+        reglament:
+          type: string
+          maxLength: 100
+        orientacioPrincipal:
+          $ref: '#/components/schemas/OrientacioPrincipalEnum'
+        puntuacioBase:
+          type: number
+          format: double
+          readOnly: true
+          nullable: true
+        puntuacioBaseOpenData:
+          type: number
+          format: double
+          readOnly: true
+          nullable: true
+          description: Building Health Score calculat a partir de les dades open data
+            (CEE). Null si no hi ha dades open data associades.
+        classificacioEstimada:
+          type: string
+          readOnly: true
+          nullable: true
+          description: Classificació energètica estimada (A–G). Null si no hi ha dades
+            suficients.
+        classificacioFont:
+          type: string
+          readOnly: true
+          nullable: true
+          description: 'Origen de la classificació: oficial, estimada o insuficient.'
+        font_open_data:
+          type: boolean
+          readOnly: true
+          description: True si les dades bàsiques provenen d'open data CEE
+        num_cas_origen:
+          type: string
+          readOnly: true
+          description: Identificador CEE d'origen
+        tipologia_open_data:
+          allOf:
+          - $ref: '#/components/schemas/TipologiaOpenDataEnum'
+          readOnly: true
+        classificacio_energetica:
+          type: string
+          readOnly: true
+          description: Classificació energètica de l'edifici. Pot ser oficial, estimada
+            o insuficient.
+        heat_risk:
+          type: string
+          readOnly: true
+          description: Heat Risk Index de l'edifici (0–100). Null si manquen dades.
+        actiu:
+          type: boolean
+          readOnly: true
+        dataDesactivacio:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        motivDesactivacio:
+          type: string
+          readOnly: true
+        localitzacio:
+          allOf:
+          - $ref: '#/components/schemas/Localitzacio'
+          readOnly: true
+        localitzacioId:
+          type: integer
+          writeOnly: true
+          nullable: true
+        administradorFinca:
+          type: integer
+          readOnly: true
+          nullable: true
+        grupComparable:
+          type: integer
+          readOnly: true
+          nullable: true
+        habitatges:
+          type: string
+          readOnly: true
+    PatchedHabitatgeDetail:
+      type: object
+      properties:
+        referenciaCadastral:
+          type: string
+          maxLength: 50
+        dadesEnergetiques:
+          allOf:
+          - $ref: '#/components/schemas/DadesEnergetiques'
+          readOnly: true
+        solicitant:
+          allOf:
+          - $ref: '#/components/schemas/UsuariBasic'
+          readOnly: true
+        propietari:
+          allOf:
+          - $ref: '#/components/schemas/UsuariBasic'
+          readOnly: true
+        llogater:
+          allOf:
+          - $ref: '#/components/schemas/UsuariBasic'
+          readOnly: true
+        rolSolicitat:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/RolSolicitatEnum'
+          - $ref: '#/components/schemas/NullEnum'
+        planta:
+          type: string
+          maxLength: 10
+        porta:
+          type: string
+          maxLength: 10
+        superficie:
+          type: number
+          format: double
+        anyReforma:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
+        estatValidacio:
+          allOf:
+          - $ref: '#/components/schemas/EstatValidacioEnum'
+          readOnly: true
+        edifici:
+          type: integer
+        usuari:
+          type: integer
+          readOnly: true
+          nullable: true
+    PatchedLliga:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        nom:
+          type: string
+          maxLength: 100
+        categoria:
+          $ref: '#/components/schemas/LligaCategoriaEnum'
+        divisio:
+          $ref: '#/components/schemas/DivisioEnum'
+        temporada:
+          type: integer
+    PatchedLocalitzacio:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        carrer:
+          type: string
+          maxLength: 255
+        numero:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+        codiPostal:
+          type: string
+          maxLength: 10
+        barri:
+          type: string
+          maxLength: 100
+        latitud:
+          type: number
+          format: double
+          nullable: true
+        longitud:
+          type: number
+          format: double
+          nullable: true
+        zonaClimatica:
+          type: string
+          nullable: true
+          maxLength: 10
+    PatchedParticipacio:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        puntuacio_inicial:
+          type: number
+          format: double
+        puntuacio:
+          type: number
+          format: double
+        posicio:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+        divisio:
+          type: string
+          maxLength: 50
+        edifici:
+          type: integer
+        lliga:
+          type: integer
+    PatchedRoleUpdate:
+      type: object
+      properties:
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+    PatchedTemporada:
+      type: object
+      properties:
+        id_temporada:
+          type: integer
+          readOnly: true
+        nom:
+          type: string
+          maxLength: 100
+        dataInici:
+          type: string
+          format: date
+        dataFi:
+          type: string
+          format: date
+        estat:
+          allOf:
+          - $ref: '#/components/schemas/TemporadaEstatEnum'
+          readOnly: true
+        activa:
+          type: boolean
+          readOnly: true
+    PatchedVotacioUpdate:
+      type: object
+      properties:
+        titol:
+          type: string
+          maxLength: 200
+        descripcio:
+          type: string
+        dataLimit:
+          type: string
+          format: date-time
+          nullable: true
+        estat:
+          $ref: '#/components/schemas/Estat002Enum'
+    PointInput:
+      type: object
+      properties:
+        lat:
+          type: number
+          format: double
+          description: Latitud en graus decimals (WGS84). Rang [-90, 90].
+        lng:
+          type: number
+          format: double
+          description: Longitud en graus decimals (WGS84). Rang [-180, 180].
+      required:
+      - lat
+      - lng
+    PointResult:
+      type: object
+      properties:
+        lat:
+          type: number
+          format: double
+          description: Latitud original del punt.
+        lng:
+          type: number
+          format: double
+          description: Longitud original del punt.
+        score:
+          type: number
+          format: double
+          nullable: true
+          description: Building Health Score (0–100). null si l'edifici no té puntuació.
+        match_type:
+          allOf:
+          - $ref: '#/components/schemas/MatchTypeEnum'
+          description: |-
+            Nivell de coincidència: exacta (carrer+número), carrer (qualsevol número), cap (no trobat / random).
+
+            * `exacta` - exacta
+            * `carrer` - carrer
+            * `cap` - cap
+      required:
+      - lat
+      - lng
+    PosicioRankingResponse:
+      type: object
+      properties:
+        edificio_id:
+          type: integer
+        liga:
+          type: string
+        posicion:
+          type: integer
+        top_objetivo:
+          type: integer
+        esta_en_top:
+          type: boolean
+        puntos_actuales:
+          type: number
+          format: double
+        puntos_para_top:
+          type: number
+          format: double
+      required:
+      - edificio_id
+      - esta_en_top
+      - liga
+      - posicion
+      - puntos_actuales
+      - puntos_para_top
+      - top_objetivo
+    QualificacioGlobalEnum:
+      enum:
+      - A
+      - B
+      - C
+      - D
+      - E
+      - F
+      - G
+      type: string
+      description: |-
+        * `A` - A
+        * `B` - B
+        * `C` - C
+        * `D` - D
+        * `E` - E
+        * `F` - F
+        * `G` - G
+    ReactivarResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+        edifici_id:
+          type: integer
+      required:
+      - detail
+      - edifici_id
+    RecalcularBadgesResponse:
+      type: object
+      properties:
+        edifici:
+          type: integer
+        temporada:
+          type: integer
+          nullable: true
+        count:
+          type: integer
+        summary:
+          type: object
+          additionalProperties: {}
+      required:
+      - count
+      - edifici
+      - summary
+      - temporada
+    Register:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        password_confirm:
+          type: string
+          writeOnly: true
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+      required:
+      - email
+      - password
+      - password_confirm
+    ResultatsVotacio:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        titol:
+          type: string
+          maxLength: 200
+        estat:
+          $ref: '#/components/schemas/Estat002Enum'
+        dataLimit:
+          type: string
+          format: date-time
+          nullable: true
+        num_vots_total:
+          type: string
+          readOnly: true
+        opcions:
+          type: string
+          readOnly: true
+      required:
+      - id
+      - num_vots_total
+      - opcions
+      - titol
+    RevisioOk:
+      type: object
+      properties:
+        detail:
+          type: string
+        edifici:
+          type: integer
+        administrador_assignat:
+          type: string
+          format: email
+        motiu:
+          type: string
+      required:
+      - detail
+    RevisioRequest:
+      type: object
+      properties:
+        accio:
+          allOf:
+          - $ref: '#/components/schemas/AccioEnum'
+          description: |-
+            Acció a aplicar sobre la verificació.
+
+            * `aprovar` - aprovar
+            * `rebutjar` - rebutjar
+        motiu:
+          type: string
+          description: Motiu del rebuig. Obligatori si 'accio' és 'rebutjar'; ignorat
+            si 'accio' és 'aprovar'.
+      required:
+      - accio
+    RolSolicitatEnum:
+      enum:
+      - owner
+      - tenant
+      type: string
+      description: |-
+        * `owner` - Propietari
+        * `tenant` - Llogater
+    RoleEnum:
+      enum:
+      - admin
+      - owner
+      - tenant
+      type: string
+      description: |-
+        * `admin` - Administrador
+        * `owner` - Propietari
+        * `tenant` - Llogater
+    SolicitudAccesResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+        rolSolicitat:
+          type: string
+      required:
+      - detail
+      - rolSolicitat
+    Suspend:
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 500
+        suspended_until:
+          type: string
+          format: date-time
+          nullable: true
+          description: Null o omÃ¨s = suspensiÃ³ indefinida.
+    Temporada:
+      type: object
+      properties:
+        id_temporada:
+          type: integer
+          readOnly: true
+        nom:
+          type: string
+          maxLength: 100
+        dataInici:
+          type: string
+          format: date
+        dataFi:
+          type: string
+          format: date
+        estat:
+          allOf:
+          - $ref: '#/components/schemas/TemporadaEstatEnum'
+          readOnly: true
+        activa:
+          type: boolean
+          readOnly: true
+      required:
+      - activa
+      - dataFi
+      - dataInici
+      - estat
+      - id_temporada
+      - nom
+    TemporadaEstatEnum:
+      enum:
+      - PENDENT
+      - ACTIVA
+      - TANCADA
+      type: string
+      description: |-
+        * `PENDENT` - Pendent
+        * `ACTIVA` - Activa
+        * `TANCADA` - Tancada
+    ThirdPartyRequest:
+      type: object
+      properties:
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/PointInput'
+          description: Llista de coordenades a consultar.
+      required:
+      - points
+    ThirdPartyResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/PointResult'
+      required:
+      - results
+    TipologiaEnum:
+      enum:
+      - Residencial
+      - Comercial
+      - Sanitari
+      - Educatiu
+      - Mixt
+      type: string
+      description: |-
+        * `Residencial` - Residencial
+        * `Comercial` - Comercial
+        * `Sanitari` - Sanitari
+        * `Educatiu` - Educatiu
+        * `Mixt` - Mixt
+    TipologiaOpenDataEnum:
+      enum:
+      - BlocPisos
+      - Unifamiliar
+      - HabitatgeBloc
+      - Terciari
+      - Desconegut
+      type: string
+      description: |-
+        * `BlocPisos` - Bloc de pisos
+        * `Unifamiliar` - Casa unifamiliar
+        * `HabitatgeBloc` - Habitatge individual en bloc
+        * `Terciari` - Terciari
+        * `Desconegut` - Desconegut
+    TipusAcordEstimatEnum:
+      enum:
+      - No cal
+      - MajoriaSimple
+      - Majoria35
+      - Unanimitat
+      type: string
+      description: |-
+        * `No cal` - No sol requerir acord
+        * `MajoriaSimple` - Majoria simple
+        * `Majoria35` - Majoria de 3/5
+        * `Unanimitat` - Unanimitat
+    TipusEnum:
+      enum:
+      - nova_votacio
+      - votacio_tancada
+      - votacio_cancellada
+      type: string
+      description: |-
+        * `nova_votacio` - Nova votació
+        * `votacio_tancada` - Votació tancada
+        * `votacio_cancellada` - Votació cancel·lada
+    TokenRefresh:
+      type: object
+      properties:
+        access:
+          type: string
+          readOnly: true
+        refresh:
+          type: string
+      required:
+      - access
+      - refresh
+    UnitatBaseEnum:
+      enum:
+      - m2
+      - unitat
+      - kwp
+      - kwh
+      - habitatge
+      - edifici
+      type: string
+      description: |-
+        * `m2` - m²
+        * `unitat` - Unitat
+        * `kwp` - kWp
+        * `kwh` - kWh
+        * `habitatge` - Habitatge
+        * `edifici` - Edifici
+    UserAdmin:
+      type: object
+      description: RepresentaciÃ³ completa d'un usuari per al panell d'administraciÃ³.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        is_active:
+          type: boolean
+          title: Active
+          description: Designates whether this user should be treated as active. Unselect
+            this instead of deleting accounts.
+        is_superuser:
+          type: boolean
+          title: Superuser status
+          description: Designates that this user has all permissions without explicitly
+            assigning them.
+        date_joined:
+          type: string
+          format: date-time
+        role:
+          type: string
+          readOnly: true
+        account_status:
+          type: string
+          readOnly: true
+        suspension_reason:
+          type: string
+          readOnly: true
+        suspended_until:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - account_status
+      - email
+      - id
+      - role
+      - suspended_until
+      - suspension_reason
+    UsuariBasic:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          maxLength: 254
+      required:
+      - email
+      - id
+    VerificationCreateMultipart:
+      type: object
+      properties:
+        edifici:
+          type: integer
+          description: ID de l'edifici per al qual es sol·licita la verificació.
+        documents_fitxer:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: 'Llista de fitxers a adjuntar. Formats acceptats: PDF, JPEG,
+            PNG, WEBP. Mida màxima: 10 MB per fitxer.'
+        documents_doc_type:
+          type: array
+          items:
+            type: string
+          description: 'Tipus declarat per a cada fitxer, en el mateix ordre que `documents_fitxer`.
+            Valors possibles: `acta_junta`, `certificat`, `contracte`, `cert_col`,
+            `identificatiu`, `factura`, `desconegut`.'
+      required:
+      - documents_fitxer
+      - edifici
+    VotacioCreate:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        edifici:
+          type: integer
+        titol:
+          type: string
+          maxLength: 200
+        descripcio:
+          type: string
+        dataLimit:
+          type: string
+          format: date-time
+          nullable: true
+        opcions:
+          type: array
+          items:
+            type: string
+            maxLength: 200
+          writeOnly: true
+          minItems: 2
+      required:
+      - edifici
+      - id
+      - opcions
+      - titol
+    VotacioDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        edifici:
+          type: integer
+        titol:
+          type: string
+          maxLength: 200
+        descripcio:
+          type: string
+        estat:
+          $ref: '#/components/schemas/Estat002Enum'
+        dataCreacio:
+          type: string
+          format: date-time
+          readOnly: true
+        dataLimit:
+          type: string
+          format: date-time
+          nullable: true
+        opcions:
+          type: array
+          items:
+            $ref: '#/components/schemas/OpcioVot'
+          readOnly: true
+        num_vots_total:
+          type: string
+          readOnly: true
+        ha_votat:
+          type: string
+          readOnly: true
+      required:
+      - dataCreacio
+      - edifici
+      - ha_votat
+      - id
+      - num_vots_total
+      - opcions
+      - titol
+    VotacioList:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        titol:
+          type: string
+          maxLength: 200
+        estat:
+          $ref: '#/components/schemas/Estat002Enum'
+        dataCreacio:
+          type: string
+          format: date-time
+          readOnly: true
+        dataLimit:
+          type: string
+          format: date-time
+          nullable: true
+        num_vots_total:
+          type: string
+          readOnly: true
+      required:
+      - dataCreacio
+      - id
+      - num_vots_total
+      - titol
+    VotacioUpdate:
+      type: object
+      properties:
+        titol:
+          type: string
+          maxLength: 200
+        descripcio:
+          type: string
+        dataLimit:
+          type: string
+          format: date-time
+          nullable: true
+        estat:
+          $ref: '#/components/schemas/Estat002Enum'
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 'JWT Bearer token. Use the Authorization header with value: Bearer
+        <access_token>.'
+tags:
+- name: accounts
+  description: Authentication, profile and user administration.
+- name: buildings
+  description: Buildings, homes, energy data, improvements, simulations and rankings.
+- name: seasons
+  description: Season management.
+- name: leagues
+  description: League management and rankings.
+- name: participations
+  description: Building participation in leagues and seasons.
+- name: community
+  description: Community voting features.
+- name: chat
+  description: Chat integration and moderation endpoints.
+- name: verification
+  description: Document verification workflows.
+- name: notifications
+  description: User notifications.
+- name: audit
+  description: Audit logs and traceability.

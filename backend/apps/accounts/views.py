@@ -6,8 +6,10 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from rest_framework_simplejwt.views import TokenRefreshView as SimpleJWTTokenRefreshView
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+from drf_spectacular.utils import extend_schema
 
 from apps.accounts.models import AccountStatus, RoleChoices, TokenLoginLog
 from apps.buildings.models import Edifici, Habitatge
@@ -21,6 +23,12 @@ from apps.accounts.serializers import (
     AssignarResidentSerializer, AssignarAdminSerializer,
     GoogleOAuthSerializer,
     UserAdminSerializer, SuspendSerializer,
+)
+
+from apps.accounts.schema import (
+    AuthTokenResponseSerializer,
+    DetailResponseSerializer,
+    AdminDashboardSummarySerializer,
 )
 
 User = get_user_model()
@@ -50,6 +58,13 @@ class LoginView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = [LoginThrottle]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_login",
+        summary="Iniciar sessio",
+        request=LoginSerializer,
+        responses={200: AuthTokenResponseSerializer},
+    )
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -77,6 +92,13 @@ class GoogleOAuthView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = [LoginThrottle]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_google_oauth",
+        summary="Autenticacio amb Google OAuth",
+        request=GoogleOAuthSerializer,
+        responses={200: AuthTokenResponseSerializer},
+    )
     def post(self, request):
         serializer = GoogleOAuthSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -106,6 +128,13 @@ class TokenRefreshView(SimpleJWTTokenRefreshView):
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_logout",
+        summary="Tancar sessio",
+        request=LogoutSerializer,
+        responses={200: DetailResponseSerializer},
+    )
     def post(self, request):
         serializer = LogoutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -120,6 +149,13 @@ class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = [LoginThrottle]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_password_reset_request",
+        summary="Sol·licitar restabliment de contrasenya",
+        request=PasswordResetRequestSerializer,
+        responses={200: DetailResponseSerializer},
+    )
     def post(self, request):
         serializer = PasswordResetRequestSerializer(
             data=request.data,
@@ -140,6 +176,13 @@ class PasswordResetConfirmView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = [LoginThrottle]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_password_reset_confirm",
+        summary="Confirmar nova contrasenya",
+        request=PasswordResetConfirmSerializer,
+        responses={200: DetailResponseSerializer},
+    )
     def post(self, request):
         serializer = PasswordResetConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -152,22 +195,49 @@ class PasswordResetConfirmView(APIView):
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_me_retrieve",
+        summary="Consultar el perfil autenticat",
+        responses={200: MeSerializer},
+    )
     def get(self, request):
-        serializer = MeSerializer(request.user)
+        serializer = MeSerializer(request.user, context={"request": request})
         return Response(serializer.data)
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_me_update",
+        summary="Actualitzar completament el perfil autenticat",
+        request=AccountUpdateSerializer,
+        responses={200: MeSerializer},
+    )
     def put(self, request):
         serializer = AccountUpdateSerializer(request.user, data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        return Response(MeSerializer(user).data, status=status.HTTP_200_OK)
+        return Response(
+            MeSerializer(user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_me_partial_update",
+        summary="Actualitzar parcialment el perfil autenticat",
+        request=AccountUpdateSerializer,
+        responses={200: MeSerializer},
+    )
     def patch(self, request):
         serializer = AccountUpdateSerializer(request.user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        return Response(MeSerializer(user).data, status=status.HTTP_200_OK)
+        return Response(
+            MeSerializer(user, context={"request": request}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +247,12 @@ class MeView(APIView):
 class MeEdificisView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_me_edificis_list",
+        summary="Llistar edificis accessibles per l'usuari autenticat",
+        responses={200: EdificiResumSerializer(many=True)},
+    )
     def get(self, request):
         user = request.user
         role = getattr(getattr(user, "profile", None), "role", None)
@@ -215,6 +291,13 @@ class MeEdificisView(APIView):
 class AssignarResidentView(ABACMixin, APIView):
     permission_classes = [IsAdminFinca]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_assignar_resident",
+        summary="Assignar un resident a un habitatge",
+        request=AssignarResidentSerializer,
+        responses={200: HabitatgeResumSerializer, 404: DetailResponseSerializer},
+    )
     def patch(self, request, ref_cadastral):
         try:
             habitatge = Habitatge.objects.select_related('edifici').get(
@@ -243,6 +326,13 @@ class AssignarResidentView(ABACMixin, APIView):
 class AssignarAdminEdificiView(APIView):
     permission_classes = [IsAdminSistema]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_assignar_admin_edifici",
+        summary="Assignar administrador de finca a un edifici",
+        request=AssignarAdminSerializer,
+        responses={200: EdificiResumSerializer, 404: DetailResponseSerializer},
+    )
     def patch(self, request, id_edifici):
         try:
             edifici = Edifici.objects.get(idEdifici=id_edifici)
@@ -265,6 +355,13 @@ class AssignarAdminEdificiView(APIView):
 class MeRoleView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_me_role_update",
+        summary="Canviar el rol propi entre owner i tenant",
+        request=RoleUpdateSerializer,
+        responses={200: MeSerializer},
+    )
     def patch(self, request):
         serializer = RoleUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -276,7 +373,7 @@ class MeRoleView(APIView):
         profile.save(update_fields=["role", "updated_at"])
 
         return Response(
-            MeSerializer(request.user).data,
+            MeSerializer(request.user, context={"request": request}).data,
             status=status.HTTP_200_OK
         )
 
@@ -319,6 +416,13 @@ class UserBlockView(APIView):
     """
     permission_classes = [IsAdminSistema]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_user_block",
+        summary="Bloquejar un usuari",
+        request=None,
+        responses={200: UserAdminSerializer, 403: DetailResponseSerializer, 404: DetailResponseSerializer},
+    )
     def post(self, request, pk):
         try:
             user = User.objects.select_related("profile").get(pk=pk)
@@ -346,6 +450,13 @@ class UserUnblockView(APIView):
     """Desbloqueja un compte i el torna a l'estat actiu."""
     permission_classes = [IsAdminSistema]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_user_unblock",
+        summary="Desbloquejar un usuari",
+        request=None,
+        responses={200: UserAdminSerializer, 400: DetailResponseSerializer, 404: DetailResponseSerializer},
+    )
     def post(self, request, pk):
         try:
             user = User.objects.select_related("profile").get(pk=pk)
@@ -373,6 +484,13 @@ class UserSuspendView(APIView):
     """
     permission_classes = [IsAdminSistema]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_user_suspend",
+        summary="Suspendre un usuari",
+        request=SuspendSerializer,
+        responses={200: UserAdminSerializer, 403: DetailResponseSerializer, 404: DetailResponseSerializer},
+    )
     def post(self, request, pk):
         try:
             user = User.objects.select_related("profile").get(pk=pk)
@@ -403,6 +521,13 @@ class UserUnsuspendView(APIView):
     """Aixeca la suspensió d'un compte i el torna a l'estat actiu."""
     permission_classes = [IsAdminSistema]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_user_unsuspend",
+        summary="Aixecar la suspensio d'un usuari",
+        request=None,
+        responses={200: UserAdminSerializer, 400: DetailResponseSerializer, 404: DetailResponseSerializer},
+    )
     def post(self, request, pk):
         try:
             user = User.objects.select_related("profile").get(pk=pk)
@@ -428,6 +553,12 @@ class AdminDashboardSummaryView(APIView):
     """Mètriques agregades per al panell d'administració del sistema."""
     permission_classes = [IsAdminSistema]
 
+    @extend_schema(
+        tags=["accounts"],
+        operation_id="accounts_admin_dashboard_summary",
+        summary="Consultar metriques agregades del panell d'administracio",
+        responses={200: AdminDashboardSummarySerializer},
+    )
     def get(self, request):
         from apps.buildings.models import (
             Edifici,

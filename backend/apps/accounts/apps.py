@@ -1,4 +1,4 @@
-from django.apps import AppConfig
+﻿from django.apps import AppConfig
 
 
 class AccountsConfig(AppConfig):
@@ -7,3 +7,4 @@ class AccountsConfig(AppConfig):
 
     def ready(self):
         import apps.accounts.signals  # noqa: F401
+        import apps.accounts.schema  # noqa: F401

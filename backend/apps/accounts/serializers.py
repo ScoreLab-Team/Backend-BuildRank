@@ -1,4 +1,4 @@
-from django.contrib.auth import get_user_model
+﻿from django.contrib.auth import get_user_model
 from django.db import transaction, IntegrityError
 from rest_framework import serializers
 
@@ -55,7 +55,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
         if not any(char.isdigit() for char in password):
             raise serializers.ValidationError(
-                {"password": "La contrasenya ha de contenir almenys un número."}
+                {"password": "La contrasenya ha de contenir almenys un nÃºmero."}
             )
 
         temp_user = User(
@@ -110,16 +110,16 @@ class LoginSerializer(serializers.Serializer):
             and user_obj.auth_provider == User.AuthProvider.GOOGLE
         ):
             raise serializers.ValidationError(
-                "Aquest compte es va crear amb Google. Inicia sessió amb Google."
+                "Aquest compte es va crear amb Google. Inicia sessiÃ³ amb Google."
             )
 
         user = authenticate(username=email, password=password)
 
         if not user:
-            raise serializers.ValidationError("Credencials invàlides.")
+            raise serializers.ValidationError("Credencials invÃ lides.")
 
         if not user.is_active:
-            raise serializers.ValidationError("Aquest usuari està inactiu.")
+            raise serializers.ValidationError("Aquest usuari estÃ  inactiu.")
 
         profile = getattr(user, "profile", None)
         if profile is not None:
@@ -132,9 +132,9 @@ class LoginSerializer(serializers.Serializer):
                 until = profile.suspended_until
                 if until is None or until > tz.now():
                     raise serializers.ValidationError(
-                        "Aquest compte està suspès temporalment."
+                        "Aquest compte estÃ  suspÃ¨s temporalment."
                     )
-                # Suspension expired — auto-lift so the DB reflects reality.
+                # Suspension expired â€” auto-lift so the DB reflects reality.
                 profile.account_status = AccountStatus.ACTIVE
                 profile.suspension_reason = ""
                 profile.suspended_until = None
@@ -167,7 +167,7 @@ class LoginSerializer(serializers.Serializer):
         # Why not SELECT FOR UPDATE on TokenLoginLog rows directly?
         # Phantom-read problem at READ COMMITTED: all N concurrent threads start
         # scanning the same existing rows simultaneously, each sees count < limit,
-        # and all insert without revoking — even with FOR UPDATE.
+        # and all insert without revoking â€” even with FOR UPDATE.
         #
         # Locking the User row (which always exists) serializes threads properly:
         # thread 2 blocks on the User row lock while thread 1 holds it; by the
@@ -204,7 +204,7 @@ class LogoutSerializer(serializers.Serializer):
 
     def validate_refresh(self, value):
         if not value:
-            raise serializers.ValidationError("El refresh token és obligatori.")
+            raise serializers.ValidationError("El refresh token Ã©s obligatori.")
         return value
 
     def save(self, **kwargs):
@@ -222,13 +222,14 @@ class LogoutSerializer(serializers.Serializer):
             # Blacklist el token
             token.blacklist()
         except Exception:
-            raise serializers.ValidationError({"refresh": "Token invàlid o ja invalidat."})
+            raise serializers.ValidationError({"refresh": "Token invÃ lid o ja invalidat."})
 
 
 class MeSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
     is_system_admin = serializers.SerializerMethodField()
     account_status = serializers.SerializerMethodField()
+    avatar_url = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -242,22 +243,36 @@ class MeSerializer(serializers.ModelSerializer):
             "is_superuser",
             "is_system_admin",
             "account_status",
+            "avatar_url",
         )
 
-    def get_role(self, obj):
+    def get_role(self, obj) -> str | None:
         profile = getattr(obj, "profile", None)
         if profile:
             return profile.role
         return None
 
-    def get_is_system_admin(self, obj):
+    def get_is_system_admin(self, obj) -> bool:
         return bool(obj.is_superuser)
 
-    def get_account_status(self, obj):
+    def get_account_status(self, obj) -> str:
         profile = getattr(obj, "profile", None)
         if profile:
             return profile.account_status
         return AccountStatus.ACTIVE
+
+    def get_avatar_url(self, obj) -> str | None:
+        profile = getattr(obj, "profile", None)
+        if not profile or not profile.avatar:
+            return None
+
+        request = self.context.get("request")
+        url = profile.avatar.url
+
+        if request is not None:
+            return request.build_absolute_uri(url)
+
+        return url
 
 
 class LocalitzacioResum(serializers.Serializer):
@@ -282,7 +297,7 @@ class HabitatgeResumSerializer(serializers.ModelSerializer):
         fields = ("referenciaCadastral", "planta", "porta", "superficie", "edifici_id")
 
 # ---------------------------------------------------------------------------
-# Assignació
+# AssignaciÃ³
 # ---------------------------------------------------------------------------
 
 class AssignarResidentSerializer(serializers.Serializer):
@@ -305,9 +320,12 @@ class AssignarAdminSerializer(serializers.Serializer):
         return value
 
 class AccountUpdateSerializer(serializers.ModelSerializer):
+    avatar = serializers.ImageField(required=False, allow_null=True)
+    avatar_clear = serializers.BooleanField(write_only=True, required=False, default=False)
+
     class Meta:
         model = User
-        fields = ("email", "first_name", "last_name")
+        fields = ("email", "first_name", "last_name", "avatar", "avatar_clear")
         extra_kwargs = {
             "email": {"required": False},
             "first_name": {"required": False, "allow_blank": True},
@@ -319,7 +337,32 @@ class AccountUpdateSerializer(serializers.ModelSerializer):
 
         if User.objects.exclude(pk=self.instance.pk).filter(email=value).exists():
             raise serializers.ValidationError(
-                "Ja existeix un usuari amb aquest correu electrònic."
+                "Ja existeix un usuari amb aquest correu electrÃ²nic."
+            )
+
+        return value
+
+    def validate_avatar(self, value):
+        if value is None:
+            return value
+
+        max_size = 2 * 1024 * 1024
+        if value.size > max_size:
+            raise serializers.ValidationError(
+                "L'avatar no pot superar els 2 MB."
+            )
+
+        allowed_content_types = {
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/gif",
+        }
+        content_type = getattr(value, "content_type", "")
+
+        if content_type and content_type not in allowed_content_types:
+            raise serializers.ValidationError(
+                "Format d'imatge no permÃ¨s. Usa JPG, PNG, WEBP o GIF."
             )
 
         return value
@@ -339,14 +382,37 @@ class AccountUpdateSerializer(serializers.ModelSerializer):
             instance.last_name = validated_data["last_name"]
             update_fields.append("last_name")
 
+        avatar_clear = validated_data.pop("avatar_clear", False)
+        avatar_provided = "avatar" in validated_data
+
+        if avatar_provided or avatar_clear:
+            try:
+                profile = instance.profile
+            except Profile.DoesNotExist:
+                profile = Profile.objects.create(user=instance)
+
+            old_avatar_name = profile.avatar.name if profile.avatar else None
+            new_avatar = validated_data.get("avatar") if avatar_provided else None
+
+            if old_avatar_name:
+                profile.avatar.delete(save=False)
+
+            if avatar_clear and not avatar_provided:
+                profile.avatar = None
+            elif avatar_provided:
+                profile.avatar = new_avatar
+
+            profile.save(update_fields=["avatar", "updated_at"])
+            instance._state.fields_cache["profile"] = profile
+
         if update_fields:
             try:
                 instance.save(update_fields=update_fields)
             except IntegrityError:
-                # Race condition: otro hilo grabó el mismo email entre el
-                # validate_email y este save. Constraint UNIQUE → 400, no 500.
+                # Race condition: otro hilo grabÃ³ el mismo email entre el
+                # validate_email y este save. Constraint UNIQUE â†’ 400, no 500.
                 raise serializers.ValidationError(
-                    {"email": "Ja existeix un usuari amb aquest correu electrònic."}
+                    {"email": "Ja existeix un usuari amb aquest correu electrÃ²nic."}
                 )
 
         return instance
@@ -358,7 +424,7 @@ class RoleUpdateSerializer(serializers.Serializer):
         allowed_roles = {RoleChoices.OWNER, RoleChoices.TENANT}
         if value not in allowed_roles:
             raise serializers.ValidationError(
-                "Només es permet canviar entre els rols owner i tenant."
+                "NomÃ©s es permet canviar entre els rols owner i tenant."
             )
         return value
 
@@ -369,7 +435,7 @@ class PasswordResetRequestSerializer(serializers.Serializer):
         email = self.validated_data["email"].strip().lower()
         user = User.objects.filter(email=email, is_active=True).first()
 
-        # No enumeració de comptes: si no existeix, no retornem error ni enviem res.
+        # No enumeraciÃ³ de comptes: si no existeix, no retornem error ni enviem res.
         if not user:
             return {}
 
@@ -384,9 +450,9 @@ class PasswordResetRequestSerializer(serializers.Serializer):
         reset_url = f"{reset_base_url}?uid={uid}&token={token}"
 
         message = (
-            "Has sol·licitat restablir la contrasenya del teu compte de BuildRank.\n\n"
-            f"Obre aquest enllaç per crear una contrasenya nova:\n{reset_url}\n\n"
-            "Si no has sol·licitat aquest canvi, pots ignorar aquest missatge."
+            "Has solÂ·licitat restablir la contrasenya del teu compte de BuildRank.\n\n"
+            f"Obre aquest enllaÃ§ per crear una contrasenya nova:\n{reset_url}\n\n"
+            "Si no has solÂ·licitat aquest canvi, pots ignorar aquest missatge."
         )
 
         send_mail(
@@ -397,7 +463,7 @@ class PasswordResetRequestSerializer(serializers.Serializer):
             fail_silently=True,
         )
 
-        # Important: no retornem uid/token a l'API. Només viatgen per email.
+        # Important: no retornem uid/token a l'API. NomÃ©s viatgen per email.
         return {}
 
 
@@ -417,10 +483,10 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
             user_id = urlsafe_base64_decode(attrs["uid"]).decode()
             user = User.objects.get(pk=user_id, is_active=True)
         except (TypeError, ValueError, OverflowError, User.DoesNotExist):
-            raise serializers.ValidationError({"token": "Token invàlid o expirat."})
+            raise serializers.ValidationError({"token": "Token invÃ lid o expirat."})
 
         if not default_token_generator.check_token(user, attrs["token"]):
-            raise serializers.ValidationError({"token": "Token invàlid o expirat."})
+            raise serializers.ValidationError({"token": "Token invÃ lid o expirat."})
 
         try:
             validate_password(attrs["password"], user=user)
@@ -435,8 +501,8 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         user.set_password(self.validated_data["password"])
         user.save(update_fields=["password"])
 
-        # Revocar refresh tokens actius després del canvi de contrasenya.
-        # Els access tokens ja emesos poden continuar fins a expirar, però no es podrà renovar sessió.
+        # Revocar refresh tokens actius desprÃ©s del canvi de contrasenya.
+        # Els access tokens ja emesos poden continuar fins a expirar, perÃ² no es podrÃ  renovar sessiÃ³.
         now = timezone.now()
         for outstanding in OutstandingToken.objects.filter(user=user):
             BlacklistedToken.objects.get_or_create(token=outstanding)
@@ -454,11 +520,11 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 
 # ---------------------------------------------------------------------------
-# Gestió d'usuaris (US49) — només AdminSistema
+# GestiÃ³ d'usuaris (US49) â€” nomÃ©s AdminSistema
 # ---------------------------------------------------------------------------
 
 class UserAdminSerializer(serializers.ModelSerializer):
-    """Representació completa d'un usuari per al panell d'administració."""
+    """RepresentaciÃ³ completa d'un usuari per al panell d'administraciÃ³."""
     role = serializers.CharField(source="profile.role", read_only=True)
     account_status = serializers.CharField(source="profile.account_status", read_only=True)
     suspension_reason = serializers.CharField(source="profile.suspension_reason", read_only=True)
@@ -486,7 +552,7 @@ class SuspendSerializer(serializers.Serializer):
     suspended_until = serializers.DateTimeField(
         required=False,
         allow_null=True,
-        help_text="Null o omès = suspensió indefinida.",
+        help_text="Null o omÃ¨s = suspensiÃ³ indefinida.",
     )
 
 
@@ -503,7 +569,7 @@ class GoogleOAuthSerializer(serializers.Serializer):
 
         if not settings.GOOGLE_OAUTH_CLIENT_ID:
             raise serializers.ValidationError(
-                {"detail": "GOOGLE_OAUTH_CLIENT_ID no està configurat."}
+                {"detail": "GOOGLE_OAUTH_CLIENT_ID no estÃ  configurat."}
             )
 
         try:
@@ -513,7 +579,7 @@ class GoogleOAuthSerializer(serializers.Serializer):
                 settings.GOOGLE_OAUTH_CLIENT_ID,
             )
         except ValueError:
-            raise serializers.ValidationError({"id_token": "Token de Google invàlid."})
+            raise serializers.ValidationError({"id_token": "Token de Google invÃ lid."})
         except GoogleAuthError:
             raise serializers.ValidationError(
                 {"id_token": "No s'ha pogut verificar el token de Google."}
@@ -524,7 +590,7 @@ class GoogleOAuthSerializer(serializers.Serializer):
             raise serializers.ValidationError({"email": "Google no ha retornat cap email."})
 
         if not idinfo.get("email_verified", False):
-            raise serializers.ValidationError({"email": "L'email de Google no està verificat."})
+            raise serializers.ValidationError({"email": "L'email de Google no estÃ  verificat."})
 
         attrs["google_user_info"] = {
             "email": email,
@@ -544,7 +610,7 @@ class GoogleOAuthSerializer(serializers.Serializer):
             if user is not None:
                 raise serializers.ValidationError(
                     {
-                        "detail": "Aquest email ja té un compte. Inicia sessió amb el mètode utilitzat en el registre."
+                        "detail": "Aquest email ja tÃ© un compte. Inicia sessiÃ³ amb el mÃ¨tode utilitzat en el registre."
                     }
                 )
 
@@ -564,20 +630,20 @@ class GoogleOAuthSerializer(serializers.Serializer):
         elif mode == "login":
             if user is None:
                 raise serializers.ValidationError(
-                    {"detail": "No existeix cap compte amb aquest Google. Registra’t primer."}
+                    {"detail": "No existeix cap compte amb aquest Google. Registraâ€™t primer."}
                 )
 
             if user.auth_provider != User.AuthProvider.GOOGLE:
                 raise serializers.ValidationError(
                     {
-                        "detail": "Aquest compte es va crear amb email i contrasenya. Inicia sessió amb la contrasenya de BuildRank."
+                        "detail": "Aquest compte es va crear amb email i contrasenya. Inicia sessiÃ³ amb la contrasenya de BuildRank."
                     }
                 )
 
             profile, _ = Profile.objects.get_or_create(user=user)
 
         else:
-            raise serializers.ValidationError({"mode": "Mode OAuth invàlid."})
+            raise serializers.ValidationError({"mode": "Mode OAuth invÃ lid."})
 
         user.profile.refresh_from_db()
 
@@ -590,9 +656,9 @@ class GoogleOAuthSerializer(serializers.Serializer):
             until = profile.suspended_until
             if until is None or until > tz.now():
                 raise serializers.ValidationError(
-                    "Aquest compte està suspès temporalment."
+                    "Aquest compte estÃ  suspÃ¨s temporalment."
                 )
-            # Suspension expired — auto-lift so the DB reflects reality.
+            # Suspension expired â€” auto-lift so the DB reflects reality.
             profile.account_status = AccountStatus.ACTIVE
             profile.suspension_reason = ""
             profile.suspended_until = None
@@ -613,3 +679,4 @@ class GoogleOAuthSerializer(serializers.Serializer):
             "access": str(refresh.access_token),
             "refresh": str(refresh),
         }
+

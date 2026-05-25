@@ -1,11 +1,14 @@
 from datetime import timedelta
 import re
+import base64
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import override_settings
 from django.core.cache import cache
 from django.core import mail
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -43,6 +46,10 @@ NO_THROTTLE_REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_CLASSES": [],
     "DEFAULT_THROTTLE_RATES": {},
 }
+
+SMALL_GIF_AVATAR = base64.b64decode(
+    "R0lGODdhAQABAIAAAAAAAP///ywAAAAAAQABAAACAkQBADs="
+)
 
 class BaseTestData(APITestCase):
     """Base class with shared test data creation utilities."""
@@ -406,6 +413,114 @@ class MeViewTests(BaseTestData):
         self.assertEqual(response.data["first_name"], "Marti")
         self.assertEqual(response.data["last_name"], "Borras")
 
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_authenticated_user_can_patch_own_avatar(self):
+        """Authenticated user can upload an avatar image for their own profile."""
+        self.client.force_authenticate(user=self.user)
+
+        avatar = SimpleUploadedFile(
+            "avatar.gif",
+            SMALL_GIF_AVATAR,
+            content_type="image/gif",
+        )
+
+        response = self.client.patch(
+            reverse("me"),
+            {"avatar": avatar},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertTrue(self.user.profile.avatar.name.startswith("avatars/"))
+        self.assertIn("avatar_url", response.data)
+        self.assertIn("/media/avatars/", response.data["avatar_url"])
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_authenticated_user_can_replace_avatar_and_old_file_is_deleted(self):
+        """Uploading a new avatar replaces the previous one and removes the old file."""
+        self.client.force_authenticate(user=self.user)
+
+        first_avatar = SimpleUploadedFile(
+            "old_avatar.gif",
+            SMALL_GIF_AVATAR,
+            content_type="image/gif",
+        )
+
+        first_response = self.client.patch(
+            reverse("me"),
+            {"avatar": first_avatar},
+            format="multipart",
+        )
+
+        self.assertEqual(first_response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+
+        old_avatar_name = self.user.profile.avatar.name
+        storage = self.user.profile.avatar.storage
+
+        self.assertTrue(storage.exists(old_avatar_name))
+
+        second_avatar = SimpleUploadedFile(
+            "new_avatar.gif",
+            SMALL_GIF_AVATAR,
+            content_type="image/gif",
+        )
+
+        second_response = self.client.patch(
+            reverse("me"),
+            {"avatar": second_avatar},
+            format="multipart",
+        )
+
+        self.assertEqual(second_response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+
+        new_avatar_name = self.user.profile.avatar.name
+
+        self.assertNotEqual(old_avatar_name, new_avatar_name)
+        self.assertFalse(storage.exists(old_avatar_name))
+        self.assertTrue(storage.exists(new_avatar_name))
+        self.assertIn("/media/avatars/", second_response.data["avatar_url"])
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_authenticated_user_can_clear_own_avatar(self):
+        """Authenticated user can remove their avatar and avatar_url becomes null."""
+        self.client.force_authenticate(user=self.user)
+
+        avatar = SimpleUploadedFile(
+            "avatar_to_clear.gif",
+            SMALL_GIF_AVATAR,
+            content_type="image/gif",
+        )
+
+        upload_response = self.client.patch(
+            reverse("me"),
+            {"avatar": avatar},
+            format="multipart",
+        )
+
+        self.assertEqual(upload_response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+
+        old_avatar_name = self.user.profile.avatar.name
+        storage = self.user.profile.avatar.storage
+
+        self.assertTrue(storage.exists(old_avatar_name))
+
+        clear_response = self.client.patch(
+            reverse("me"),
+            {"avatar_clear": True},
+            format="json",
+        )
+
+        self.assertEqual(clear_response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+
+        self.assertFalse(bool(self.user.profile.avatar))
+        self.assertFalse(storage.exists(old_avatar_name))
+        self.assertIsNone(clear_response.data["avatar_url"])
+
     def test_unauthenticated_user_cannot_get_profile(self):
         """Unauthenticated requests to profile detail must return 401."""
         response = self.client.get(reverse("me"))
@@ -701,6 +816,25 @@ class AccountUpdateTests(BaseTestData):
         self.user.refresh_from_db()
         self.assertNotEqual(self.user.email, "duplicat@example.com")
         self.assertIn("email", response.data)
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_update_account_rejects_invalid_avatar_file(self):
+        self.client.force_authenticate(user=self.user)
+
+        avatar = SimpleUploadedFile(
+            "avatar.txt",
+            b"not-an-image",
+            content_type="text/plain",
+        )
+
+        response = self.client.patch(
+            reverse("me"),
+            {"avatar": avatar},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("avatar", response.data)
 
 
 

@@ -1,0 +1,37 @@
+﻿name: SonarCloud
+
+on:
+  push:
+    branches:
+      - Desenvolupament
+  pull_request:
+    branches:
+      - Desenvolupament
+
+jobs:
+  sonarcloud:
+    name: SonarCloud analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build backend test environment
+        run: docker compose up -d --build db redis ollama web
+
+      - name: Generate Python coverage for SonarCloud
+        run: |
+          docker compose exec -T web coverage run --source=apps,config manage.py test apps.accounts -v 2
+          docker compose exec -T web coverage xml -o coverage.xml
+          test -f backend/coverage.xml || docker compose cp web:/app/coverage.xml backend/coverage.xml
+          ls -lh backend/coverage.xml
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: backend

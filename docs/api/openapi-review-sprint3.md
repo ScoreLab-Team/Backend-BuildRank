@@ -123,3 +123,11 @@ No es considera necessari resoldre tots els errors de schema en aquesta mateixa 
 ## Conclusio
 
 El schema OpenAPI queda mes complet i mes professional. Ara inclou metadata real del projecte, autenticacio Bearer JWT documentada correctament i endpoints principals d'accounts descrits amb @extend_schema. Els warnings totals s'han reduit de 197 a 48 i els errors totals de 160 a 92.
+
+## Ajust CI/SonarCloud
+
+Durant la PR, SonarCloud ha fallat inicialment el Quality Gate per Coverage on New Code 0.0%. La causa no era un error funcional, sino que el workflow de SonarCloud no generava coverage.xml actualitzat abans de l'analisi.
+
+S'ha ajustat el workflow per executar coverage dins del contenidor web abans del SonarCloud Scan i generar backend/coverage.xml en temps de CI.
+
+Aquest canvi permet que SonarCloud avaluï la cobertura real del codi nou modificat en aquesta PR.

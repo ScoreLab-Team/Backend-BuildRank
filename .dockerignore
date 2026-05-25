@@ -1,0 +1,54 @@
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# Virtual envs
+**/.venv/
+**/venv/
+**/env/
+
+# Git
+.git
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+
+# Testing / coverage
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Logs
+*.log
+
+# Local databases
+*.sqlite3
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+
+# Media/static generated
+backend/media/
+backend/staticfiles/
+
+# Large temp/docs artifacts
+out/
+docs/testing/logs/
+docs/testing/coverage/
+docs/performance/logs/
+
+# Node
+node_modules/
+
+# Docker overrides
+docker-compose.override.yml

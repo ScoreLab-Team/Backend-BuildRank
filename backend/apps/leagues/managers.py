@@ -2,7 +2,23 @@ from django.db import models
 
 
 class LeagueManager(models.Manager):
+    def create_progress_leagues(self, temporada):
+        divisions = ["Bronze", "Silver", "Gold"]
 
+        return [
+            self.create(
+                nom=f"Lliga {div}",
+                categoria="PROGRES",
+                divisio=div,
+                temporada=temporada
+            )
+            for div in divisions
+        ]
+
+
+
+    """
+    Aquestes funcions no son necesaries actualment pero tenen el potencial de ser utilitzades si s'afegeixen altres tipus de lligues
     def create_efficiency_leagues(self, temporada):
         divisions = ["Bronze", "Silver", "Gold"]
 
@@ -28,21 +44,9 @@ class LeagueManager(models.Manager):
             )
             for div in divisions
         ]
-
-    def create_progress_leagues(self, temporada):
-        divisions = ["Bronze", "Silver", "Gold"]
-
-        return [
-            self.create(
-                nom=f"Lliga {div}",
-                categoria="PROGRES",
-                divisio=div,
-                temporada=temporada
-            )
-            for div in divisions
-        ]
-
+        
     def get_segmented_ranking(self, group):
         return self.participations.filter(
             building__grupComparable=group
         ).order_by("-score")
+    """

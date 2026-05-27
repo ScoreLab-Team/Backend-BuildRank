@@ -1,43 +1,72 @@
 # BuildRank Backend
 
-Backend de **BuildRank**, una plataforma orientada a promoure un ús més responsable i sostenible de l’energia als edificis.
+Backend de **BuildRank**, una plataforma orientada a promoure un ús més responsable i sostenible de l’energia als edificis mitjançant dades, rànquings, simulacions de millores, verificació documental, comunitat i suport a la presa de decisions.
 
-Aquest repositori conté la part servidor del projecte. El backend gestiona la lògica de negoci, l’autenticació, els permisos, la persistència de dades i l’exposició de la API que consumeix el frontend.
+Aquest repositori conté la part servidor del projecte. El backend exposa l’API REST consumida pel frontend, gestiona autenticació i permisos, persisteix les dades, aplica la lògica de negoci i dona suport als processos de desplegament, qualitat i validació tècnica del sistema.
 
 ---
 
 ## Què és BuildRank
 
-BuildRank és un sistema pensat per ajudar a gestionar i entendre millor l’estat energètic dels edificis. Permet consultar informació, comparar edificis, calcular indicadors, simular millores i donar suport a funcionalitats associades a la plataforma.
+BuildRank és una plataforma pensada per ajudar propietaris, llogaters, administradors de finca i administradors del sistema a entendre millor l’estat energètic dels edificis i promoure millores sostenibles.
 
-En termes pràctics, el backend és la capa que:
+El backend s’encarrega de:
 
-- exposa una API REST perquè el frontend pugui operar
-- valida les dades que arriben al sistema
-- autentica usuaris i controla permisos
-- consulta, crea i actualitza informació persistent
-- aplica la lògica interna del projecte
-- calcula o dona suport a mètriques del domini
-- integra funcionalitats de millores i simulacions
-- prepara serveis que poden ser consumits per altres equips
+- autenticar usuaris i gestionar tokens
+- controlar permisos segons rol i vinculació real amb edificis o habitatges
+- gestionar edificis, habitatges, localitzacions i dades energètiques
+- importar i normalitzar dades d’open data
+- calcular classificacions, indicadors i informació energètica
+- donar suport a rànquings, temporades i lligues
+- gestionar simulacions de millores energètiques
+- validar millores implementades i actualitzar puntuacions
+- gestionar votacions internes i funcionalitats comunitàries
+- donar suport a xat i canals vinculats a edificis o edificis comparables
+- gestionar verificacions documentals amb suport OCR/IA
+- servir fitxers media com avatars i documents pujats
+- exposar una API preparada per ser consumida pel frontend Flutter/Web
 
-Dit d’una manera simple: si el frontend és la part visual que veu l’usuari, el backend és la part que decideix, comprova, processa i guarda la informació.
+Dit d’una manera simple: el frontend és la capa visible i el backend és la capa que valida, decideix, processa, protegeix i guarda la informació.
+
+---
+
+## Estat actual del projecte
+
+La branca principal d’integració funcional és:
+
+```text
+Desenvolupament
+```
+
+La branca utilitzada per al desplegament de staging a Virtech és:
+
+```text
+feature/staging-virtech
+```
+
+La branca `main` es reserva per a una versió final o estable quan `Desenvolupament` hagi estat revisada, netejada i validada.
 
 ---
 
 ## Tecnologies principals
 
-- **Python**
+- **Python 3.12**
 - **Django**
 - **Django REST Framework**
 - **JWT amb SimpleJWT**
 - **PostgreSQL**
-- **Docker**
-- **Docker Compose**
+- **Redis**
+- **Celery**
+- **Ollama**
 - **Nginx**
 - **Gunicorn**
+- **Docker**
+- **Docker Compose**
 - **django-cors-headers**
+- **drf-spectacular**
 - **GitHub Actions**
+- **SonarCloud**
+- **Coverage.py**
 - **DBeaver**
 - **Postman**
 
@@ -45,99 +74,97 @@ Dit d’una manera simple: si el frontend és la part visual que veu l’usuari,
 
 ## Arquitectura general
 
-El flux principal del sistema és:
+En entorn Docker/staging, el flux principal és:
 
 ```text
-Frontend Flutter
+Frontend Flutter/Web
 → Nginx
 → Gunicorn
 → Django REST Framework
 → PostgreSQL
 ```
 
-En l’arquitectura actual amb Docker i Nginx, el frontend no parla directament amb Gunicorn ni amb PostgreSQL. El frontend envia peticions HTTP a Nginx. Nginx les redirigeix cap al backend Django executat amb Gunicorn. Django aplica permisos, validacions i lògica de negoci. PostgreSQL desa la informació persistent.
+A més, el sistema pot utilitzar serveis auxiliars:
+
+```text
+Redis
+→ suport a tasques asíncrones i serveis interns
+
+Celery Worker
+→ execució de tasques en segon pla
+
+Ollama
+→ suport a processos d’extracció o verificació documental assistits per IA
+```
+
+En staging, Nginx és el punt d’entrada HTTP. Serveix el frontend web, redirigeix les rutes `/api/` i `/admin/` cap a Django/Gunicorn, serveix fitxers estàtics i també exposa `/media/` per a avatars i documents pujats.
 
 ---
 
-## Funcionalitats generals del backend
+## Serveis Docker principals
 
-Aquest backend dona suport a funcionalitats com:
+En el desplegament complet de Virtech, el `docker-compose.virtech.yml` treballa amb aquests serveis:
 
-- registre d’usuaris
-- login i logout
-- autenticació amb JWT
-- refresh de tokens
-- consulta de l’usuari autenticat
-- gestió de perfils
-- rols diferenciats
-- control d’accés segons rol i context
-- alta i consulta d’edificis
-- localitzacions i autocompletat de carrers
-- dades energètiques
-- classificació energètica estimada
-- Building Health Score
-- rànquing i posicionament
-- catàleg de millores
-- motor de simulació
-- simulacions preview
-- millores implementades
-- base per a validacions, auditoria i administració
+```text
+db              PostgreSQL
+redis           Redis
+ollama          Ollama
+web             Django + Gunicorn
+celery_worker   Celery worker
+nginx           Nginx
+```
 
-Algunes funcionalitats poden estar en estat parcial o en evolució segons la branca i l’estat del sprint.
+En entorn local, el `docker compose` pot variar segons la configuració disponible, però la idea és mantenir un entorn semblant al de staging sempre que sigui possible.
+
+---
+
+## Estructura funcional del backend
+
+Les apps principals del backend inclouen:
+
+```text
+apps/accounts         autenticació, perfils, rols i gestió d’usuaris
+apps/buildings        edificis, habitatges, dades energètiques, simulacions i millores
+apps/seasons          temporades i cicle de competició
+apps/leagues          lligues, categories i snapshots de rànquing
+apps/participations   participació d’edificis en lligues i temporades
+apps/community        votacions internes i funcionalitats comunitàries
+apps/chat             integració de xat i canals entre usuaris/edificis
+apps/notifications    notificacions internes
+apps/verification     verificació documental i suport OCR/IA
+apps/audit            auditoria i traçabilitat d’accions
+config                configuració principal de Django
+```
 
 ---
 
 ## Rols del sistema
 
-A nivell funcional, el sistema treballa amb aquests rols principals:
+El sistema diferencia tres rols funcionals principals:
 
-- **admin**: administrador de finca o rol amb capacitats de gestió
-- **owner**: propietari
-- **tenant**: llogater
-
-Els permisos no depenen només del nom del rol. També depenen del context de cada acció. Això vol dir que dues persones amb el mateix rol no necessàriament tenen accés als mateixos recursos si no estan vinculades al mateix edifici o àmbit de gestió.
-
----
-
-## Administració interna de Django
-
-A banda dels rols funcionals de l’aplicació, el projecte permet crear un superusuari de Django:
-
-```bash
-python manage.py createsuperuser
+```text
+admin   administrador de finca
+owner   propietari
+tenant  llogater
 ```
 
-Si es treballa amb Docker Compose:
+A més, Django també pot tenir usuaris `staff` o `superuser` per a administració interna.
 
-```bash
-docker compose exec web python manage.py createsuperuser
-```
-
-Aquest usuari serveix per accedir al panell intern de Django Admin i gestionar dades del sistema en entorns de desenvolupament o staging.
+Els permisos no depenen només del rol. També depenen del context. Per exemple, un administrador de finca només pot gestionar edificis sobre els quals té assignació efectiva, i un propietari o llogater només pot veure dades dels habitatges o edificis amb els quals està vinculat.
 
 ---
 
 ## Autenticació
 
-L’autenticació es basa en **JWT**.
+L’autenticació principal es basa en **JWT**.
 
-Quan un usuari inicia sessió correctament, el backend retorna els tokens necessaris perquè el frontend pugui continuar fent peticions autenticades.
-
-En les rutes protegides, el frontend ha d’enviar el token d’accés a la capçalera:
+Quan un usuari inicia sessió correctament, el backend retorna tokens d’accés i refresh. Les peticions autenticades han d’incloure:
 
 ```http
 Authorization: Bearer <access_token>
 ```
 
-El sistema també disposa d’endpoint de refresh i logout.
-
----
-
-## Endpoints principals
-
-Les rutes poden evolucionar amb el projecte, però actualment el frontend centralitza aquests endpoints a `api_config.dart`.
-
-### Accounts i autenticació
+Endpoints habituals:
 
 ```text
 POST /api/accounts/register/
@@ -148,139 +175,161 @@ GET  /api/accounts/me/
 GET  /api/accounts/me/edificis/
 ```
 
+També hi ha suport per autenticació OAuth amb Google, segons la configuració d’entorn disponible.
+
+---
+
+## Funcionalitats principals
+
+El backend dona suport a:
+
+- registre i login d’usuaris
+- gestió de perfils i avatars
+- rols funcionals i control d’accés
+- panell d’administració de Django
+- edificis, habitatges i localitzacions
+- autocompletat de carrers
+- importació i normalització de dades open data
+- dades energètiques d’habitatges i edificis
+- classificació energètica estimada o oficial
+- Building Health Score i puntuacions energètiques
+- mapes i consulta d’edificis amb coordenades
+- rànquings, lligues i temporades
+- evolució històrica i snapshots de rànquing
+- catàleg de millores energètiques
+- simulacions preview i simulacions persistides
+- votacions sobre simulacions de millora
+- acreditació i validació de millores implementades
+- insígnies i badges
+- votacions comunitàries
+- notificacions
+- canals de xat vinculats a edificis i edificis comparables
+- verificació documental amb extracció assistida
+- auditoria d’accions sensibles
+
+---
+
+## Endpoints principals
+
+Les rutes poden evolucionar, però alguns endpoints representatius són:
+
+### Accounts
+
+```text
+POST /api/accounts/register/
+POST /api/accounts/login/
+POST /api/accounts/refresh/
+POST /api/accounts/logout/
+GET  /api/accounts/me/
+PATCH /api/accounts/me/
+GET  /api/accounts/me/edificis/
+```
+
 ### Buildings
 
 ```text
-GET  /api/buildings/carrers/autocomplete/
-GET  /api/buildings/localitzacions/
 GET  /api/buildings/edificis/
 POST /api/buildings/edificis/
 GET  /api/buildings/edificis/<idEdifici>/
+PATCH /api/buildings/edificis/<idEdifici>/
+GET  /api/buildings/edificis/mapa/
+GET  /api/buildings/edificis/cerca/
+GET  /api/buildings/carrers/autocomplete/
 ```
 
-### Millores i simulacions
+### Habitatges i dades energètiques
+
+```text
+GET   /api/buildings/edificis/<idEdifici>/habitatges/
+GET   /api/buildings/edificis/<idEdifici>/dades_energetiques/
+PATCH /api/buildings/edificis/<idEdifici>/me/habitatge/<referenciaCadastral>/
+```
+
+### Simulacions i millores
 
 ```text
 GET  /api/buildings/millores/
 POST /api/buildings/edificis/<idEdifici>/simulacions/preview/
 GET  /api/buildings/edificis/<idEdifici>/simulacions/
+POST /api/buildings/edificis/<idEdifici>/simulacions/
+POST /api/buildings/edificis/<idEdifici>/simulacions/<simulacio_id>/sotmetre-votacio/
+POST /api/buildings/edificis/<idEdifici>/votacions-simulacions/<votacio_id>/votar/
+POST /api/buildings/edificis/<idEdifici>/simulacions/<simulacio_id>/acreditar-implementacio/
 GET  /api/buildings/edificis/<idEdifici>/millores-implementades/
+POST /api/buildings/millores-implementades/<id>/validar/
+```
+
+### Seasons, leagues i participations
+
+```text
+GET  /api/seasons/
+POST /api/seasons/
+GET  /api/leagues/
+GET  /api/participations/
+```
+
+### Community, chat i notifications
+
+```text
+GET  /api/community/...
+POST /api/community/...
+GET  /api/chat/...
+POST /api/chat/...
+GET  /api/notifications/
+```
+
+### Verification
+
+```text
+GET  /api/verification/
+POST /api/verification/
+GET  /api/verification/<id>/
+POST /api/verification/<id>/review/
 ```
 
 ---
 
 ## Requisits previs
 
-Abans de començar, convé tenir instal·lat:
+Abans de començar, és recomanable tenir instal·lat:
 
-- **Git**
-- **Python 3**
-- **pip**
-- **Docker Desktop** o **Docker Engine**
-- **Docker Compose**
-- opcionalment, **DBeaver**
-- opcionalment, **Postman**
+- Git
+- Docker Desktop o Docker Engine
+- Docker Compose
+- Python 3.12, si es vol executar fora de Docker
+- DBeaver, opcional
+- Postman, opcional
 
-En el flux actual del projecte, PostgreSQL no s’ha d’instal·lar necessàriament de manera nativa. La forma recomanada és utilitzar Docker.
-
----
-
-## Onboarding ràpid
-
-La seqüència recomanada actual és:
-
-1. clonar el repositori
-2. situar-se a la branca `Desenvolupament`
-3. crear o revisar el fitxer `.env`
-4. aixecar els serveis amb Docker Compose
-5. aplicar migracions
-6. crear superusuari si cal
-7. executar tests o checks
-8. comprovar que Nginx respon
-9. provar endpoints amb Postman o frontend
-10. obrir Pull Request quan el canvi estigui validat
+En el flux recomanat, PostgreSQL, Redis, Django i la resta de serveis s’aixequen amb Docker.
 
 ---
 
 ## Clonar el repositori
 
 ```bash
-git clone <URL_DEL_REPOSITORI_BACKEND>
-cd <NOM_DEL_REPOSITORI_BACKEND>
+git clone https://github.com/ScoreLab-Team/Backend-BuildRank.git
+cd Backend-BuildRank
 ```
 
 Situar-se a la branca d’integració:
 
 ```bash
-git checkout Desenvolupament
-git pull
-```
-
-Entrar a la carpeta on viu `manage.py`, si el projecte està dins d’una subcarpeta:
-
-```bash
-cd backend
+git switch Desenvolupament
+git pull --ff-only origin Desenvolupament
 ```
 
 ---
 
-## Configuració amb Docker Compose
+## Configuració d’entorn
 
-El flux recomanat és aixecar el backend amb Docker Compose.
+El backend necessita variables d’entorn per funcionar. Els fitxers `.env` amb secrets reals no s’han de pujar al repositori.
 
-```bash
-docker compose up -d --build
-```
-
-Aquesta comanda construeix i aixeca els serveis en segon pla.
-
-Serveis principals:
-
-```text
-db      → PostgreSQL
-web     → Django / Gunicorn
-nginx   → entrada HTTP del sistema
-```
-
-Comprovar l’estat:
-
-```bash
-docker compose ps
-```
-
-Consultar logs:
-
-```bash
-docker compose logs -f db
-docker compose logs -f web
-docker compose logs -f nginx
-```
-
-Aturar els serveis mantenint dades:
-
-```bash
-docker compose down
-```
-
-Aturar i eliminar volums locals:
-
-```bash
-docker compose down -v
-```
-
-Utilitza `down -v` només si vols començar de zero i perdre les dades locals.
-
----
-
-## Fitxer `.env`
-
-El backend necessita un fitxer `.env` amb la configuració de l’entorn. Aquest fitxer no s’ha de pujar al repositori si conté secrets o credencials.
-
-Exemple orientatiu per a Docker Compose:
+Exemple orientatiu per entorn local:
 
 ```env
+ENVIRONMENT=local
 DEBUG=True
-SECRET_KEY=<SECRET_LOCAL>
+SECRET_KEY=change-me-local-only
 
 DB_NAME=buildrank
 DB_USER=buildrank_user
@@ -293,16 +342,19 @@ ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,10.0.2.2,nattech.fib.upc.edu
 CORS_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1,http://10.0.2.2,http://nattech.fib.upc.edu:40400
 CSRF_TRUSTED_ORIGINS=http://localhost,http://127.0.0.1,http://10.0.2.2,http://nattech.fib.upc.edu:40400
 
+MEDIA_URL=/media/
+MEDIA_ROOT=/app/media
+
 ENABLE_DEBUG_TOOLBAR=False
 ```
 
-Quan Django s’executa dins de Docker Compose, `DB_HOST` normalment ha de ser:
+En Docker, normalment:
 
 ```env
 DB_HOST=db
 ```
 
-Si s’executa Django directament al sistema amb `runserver` i PostgreSQL està en Docker exposat al host, pot caldre:
+Si Django s’executa directament al sistema i PostgreSQL està en Docker exposat al host:
 
 ```env
 DB_HOST=127.0.0.1
@@ -310,12 +362,38 @@ DB_HOST=127.0.0.1
 
 ---
 
-## Preparar Django dins de Docker
+## Arrencar el backend amb Docker Compose
 
-Aplicar migracions:
+Des de l’arrel del repositori:
+
+```bash
+docker compose up -d --build
+```
+
+Comprovar serveis:
+
+```bash
+docker compose ps
+```
+
+Veure logs:
+
+```bash
+docker compose logs -f web
+docker compose logs -f db
+docker compose logs -f nginx
+```
+
+Executar migracions:
 
 ```bash
 docker compose exec web python manage.py migrate
+```
+
+Recollir estàtics:
+
+```bash
+docker compose exec web python manage.py collectstatic --noinput
 ```
 
 Crear superusuari:
@@ -324,45 +402,37 @@ Crear superusuari:
 docker compose exec web python manage.py createsuperuser
 ```
 
-Recollir estàtics si s’utilitza Nginx:
-
-```bash
-docker compose exec web python manage.py collectstatic --noinput
-```
-
 Comprovar configuració:
 
 ```bash
 docker compose exec web python manage.py check
 ```
 
----
-
-## Provar que el backend respon
-
-Si Nginx està exposat al port HTTP local:
+Aturar serveis mantenint dades:
 
 ```bash
-curl -I http://localhost
+docker compose down
 ```
 
-Si Nginx està exposat a un altre port, per exemple `8080`:
+Aturar serveis i eliminar volums locals:
 
 ```bash
-curl -I http://localhost:8080
+docker compose down -v
 ```
 
-Comprovar admin:
-
-```bash
-curl -I http://localhost/admin/
-```
+Utilitza `down -v` només si realment vols eliminar les dades locals.
 
 ---
 
-## Execució local alternativa sense Nginx
+## Execució local alternativa sense Docker complet
 
-També es pot executar el backend directament amb entorn virtual i `runserver`. Aquest mode és útil per depurar, però no representa el flux complet amb Nginx i Gunicorn.
+També es pot executar Django directament amb entorn virtual. Aquest mode és útil per depurar, però no representa el flux complet de staging amb Nginx i Gunicorn.
+
+Entrar a la carpeta del backend:
+
+```bash
+cd backend
+```
 
 Crear entorn virtual:
 
@@ -376,7 +446,7 @@ Activar-lo a Windows PowerShell:
 .venv\Scripts\Activate.ps1
 ```
 
-Activar-lo a Linux o macOS:
+Activar-lo a Linux/macOS:
 
 ```bash
 source .venv/bin/activate
@@ -394,25 +464,19 @@ Aplicar migracions:
 python manage.py migrate
 ```
 
-Crear superusuari:
-
-```bash
-python manage.py createsuperuser
-```
-
 Arrencar servidor de desenvolupament:
 
 ```bash
 python manage.py runserver
 ```
 
-Per defecte quedarà disponible a:
+Disponible per defecte a:
 
 ```text
 http://127.0.0.1:8000/
 ```
 
-Si es prova el frontend Flutter contra aquest mode des de l’emulador Android, cal usar:
+Si el frontend Flutter Android s’executa en emulador i vol parlar amb el backend local:
 
 ```bash
 flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000
@@ -420,127 +484,112 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000
 
 ---
 
-## Base de dades local amb Docker només PostgreSQL
+## Fitxers media i avatars
 
-Si no vols aixecar tot el stack i només vols PostgreSQL en Docker, pots crear un `compose.yaml` auxiliar:
+El backend pot gestionar fitxers pujats pels usuaris, com avatars o documents de verificació.
 
-```yaml
-services:
-  db:
-    image: postgres:16
-    container_name: buildrank-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: buildrank
-      POSTGRES_USER: buildrank_user
-      POSTGRES_PASSWORD: buildrank_pass
-    ports:
-      - "5432:5432"
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-
-volumes:
-  pg_data:
-```
-
-Aixecar PostgreSQL:
-
-```bash
-docker compose up -d
-```
-
-En aquest cas, si Django corre fora de Docker, el `.env` hauria d’utilitzar:
-
-```env
-DB_HOST=127.0.0.1
-DB_PORT=5432
-```
-
-Si el port `5432` està ocupat, pots canviar el mapeig a:
-
-```yaml
-ports:
-  - "5433:5432"
-```
-
-i després posar:
-
-```env
-DB_PORT=5433
-```
-
----
-
-## DBeaver
-
-Per inspeccionar PostgreSQL amb DBeaver:
-
-Si PostgreSQL està exposat al host:
+En staging, aquests fitxers es serveixen amb:
 
 ```text
-Host: localhost
-Port: 5432
-Database: buildrank
-Username: buildrank_user
-Password: buildrank_pass
+MEDIA_URL=/media/
+MEDIA_ROOT=/app/media
 ```
 
-Si has canviat el port a `5433`, utilitza `5433`.
+Nginx ha de tenir una regla equivalent a:
+
+```nginx
+location /media/ {
+    alias /app/media/;
+}
+```
+
+Això permet que el frontend pugui carregar URLs de media, per exemple avatars retornats per l’API.
+
+Els fitxers pujats en execució no s’han de versionar al repositori. Per això `.gitignore` exclou directoris com:
+
+```text
+backend/documents_millores/
+backend/verifications/
+```
 
 ---
 
-## Tests i qualitat
+## Tests
 
-El projecte incorpora proves per validar parts importants del backend.
+Executar tota la suite de tests dins Docker:
 
-Àrees prioritàries:
+```bash
+docker compose exec web python manage.py test -v 2
+```
 
-- autenticació
-- tokens
-- permisos
-- rols
-- accés segons edifici o context
-- validacions de dades
-- models i serializers
-- edificis
+Executar apps concretes:
+
+```bash
+docker compose exec web python manage.py test apps.accounts apps.buildings -v 2
+```
+
+Sense Docker, des de `backend/`:
+
+```bash
+python manage.py test -v 2
+```
+
+El projecte inclou tests de:
+
+- autenticació i JWT
+- permisos RBAC/ABAC
+- gestió de perfils i avatars
+- edificis i habitatges
 - dades energètiques
-- simulacions
-- millores
-- migracions
+- importació i normalització open data
+- simulacions de millores
+- millores implementades
+- badges
+- rànquings, lligues i temporades
+- votacions comunitàries
+- xat i moderació
+- notificacions
+- verificació documental
+- auditoria
 
-Executar tests principals:
+---
+
+## Coverage i SonarCloud
+
+El projecte utilitza **coverage.py** i **SonarCloud** per controlar qualitat.
+
+El workflow de SonarCloud:
+
+- aixeca l’entorn backend amb Docker Compose
+- executa la suite de tests completa
+- genera `coverage.xml`
+- ajusta el mapping del coverage generat dins Docker
+- executa l’anàlisi de SonarCloud
+- valida el Quality Gate
+
+Comandes equivalents dins Docker:
 
 ```bash
-docker compose exec web python manage.py test apps.accounts apps.buildings
-```
-
-O bé, sense Docker:
-
-```bash
-python manage.py test apps.accounts apps.buildings
-```
-
-Si `coverage` està instal·lat dins del contenidor:
-
-```bash
-docker compose exec web coverage run manage.py test apps.accounts apps.buildings
+docker compose exec web coverage run --source=apps,config manage.py test -v 2
 docker compose exec web coverage report
-docker compose exec web coverage xml
+docker compose exec web coverage xml -o coverage.xml
 ```
 
-Si apareix aquest error:
+Si apareix:
 
 ```text
 coverage: executable file not found in $PATH
 ```
 
-vol dir que `coverage` no està instal·lat dins del contenidor. Cal afegir-lo a `requirements.txt` o executar només `python manage.py test`.
+vol dir que `coverage` no està instal·lat dins del contenidor.
+
+Si SonarCloud mostra warnings relacionats amb paths com `/app`, cal revisar el mapping del `coverage.xml` generat dins Docker.
 
 ---
 
 ## Migracions
 
-Les migracions formen part de la història real de la base de dades. No s’han d’eliminar ni reescriure sense revisar-ne l’impacte.
+Les migracions representen la història real de la base de dades i s’han de tractar amb cura.
 
 Comandes útils:
 
@@ -550,51 +599,42 @@ docker compose exec web python manage.py migrate
 docker compose exec web python manage.py showmigrations
 ```
 
-Sense Docker:
+Bones pràctiques:
 
-```bash
-python manage.py makemigrations
-python manage.py migrate
-python manage.py showmigrations
-```
-
-Bones pràctiques amb migracions:
-
-- revisar-les abans de fer commit
+- revisar migracions abans de fer commit
 - no eliminar migracions ja compartides sense acord de l’equip
 - comprovar que s’apliquen en una base neta
-- incloure-les a la Pull Request si s’han canviat models
+- incloure migracions a la PR si s’han modificat models
 - validar que el frontend continua rebent els camps esperats
 
 ---
 
 ## CORS i CSRF
 
-Com que el frontend pot executar-se des d’un emulador Android, un mòbil físic o staging, és important configurar correctament CORS i CSRF.
+Com que el frontend pot executar-se des d’un navegador, un emulador Android, un mòbil físic o staging, cal configurar bé:
+
+```env
+ALLOWED_HOSTS=...
+CORS_ALLOWED_ORIGINS=...
+CSRF_TRUSTED_ORIGINS=...
+```
 
 Casos habituals:
 
 ```text
+http://localhost
+http://127.0.0.1
 http://10.0.2.2
-http://192.168.1.13
 http://nattech.fib.upc.edu:40400
 ```
 
-Si el frontend mostra errors de CORS o CSRF, cal revisar:
-
-```env
-CORS_ALLOWED_ORIGINS=...
-CSRF_TRUSTED_ORIGINS=...
-ALLOWED_HOSTS=...
-```
-
-També cal comprovar si el frontend està apuntant al port correcte. Amb Docker + Nginx, el frontend normalment parla amb Nginx i no amb `:8000`.
+Amb Docker + Nginx, el frontend normalment ha de parlar amb Nginx, no directament amb `:8000`.
 
 ---
 
 ## Staging a Virtech
 
-Virtech és l’entorn de staging del projecte. Serveix per validar el backend en una màquina compartida i accessible externament.
+Virtech és l’entorn de staging del projecte.
 
 Flux conceptual:
 
@@ -609,16 +649,36 @@ Internet
 → PostgreSQL
 ```
 
+La branca de deploy validada per staging és:
+
+```text
+feature/staging-virtech
+```
+
 Accés SSH:
 
 ```bash
 ssh alumne@nattech.fib.upc.edu -p 22040
 ```
 
-Carpeta recomanada del projecte:
+Ruta habitual del repositori a la VM:
 
 ```bash
-cd /opt/buildrank/app
+cd /opt/buildrank/app/Backend-BuildRank
+```
+
+Actualitzar staging:
+
+```bash
+git fetch origin
+git switch feature/staging-virtech
+git reset --hard origin/feature/staging-virtech
+```
+
+Validar compose:
+
+```bash
+docker-compose -f docker-compose.virtech.yml config > /tmp/buildrank-compose-config.txt && echo "Compose OK"
 ```
 
 Aixecar staging:
@@ -627,22 +687,22 @@ Aixecar staging:
 docker-compose -f docker-compose.virtech.yml up -d --build
 ```
 
-Aplicar migracions:
-
-```bash
-docker-compose -f docker-compose.virtech.yml exec web python manage.py migrate
-```
-
-Recollir estàtics:
-
-```bash
-docker-compose -f docker-compose.virtech.yml exec web python manage.py collectstatic --noinput
-```
-
 Veure serveis:
 
 ```bash
 docker-compose -f docker-compose.virtech.yml ps
+```
+
+Executar migracions:
+
+```bash
+docker-compose -f docker-compose.virtech.yml exec web python manage.py migrate --noinput
+```
+
+Comprovar Django:
+
+```bash
+docker-compose -f docker-compose.virtech.yml exec web python manage.py check
 ```
 
 Veure logs:
@@ -653,14 +713,14 @@ docker-compose -f docker-compose.virtech.yml logs -f nginx
 docker-compose -f docker-compose.virtech.yml logs -f db
 ```
 
-Provar des de la VM:
+Validar resposta interna:
 
 ```bash
-curl -I http://localhost:8080
+curl -I http://localhost:8080/
 curl -I http://localhost:8080/admin/
 ```
 
-Provar des de fora:
+Validar resposta pública:
 
 ```text
 http://nattech.fib.upc.edu:40400
@@ -668,78 +728,23 @@ http://nattech.fib.upc.edu:40400
 
 ---
 
-## Problemes habituals
+## Branques i flux de treball
 
-### El backend no respon
+Flux recomanat:
 
-Comprova serveis:
-
-```bash
-docker compose ps
+```text
+feature/* o chore/* o docs/*
+→ Pull Request
+→ Desenvolupament
+→ staging/release si cal
+→ main quan es tanqui una versió estable
 ```
-
-Consulta logs:
-
-```bash
-docker compose logs -f web
-docker compose logs -f nginx
-```
-
-### El Django Admin apareix sense CSS
-
-Executa:
-
-```bash
-docker compose exec web python manage.py collectstatic --noinput
-docker compose restart nginx
-```
-
-### Les migracions fallen
-
-Comprova estat:
-
-```bash
-docker compose exec web python manage.py showmigrations
-docker compose exec web python manage.py migrate
-```
-
-### El frontend no connecta
-
-Revisa:
-
-- que Nginx està aixecat
-- que el frontend apunta a la URL correcta
-- que `ALLOWED_HOSTS` inclou el host necessari
-- que CORS i CSRF estan configurats
-- que no s’està usant `:8000` quan el flux és Docker + Nginx
-
-### El port 5432 està ocupat
-
-Canvia el port exposat de PostgreSQL o atura el servei que ocupa el port.
-
-### El port 80 està ocupat
-
-Si Nginx local o un altre servei ocupa el port, cal aturar-lo o canviar el mapeig de ports del compose.
-
----
-
-## Flux de treball recomanat amb Git
-
-1. actualitzar `Desenvolupament`
-2. crear branca pròpia
-3. fer els canvis
-4. provar en local
-5. executar tests o checks
-6. revisar migracions
-7. fer commit
-8. pujar branca
-9. obrir Pull Request
 
 Exemple:
 
 ```bash
-git checkout Desenvolupament
-git pull
+git switch Desenvolupament
+git pull --ff-only origin Desenvolupament
 git switch -c feature/nom-del-canvi
 git add .
 git commit -m "feat: descripció breu del canvi"
@@ -750,38 +755,129 @@ No s’hauria de fer push directe a `main`.
 
 ---
 
+## Preparació de release cap a main
+
+Abans de portar `Desenvolupament` cap a `main`, revisar:
+
+- CI verd
+- SonarCloud Quality Gate passat
+- tests principals executats
+- README actualitzat
+- `.gitignore` revisat
+- cap fitxer generat o local versionat
+- secrets fora del repositori
+- migracions aplicables des d’una base neta
+- frontend i backend alineats
+- staging validat si hi ha canvis de deploy
+
+---
+
+## Problemes habituals
+
+### Docker Desktop no està arrencat
+
+En Windows pot aparèixer:
+
+```text
+open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified
+```
+
+Solució: obrir Docker Desktop i esperar que el motor estigui actiu.
+
+### El backend no respon
+
+```bash
+docker compose ps
+docker compose logs -f web
+docker compose logs -f nginx
+```
+
+### El Django Admin apareix sense CSS
+
+```bash
+docker compose exec web python manage.py collectstatic --noinput
+docker compose restart nginx
+```
+
+### Les migracions fallen
+
+```bash
+docker compose exec web python manage.py showmigrations
+docker compose exec web python manage.py migrate
+```
+
+### El frontend no connecta
+
+Revisar:
+
+- URL base del frontend
+- port utilitzat
+- Nginx actiu
+- `ALLOWED_HOSTS`
+- `CORS_ALLOWED_ORIGINS`
+- `CSRF_TRUSTED_ORIGINS`
+
+### Els avatars no carreguen
+
+Comprovar:
+
+- `MEDIA_URL=/media/`
+- `MEDIA_ROOT=/app/media`
+- volum de media muntat al servei `web`
+- volum de media muntat a `nginx`
+- regla `location /media/` a Nginx
+- que la URL retornada per l’API sigui accessible des del navegador
+
+### Nginx falla amb `unknown directive "upstream"`
+
+Pot passar si `nginx.virtech.conf` té un BOM invisible al principi del fitxer. Cal desar-lo en UTF-8 sense BOM.
+
+### SonarCloud falla per coverage
+
+Revisar:
+
+- que s’executen tots els tests
+- que `coverage.xml` existeix
+- que el mapping del path dins Docker és correcte
+- que el workflow té permisos per modificar el fitxer copiat des del contenidor
+
+---
+
 ## Bones pràctiques
 
 - no pujar `.env`
-- no pujar secrets, credencials ni claus
+- no pujar secrets ni tokens
+- no versionar fitxers generats
+- no versionar media/uploads
+- no versionar `coverage.xml`, `htmlcov`, `.scannerwork` ni `__pycache__`
 - revisar migracions abans de fer commit
 - executar tests quan es toqui lògica rellevant
-- comprovar que Docker Compose aixeca correctament
-- documentar canvis importants de configuració
-- mantenir clara la separació entre local i staging
+- revisar permisos quan es toquin rols o accessos
+- validar CORS/CSRF quan canviï la URL del frontend
 - no exposar PostgreSQL públicament
-- fer servir Nginx com a entrada en el flux Docker
-- revisar CORS i CSRF quan canviï la URL del frontend
-- relacionar Pull Requests amb tasques o User Stories de Taiga
+- fer servir Nginx com a entrada del sistema en Docker/staging
+- mantenir separades les branques de feature, staging, desenvolupament i main
+- relacionar Pull Requests amb tasques o User Stories quan sigui possible
 
 ---
 
 ## Resum ràpid
 
-Si ets nou al projecte, queda’t amb aquesta idea:
+Si ets nou al projecte:
 
-- **Django** és el framework principal del backend
-- **Django REST Framework** construeix la API
-- **JWT** s’utilitza per autenticar usuaris
+- **Django** implementa el backend
+- **Django REST Framework** exposa l’API
+- **JWT** autentica els usuaris
 - **PostgreSQL** desa les dades
-- **Docker Compose** aixeca els serveis
+- **Redis** i **Celery** donen suport a tasques internes
+- **Ollama** dona suport a verificació documental assistida
 - **Nginx** és la porta d’entrada HTTP
-- **Gunicorn** executa Django en un entorn més realista
-- **Django Admin** serveix per administració interna
-- **DBeaver** ajuda a inspeccionar la base de dades
-- **Postman** ajuda a provar endpoints
-- els rols funcionals principals són **admin**, **owner** i **tenant**
-- la branca d’integració funcional és **Desenvolupament**
+- **Gunicorn** executa Django en entorn Docker/staging
+- **Docker Compose** aixeca l’entorn
+- **SonarCloud** valida qualitat i cobertura
+- **Virtech** és l’entorn de staging
+- **Desenvolupament** és la branca d’integració
+- **feature/staging-virtech** és la branca de deploy a Virtech
 
 ---
 

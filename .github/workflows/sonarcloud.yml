@@ -12,6 +12,7 @@ jobs:
   sonarcloud:
     name: SonarCloud analysis
     runs-on: ubuntu-latest
+    if: github.repository == 'ScoreLab-Team/Backend-BuildRank'
 
     steps:
       - name: Checkout repository

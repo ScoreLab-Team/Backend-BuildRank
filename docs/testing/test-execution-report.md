@@ -1,21 +1,21 @@
 # Test Execution Report – Accounts Backend i Buildings Backend
 
 ## Executor
-Martí Borràs  
-Mireia Brufau  
-Eduard Corrons  
+Martí Borràs
+Mireia Brufau
+Eduard Corrons
 Oscar Montiel
 
 ## Branca
-testing-us1-us7  
-feature/testing  
+testing-us1-us7
+feature/testing
 feature/rankingtests
 testing/accounts-coverage-hardening
 
 ## Àmbit
-- **Mòdul Accounts:** US1, US2, US3, US4, US5, US6 i US7  
-- **Mòdul Buildings (gestió i permisos):** US10, US11, US12, US14, US19, US20  
-- **Mòdul Simulacions:** US29 i US30  
+- **Mòdul Accounts:** US1, US2, US3, US4, US5, US6 i US7
+- **Mòdul Buildings (gestió i permisos):** US10, US11, US12, US14, US19, US20
+- **Mòdul Simulacions:** US29 i US30
 - **Mòdul Lligues i Participacions: ** US21, US24, US28
 
 ## Comandes executades
@@ -45,8 +45,8 @@ docker compose exec web coverage report --include="apps/leagues/*"
 ```
 
 ## Resultats
-- **manage.py check:** OK  
-- **makemigrations --check --dry-run:** No changes detected  
+- **manage.py check:** OK
+- **makemigrations --check --dry-run:** No changes detected
 
 ### Mòdul Accounts
 - **Tests executats (apps.accounts):** 96
@@ -59,8 +59,8 @@ docker compose exec web coverage report --include="apps/leagues/*"
 - **Coverage específic (views.py):** 96%
 
 ### Mòdul Buildings (simulacions)
-- **Tests executats (apps.buildings):** 106  
-- **Tests correctes:** 106  
+- **Tests executats (apps.buildings):** 106
+- **Tests correctes:** 106
 - **Tests skipped:** 0
 - **Coverage (apps.buildings):** 84%
 - **Coverage específic (engine.py):** 99%
@@ -74,12 +74,12 @@ docker compose exec web coverage report --include="apps/leagues/*"
 
 ## Validacions realitzades
 ### Django
-- Validació de configuració correcta del projecte  
-- No s’han detectat errors de sistema  
+- Validació de configuració correcta del projecte
+- No s’han detectat errors de sistema
 
 ### Docker
-- Entorn aixecat correctament amb docker compose  
-- Execució de comandes dins del contenidor sense errors  
+- Entorn aixecat correctament amb docker compose
+- Execució de comandes dins del contenidor sense errors
 
 ### Postman
 S’han validat manualment els endpoints:
@@ -92,20 +92,20 @@ S’han validat manualment els endpoints:
 - `PATCH /me/role/`
 
 Verificant:
-- Codis HTTP correctes  
-- Format de resposta JSON  
-- Gestió d’errors  
+- Codis HTTP correctes
+- Format de resposta JSON
+- Gestió d’errors
 
-Execució d'una simulació amb millores d'aïllament i fotovoltaica des de l'emulador. 
+Execució d'una simulació amb millores d'aïllament i fotovoltaica des de l'emulador.
 S'ha verificat la recepció correcta del POST i el càlcul de resultats en temps real.
 
 ### DBeaver
 S’ha verificat la persistència de:
 
-- Usuaris  
-- Perfils  
-- Rols  
-- Logs d’autenticació  
+- Usuaris
+- Perfils
+- Rols
+- Logs d’autenticació
 
 Confirmant coherència entre API i base de dades PostgreSQL.
 

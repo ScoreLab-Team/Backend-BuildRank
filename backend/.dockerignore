@@ -37,12 +37,11 @@ Thumbs.db
 dist/
 build/
 
-# Media/static generated
-backend/media/
-backend/staticfiles/
+# Runtime volumes (mounted by docker-compose, do not bake into image)
+staticfiles/
+verifications/
 
 # Large temp/docs artifacts
-out/
 docs/testing/logs/
 docs/testing/coverage/
 docs/performance/logs/

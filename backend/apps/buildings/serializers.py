@@ -39,7 +39,7 @@ class LocalitzacioSerializer(serializers.ModelSerializer):
     class Meta:
         model = Localitzacio
         fields = "__all__"
-    
+
     # validacio codi postal (5 digits numerics)
     def validate_codiPostal(self, value):
         if not re.match(r'^\d{5}$', value):
@@ -55,7 +55,7 @@ class LocalitzacioSerializer(serializers.ModelSerializer):
                 "La latitud ha de ser un valor entre -90 i 90."
             )
         return value
-    
+
     # validacio rang longitud (entre -180 i 180)
     def validate_longitud(self, value):
         if value < -180 or value > 180:
@@ -63,7 +63,7 @@ class LocalitzacioSerializer(serializers.ModelSerializer):
                 "La longitud ha de ser un valor entre -180 i 180."
             )
         return value
-    
+
     # validacio localitzacio (comprovar que la direccio existeix a OSM)
     def validate(self, data):
         carrer = data.get("carrer")
@@ -109,7 +109,7 @@ class DadesEnergetiquesSerializer(serializers.ModelSerializer):
     class Meta:
         model = DadesEnergetiques
         fields = "__all__"
-    
+
 
 # Resum habitatge (sense dades energètiques)
 class HabitatgeResumSerializer(serializers.ModelSerializer):
@@ -137,7 +137,7 @@ class HabitatgeDetailSerializer(serializers.ModelSerializer):
                 "La superfície de l'habitatge ha de ser més gran que 0."
             )
         return value
-    
+
     # validacio any reforma
     def validate(self, data):
         any_reforma = data.get('anyReforma')
@@ -150,7 +150,7 @@ class HabitatgeDetailSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     "anyReforma": f"L'any de reforma no pot ser del futur (màxim {any_actual})."
                 })
-            
+
             # comprovem que no sigui anterior a la construccio de l'edifici
             if edifici and any_reforma < edifici.anyConstruccio:
                 raise serializers.ValidationError({

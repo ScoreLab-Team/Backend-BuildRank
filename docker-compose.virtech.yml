@@ -33,7 +33,6 @@ services:
       - /opt/buildrank/data/ollama:/root/.ollama
     expose:
       - "11434"
-    #mem_limit: 1500m
     environment:
       OLLAMA_MAX_LOADED_MODELS: "1"
     healthcheck:
@@ -48,10 +47,10 @@ services:
     restart: unless-stopped
     env_file:
       - /opt/buildrank/env/backend.env
-    command: sh -c "python manage.py collectstatic --noinput && gunicorn --config gunicorn.staging.conf.py config.wsgi:application"
+    command: sh -c "python manage.py collectstatic --noinput && python manage.py migrate --noinput && gunicorn --config gunicorn.staging.conf.py config.wsgi:application"
     volumes:
       - static_volume:/app/staticfiles
-      - media_volume:/app/verifications
+      - media_volume:/app/media
     depends_on:
       db:
         condition: service_healthy
@@ -66,9 +65,8 @@ services:
     env_file:
       - /opt/buildrank/env/backend.env
     command: celery -A config worker --loglevel=info --concurrency=1
-    #mem_limit: 1800m
     volumes:
-      - media_volume:/app/verifications
+      - media_volume:/app/media
     depends_on:
       db:
         condition: service_healthy
@@ -86,6 +84,7 @@ services:
       - ./nginx/nginx.virtech.conf:/etc/nginx/conf.d/default.conf:ro
       - /opt/buildrank/app/frontend_build:/usr/share/nginx/html:ro
       - static_volume:/app/staticfiles:ro
+      - media_volume:/app/media:ro
     depends_on:
       - web
 

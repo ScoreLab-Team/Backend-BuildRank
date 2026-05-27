@@ -10,6 +10,11 @@ venv/
 # Django
 db.sqlite3
 *.sqlite3
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
 media/
 staticfiles/
 
@@ -24,3 +29,29 @@ staticfiles/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Datasets locals grans / open data
+cee.csv
+backend/cee.csv
+
+# User-uploaded media files
+backend/media/
+
+# Generated/local artifacts
+__pycache__/
+*.py[cod]
+*.class
+out/
+.venv/
+*.venv*
+.pytest_cache/
+.scannerwork/
+htmlcov/
+coverage.xml
+
+# Runtime media/uploads
+backend/documents_millores/
+backend/verifications/
+
+# Generated testing reports
+docs/testing/coverage/

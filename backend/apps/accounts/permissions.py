@@ -1,0 +1,136 @@
+from rest_framework.permissions import BasePermission
+from rest_framework.exceptions import PermissionDenied
+
+from apps.accounts.models import AccessDenialLog, RoleChoices
+
+
+def _get_client_ip(request):
+    x_forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded:
+        return x_forwarded.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR')
+
+
+def _deny(request, accio, motiu):
+    user = request.user if request.user.is_authenticated else None
+    role = getattr(getattr(user, 'profile', None), 'role', '')
+    AccessDenialLog.objects.create(
+        user=user,
+        role=role,
+        accio=accio,
+        motiu=motiu,
+        ip=_get_client_ip(request),
+    )
+    raise PermissionDenied(detail=motiu)
+
+
+# ---------------------------------------------------------------------------
+# RBAC: permisos per rol
+# ---------------------------------------------------------------------------
+
+class IsAdminSistema(BasePermission):
+    """
+    Permiso: AdminSistema de plataforma.
+    Segons la matriu de permisos, aquest rol queda fora del RBAC funcional de la APP
+    i s'identifica estrictament per is_superuser (Django platform scope).
+    """
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.is_superuser
+
+
+class IsAdminFinca(BasePermission):
+    """
+    Permís per a administradors de finca.
+    - Admin de sistema: is_superuser
+    - Admin de finca: role == admin
+    """
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+
+        if request.user.is_superuser:
+            return True
+
+        role = getattr(request.user.profile, "role", None)
+        return role == RoleChoices.ADMIN
+
+
+class IsResident(BasePermission):
+    """Llogater/Propietari, Administrador de Finca o Admin del Sistema."""
+    def has_permission(self, request, view):
+        return request.user.is_authenticated
+
+
+# ---------------------------------------------------------------------------
+# ABAC: validació per atributs d'edifici
+# ---------------------------------------------------------------------------
+
+class ABACMixin:
+    """
+    Mixin per a vistes DRF que necessiten validació ABAC.
+
+    Ús a la vista:
+        class MevaVista(ABACMixin, APIView):
+            def get(self, request, edifici_id):
+                self.check_edifici_access(request, edifici_id)
+                ...
+    """
+
+    def check_edifici_access(self, request, edifici_id):
+        """
+        Regles d'accés:
+        - AdminSistema: accés total (is_superuser)
+        - AdminFinca: l'edifici ha d'estar a la seva cartera gestionada
+        - Owner / Tenant: han de tenir vinculació directa amb un habitatge d'aquest edifici
+        """
+        user = request.user
+        role = getattr(getattr(user, "profile", None), "role", None)
+        accio = f"{request.method} edifici={edifici_id}"
+
+        if user.is_superuser:
+            return  # Accés total
+
+        if role == RoleChoices.ADMIN:
+            from apps.buildings.models import Edifici
+            from apps.verification.access import effective_admin_buildings_queryset
+
+            te_acces = effective_admin_buildings_queryset(
+                Edifici.objects.filter(idEdifici=edifici_id),
+                user,
+            ).exists()
+            if not te_acces:
+                _deny(
+                    request,
+                    accio,
+                    "L'edifici no pertany a la cartera de gestió aprovada de l'administrador."
+                )
+        else:
+            te_acces = user.habitatges_on_resideix.filter(edifici__idEdifici=edifici_id).exists()
+            if not te_acces:
+                _deny(
+                    request,
+                    accio,
+                    "L'usuari no té vinculació directa amb aquest edifici."
+                )
+
+    def check_twin_building_access(self, request, edifici_a_id, edifici_b_id):
+        """
+        Regla C: Twin Building – els dos edificis han de compartir tipologia i zona climàtica.
+        """
+        from apps.buildings.models import Edifici
+
+        accio = f"twin_building edifici_a={edifici_a_id} edifici_b={edifici_b_id}"
+
+        try:
+            a = Edifici.objects.select_related('localitzacio').get(idEdifici=edifici_a_id)
+            b = Edifici.objects.select_related('localitzacio').get(idEdifici=edifici_b_id)
+        except Edifici.DoesNotExist:
+            _deny(request, accio, "Un o ambdós edificis no existeixen.")
+
+        if a.tipologia != b.tipologia:
+            _deny(request, accio, "Els edificis no comparteixen tipologia.")
+
+        zona_a = getattr(a.localitzacio, 'zonaClimatica', None)
+        zona_b = getattr(b.localitzacio, 'zonaClimatica', None)
+        if not zona_a or not zona_b or zona_a != zona_b:
+            _deny(request, accio, "Els edificis no comparteixen zona climàtica.")

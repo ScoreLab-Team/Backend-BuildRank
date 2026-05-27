@@ -1,0 +1,223 @@
+# apps/buildings/permissions.py
+from rest_framework.permissions import BasePermission
+from apps.accounts.models import RoleChoices, AccessDenialLog
+from config import settings
+
+def get_client_ip(request):
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        return x_forwarded_for.split(',')[0]
+    return request.META.get('REMOTE_ADDR')
+
+def log_denial(request, accio, motiu, edifici_id=''):
+    role = ''
+    if request.user.is_authenticated and hasattr(request.user, 'profile'):
+        role = request.user.profile.role
+    AccessDenialLog.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        role=role,
+        edifici_sol_licitat=str(edifici_id),
+        accio=accio,
+        motiu=motiu,
+        ip=get_client_ip(request)
+    )
+
+
+class EsAdminEdifici(BasePermission):
+    """
+    RBAC: només rol 'admin'
+    ABAC: ha de ser l'administrador de finca d'aquest edifici concret
+    """
+    def has_permission(self, request, view):
+        # RBAC
+        if not request.user.is_authenticated:
+            return False
+        if not hasattr(request.user, 'profile'):
+            return False
+        if request.user.profile.role != RoleChoices.ADMIN:
+            log_denial(request, view.action, 'Rol insuficient (requerit: admin)')
+            return False
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        # ABAC
+        if not _es_admin_finca_efectiu(request.user, obj):
+            log_denial(request, view.action, 'No és admin d\'aquest edifici', obj.idEdifici)
+            return False
+        return True
+
+
+class EsAdminOPropietariEdifici(BasePermission):
+    """
+    RBAC: rol 'admin', 'owner' o 'tenant'
+    ABAC: ha de tenir relació amb l'edifici (admin o propietari d'un habitatge)
+    """
+    def has_permission(self, request, view):
+        # RBAC: qualsevol rol autenticat
+        if not request.user.is_authenticated:
+            log_denial(request, view.action, 'Usuari no autenticat')
+            return False
+        if not hasattr(request.user, 'profile'):
+            return False
+        if request.user.profile.role not in (RoleChoices.ADMIN, RoleChoices.OWNER, RoleChoices.TENANT):
+            log_denial(request, view.action, 'Rol funcional no permès')
+            return False
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        role = user.profile.role
+
+        # ABAC + RBAC combinats
+        if role == RoleChoices.ADMIN and _es_admin_finca_efectiu(user, obj):
+            return True
+        te_vinculacio_edifici = (
+            obj.habitatges.filter(usuari=user).exists()
+            or obj.habitatges.filter(propietari=user).exists()
+            or obj.habitatges.filter(llogater=user).exists()
+        )
+
+        if role == RoleChoices.OWNER and te_vinculacio_edifici:
+            return True
+
+        if role == RoleChoices.TENANT:
+            # Tenant: només lectura per matriu de permisos.
+            if request.method in ('GET', 'HEAD', 'OPTIONS') and te_vinculacio_edifici:
+                return True
+
+        log_denial(request, view.action, 'Sense relació amb l\'edifici', obj.idEdifici)
+        return False
+
+
+class EsAdminOPropietariHabitatge(BasePermission):
+    """
+    RBAC: rol 'admin', 'owner' o 'tenant'
+    ABAC: ha de tenir relació amb l'habitatge concret
+    """
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            log_denial(request, view.action, 'Usuari no autenticat')
+            return False
+        if not hasattr(request.user, 'profile'):
+            return False
+        if request.user.profile.role not in (RoleChoices.ADMIN, RoleChoices.OWNER, RoleChoices.TENANT):
+            log_denial(request, view.action, 'Rol funcional no permès')
+            return False
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        # obj és un Habitatge
+        user = request.user
+        role = user.profile.role
+
+        if role == RoleChoices.ADMIN and _es_admin_finca_efectiu(user, obj.edifici):
+            return True
+        if role in (RoleChoices.OWNER, RoleChoices.TENANT) and obj.te_vinculacio(user):
+            return True
+
+        log_denial(request, view.action, 'Sense relació amb l\'habitatge',
+                   obj.edifici.idEdifici)
+        return False
+
+
+class EsOwnerOAdminHabitatge(BasePermission):
+    """
+    RBAC: rol 'owner' o 'admin'
+    ABAC: ha de tenir relació amb l'habitatge concret
+    """
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            log_denial(request, view.action, 'Usuari no autenticat')
+            return False
+        if not hasattr(request.user, 'profile'):
+            return False
+        if request.user.profile.role not in (RoleChoices.ADMIN, RoleChoices.OWNER):
+            log_denial(request, view.action, 'Rol insuficient (requerit: owner o admin)')
+            return False
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        role = user.profile.role
+
+        if role == RoleChoices.ADMIN and _es_admin_finca_efectiu(user, obj.edifici):
+            return True
+        if role == RoleChoices.OWNER and obj.es_propietari(user):
+            return True
+
+        log_denial(request, view.action, 'Sense relació owner/admin amb l\'habitatge', obj.edifici.idEdifici)
+        return False
+
+
+class EsOwnerOAdminDadesEnergetiques(BasePermission):
+    """
+    RBAC: rol 'owner' o 'admin'
+    ABAC: dades energètiques del seu habitatge o edifici administrat
+    """
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            log_denial(request, view.action, 'Usuari no autenticat')
+            return False
+        if not hasattr(request.user, 'profile'):
+            return False
+        if request.user.profile.role not in (RoleChoices.ADMIN, RoleChoices.OWNER):
+            log_denial(request, view.action, 'Rol insuficient (requerit: owner o admin)')
+            return False
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        role = user.profile.role
+
+        habitatge = Habitatge = None
+        try:
+            from .models import Habitatge as _Habitatge
+            habitatge = _Habitatge.objects.select_related('edifici').get(dadesEnergetiques=obj)
+        except Exception:
+            log_denial(request, view.action, 'No es pot resoldre habitatge de dades energètiques')
+            return False
+
+        if role == RoleChoices.ADMIN and habitatge.edifici.administradorFinca == user:
+            return True
+        if role == RoleChoices.OWNER and habitatge.es_propietari(user):
+            return True
+
+        log_denial(request, view.action, 'Sense relació owner/admin amb dades energètiques', habitatge.edifici.idEdifici)
+        return False
+    
+
+
+class EsAdminMilloraImplementada(BasePermission):
+    """
+    Només l'administrador de sistema pot validar o rebutjar millores implementades.
+
+    L'administrador de finca pot acreditar que ha executat una millora i pujar documentació,
+    però la validació final és una acció sensible perquè pot afectar l'estat de la simulació
+    i la puntuació de l'edifici. Per això queda reservada al superuser / admin de sistema.
+    """
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            log_denial(request, view.action, 'Usuari no autenticat')
+            return False
+
+        if not request.user.is_superuser:
+            log_denial(request, view.action, 'Només admin sistema pot validar millores implementades')
+            return False
+
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        return self.has_permission(request, view)
+
+
+
+def _es_admin_finca_efectiu(user, edifici):
+    from apps.verification.access import admin_assignment_is_effective
+    return admin_assignment_is_effective(user, edifici)
+
+
+class HasAPIKey(BasePermission):
+    def has_permission(self, request, view):
+        api_key = request.headers.get("Authorization")
+
+        return api_key == f"Api-Key {settings.THIRD_PARTY_API_KEY}"

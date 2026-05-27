@@ -1,12 +1,60 @@
 from django.urls import path
-from rest_framework_simplejwt.views import TokenRefreshView
 
-from apps.accounts.views import RegisterView, LoginView, LogoutView, MeView
+from apps.accounts.views import (
+    RegisterView, LoginView, TokenRefreshView, LogoutView,
+    PasswordResetRequestView, PasswordResetConfirmView,
+    MeView, MeRoleView,
+    MeEdificisView, AssignarResidentView, AssignarAdminEdificiView,
+    GoogleOAuthView,
+    UserListView, UserDetailView,
+    UserBlockView, UserUnblockView,
+    UserSuspendView, UserUnsuspendView,
+    AdminDashboardSummaryView,
+)
 
 urlpatterns = [
+    # Auth
     path("register/", RegisterView.as_view(), name="register"),
     path("login/", LoginView.as_view(), name="login"),
+    path("oauth/google/", GoogleOAuthView.as_view(), name="google-oauth"),
     path("refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("logout/", LogoutView.as_view(), name="logout"),
+    path(
+        "password-reset/",
+        PasswordResetRequestView.as_view(),
+        name="password-reset",
+    ),
+    path(
+        "password-reset-confirm/",
+        PasswordResetConfirmView.as_view(),
+        name="password-reset-confirm",
+    ),
     path("me/", MeView.as_view(), name="me"),
+    path("me/role/", MeRoleView.as_view(), name="me-role"),
+
+    # Consulta: edificis accessibles per l'usuari autenticat
+    path("me/edificis/", MeEdificisView.as_view(), name="me-edificis"),
+    path("admin/dashboard-summary/", AdminDashboardSummaryView.as_view(), name="admin-dashboard-summary"),
+
+    # Assignació: resident → habitatge (AdminFinca, ABAC-B)
+    path(
+        "habitatges/<str:ref_cadastral>/assignar-resident/",
+        AssignarResidentView.as_view(),
+        name="assignar-resident",
+    ),
+
+    # Assignació: admin → edifici (AdminSistema only)
+    path(
+        "edificis/<int:id_edifici>/assignar-admin/",
+        AssignarAdminEdificiView.as_view(),
+        name="assignar-admin-edifici",
+    ),
+
+    # Gestió d'usuaris (US49) — AdminSistema only
+    path("users/", UserListView.as_view(), name="user-list"),
+    path("users/<int:pk>/", UserDetailView.as_view(), name="user-detail"),
+    path("users/<int:pk>/block/", UserBlockView.as_view(), name="user-block"),
+    path("users/<int:pk>/unblock/", UserUnblockView.as_view(), name="user-unblock"),
+    path("users/<int:pk>/suspend/", UserSuspendView.as_view(), name="user-suspend"),
+    path("users/<int:pk>/unsuspend/", UserUnsuspendView.as_view(), name="user-unsuspend"),
 ]

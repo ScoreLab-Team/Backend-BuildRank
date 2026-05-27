@@ -1,32 +1,28 @@
 # apps/buildings/services/building_lookup.py
 from apps.buildings.models import Edifici, Localitzacio
+from apps.buildings.services.normalitzacio import normalitzar_carrer
 
 
 def buscar_edifici(carrer: str, numero: int | None) -> tuple[Edifici | None, str]:
-    """
-    Cerca l'edifici a la BD seguint dos nivells de precisió:
-      1. Coincidència exacta: carrer + número.
-      2. Coincidència per carrer: qualsevol edifici actiu del mateix carrer.
+    carrer_norm = normalitzar_carrer(carrer)
+    print(f"Buscant edifici per carrer='{carrer}' (norm='{carrer_norm}') i numero='{numero}'")
 
-    Retorna (edifici, nivell_coincidencia).
-    nivell_coincidencia: "exacta" | "carrer" | "cap"
-    """
-    print(f"Buscant edifici per carrer='{carrer}' i numero='{numero}'")
-    qs_carrer = Localitzacio.objects.filter(
-        carrer__iexact=carrer,
-        edifici__actiu=True,
+    totes = Localitzacio.objects.filter(
+        edifici__actiu=True
     ).select_related("edifici")
 
-    print(f"Localitzacions trobades al carrer '{carrer}': {qs_carrer.count()}")
-    if not qs_carrer.exists():
+    qs_carrer = [loc for loc in totes if normalitzar_carrer(loc.carrer) == carrer_norm]
+
+    print(f"Localitzacions trobades al carrer '{carrer_norm}': {len(qs_carrer)}")
+    if not qs_carrer:
         return None, "cap"
 
     if numero is not None:
-        loc_exacta = qs_carrer.filter(numero=numero).first()
+        loc_exacta = next((loc for loc in qs_carrer if loc.numero == numero), None)
         if loc_exacta and loc_exacta.edifici:
             return loc_exacta.edifici, "exacta"
 
-    loc_carrer = qs_carrer.first()
+    loc_carrer = qs_carrer[0]
     if loc_carrer and loc_carrer.edifici:
         return loc_carrer.edifici, "carrer"
 

@@ -83,14 +83,14 @@ from .schemas import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
- 
+
 def _get_client_ip(request):
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
     if x_forwarded_for:
         return x_forwarded_for.split(',')[0].strip()
     return request.META.get('REMOTE_ADDR')
- 
- 
+
+
 def _registrar_audit(*, edifici, accio, usuari, request,
                      camps_modificats=None, motiu=''):
     """
@@ -208,7 +208,7 @@ def _validar_consistencia_desactivacio(edifici):
     (la vista decideix si blocar o no).
     """
     advertencies = []
- 
+
     # 1. Millores implementades en procés
     millores_pendents = edifici.implementacions.filter(
         estatValidacio=EstatValidacio.EN_REVISIO
@@ -217,7 +217,7 @@ def _validar_consistencia_desactivacio(edifici):
         advertencies.append(
             f"Hi ha {millores_pendents} millora(es) implementada(es) en procés de validació."
         )
- 
+
     # 2. Simulacions actives (creades en els últims 90 dies)
     limit_simulacions = timezone.now().date() - timezone.timedelta(days=90)
     simulacions_recents = edifici.simulacions.filter(
@@ -227,14 +227,14 @@ def _validar_consistencia_desactivacio(edifici):
         advertencies.append(
             f"Hi ha {simulacions_recents} simulació(ons) de millora dels últims 90 dies."
         )
- 
+
     # 3. Habitatges amb usuaris assignats
     habitatges_ocupats = edifici.habitatges.filter(usuari__isnull=False).count()
     if habitatges_ocupats:
         advertencies.append(
             f"Hi ha {habitatges_ocupats} habitatge(s) amb usuaris assignats."
         )
- 
+
     return advertencies
 
 
@@ -299,7 +299,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             return EdificiListSerializer
         return EdificiDetailSerializer  # retrieve, update, create...permission_classes = [IsAuthenticated]
-    
+
     def perform_create(self, serializer):
         """
         Crear un edifici no concedeix gestió immediata a l'admin finca.
@@ -325,9 +325,9 @@ class EdificiViewSet(viewsets.ModelViewSet):
         elif self.action in ['list', 'habitatges']:
             return [IsAuthenticated(), EsAdminOPropietariEdifici()]
         elif self.action in ['desactivar', 'reactivar']:
-            return [IsAuthenticated(), IsAdminSistema()]  # 
-        return [IsAuthenticated()]  # per defecte, només autenticats poden accedir 
-    
+            return [IsAuthenticated(), IsAdminSistema()]  #
+        return [IsAuthenticated()]  # per defecte, només autenticats poden accedir
+
      # ------------------------------------------------------------------
     # US20 — Task #169 + #170 + #171
     # POST /edificis/{id}/desactivar/
@@ -339,19 +339,19 @@ class EdificiViewSet(viewsets.ModelViewSet):
     @desactivar_schema
     @action(detail=True, methods=['post'],
             permission_classes=[IsAuthenticated, IsAdminSistema])
-    def desactivar(self, request, pk=None):        
+    def desactivar(self, request, pk=None):
         edifici = self.get_object()
- 
+
         if not edifici.actiu:
             return Response(
                 {"detail": "L'edifici ja està desactivat."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
- 
+
         # Validació de consistència (#171)
         advertencies = _validar_consistencia_desactivacio(edifici)
         confirmat = request.query_params.get('confirmat', 'false').lower() == 'true'
- 
+
         # --- DRY-RUN (#170): retorna advertències sense executar ---
         if not confirmat:
             return Response(
@@ -365,22 +365,22 @@ class EdificiViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_200_OK,
             )
- 
+
         # --- Execució real (#169) ---
         motiu = request.data.get('motiu', '').strip()
- 
+
         # Snapshot dels camps que canvien (per a l'audit)
         camps_modificats = {
             "actiu":             [True, False],
             "dataDesactivacio":  [None, timezone.now().isoformat()],
             "motivDesactivacio": [edifici.motivDesactivacio or '', motiu],
         }
- 
+
         edifici.actiu = False
         edifici.dataDesactivacio = timezone.now()
         edifici.motivDesactivacio = motiu
         edifici.save(update_fields=['actiu', 'dataDesactivacio', 'motivDesactivacio'])
- 
+
         # Registre d'auditoria (#171)
         _registrar_audit(
             edifici=edifici,
@@ -390,7 +390,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
             camps_modificats=camps_modificats,
             motiu=motiu,
         )
- 
+
         return Response(
             {
                 "detail": f"Edifici {edifici.idEdifici} desactivat correctament.",
@@ -401,7 +401,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
- 
+
     # ------------------------------------------------------------------
     # US20 — Reactivació
     # POST /edificis/{id}/reactivar/
@@ -412,27 +412,27 @@ class EdificiViewSet(viewsets.ModelViewSet):
     def reactivar(self, request, pk=None):
         # Hem de buscar entre TOTS els edificis (inclosos desactivats)
         edifici = get_object_or_404(Edifici.objects.all(), pk=pk)
- 
+
         if edifici.actiu:
             return Response(
                 {"detail": "L'edifici ja està actiu."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
- 
+
         motiu = request.data.get('motiu', '').strip()
- 
+
         camps_modificats = {
             "actiu":             [False, True],
             "dataDesactivacio":  [edifici.dataDesactivacio.isoformat()
                                   if edifici.dataDesactivacio else None, None],
             "motivDesactivacio": [edifici.motivDesactivacio, ''],
         }
- 
+
         edifici.actiu = True
         edifici.dataDesactivacio = None
         edifici.motivDesactivacio = ''
         edifici.save(update_fields=['actiu', 'dataDesactivacio', 'motivDesactivacio'])
- 
+
         _registrar_audit(
             edifici=edifici,
             accio=AccioAudit.REACTIVAR,
@@ -441,7 +441,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
             camps_modificats=camps_modificats,
             motiu=motiu,
         )
- 
+
         return Response(
             {
                 "detail": f"Edifici {edifici.idEdifici} reactivat correctament.",
@@ -538,7 +538,7 @@ class EdificiViewSet(viewsets.ModelViewSet):
 
         output = HabitatgeDetailSerializer(habitatge, context={'request': request})
         return Response(output.data, status=status.HTTP_200_OK)
-    
+
     def _preparar_items_simulacio(self, millores_validated):
         """
         Converteix l'entrada validada del serializer en objectes reals del catàleg.
@@ -1331,7 +1331,7 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             return HabitatgeResumSerializer
         return HabitatgeDetailSerializer
-    
+
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [IsAuthenticated(), EsOwnerOAdminHabitatge()]
@@ -1569,7 +1569,7 @@ class HabitatgeViewSet(viewsets.ModelViewSet):
                 {"detail": "Només els administradors poden veure les sol·licituds pendents."},
                 status=status.HTTP_403_FORBIDDEN
             )
-            
+
         # Busquem habitatges del seu edifici que estiguin EN_REVISIO
         queryset = Habitatge.objects.filter(
             edifici__administradorFinca=user,
@@ -1683,7 +1683,7 @@ class EdificiEditarAPIView(ABACMixin, APIView):
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+
 
 class EdificiEsborrarAPIView(ABACMixin, APIView):
     permission_classes = [IsAuthenticated]
@@ -1859,7 +1859,10 @@ class ThirdPartyServiceView(APIView):
                 continue
 
             address = reverse_geocode(lat, lng, rate_limiter)
+            print(f"[DEBUG] Nominatim address per ({lat}, {lng}): {address}")
+
             if address is None or not es_barcelona(address, lat, lng):
+                print(f"[DEBUG] No és Barcelona o address None. address={address}")
                 results.append({
                     "lat": lat,
                     "lng": lng,
@@ -1869,6 +1872,8 @@ class ThirdPartyServiceView(APIView):
                 continue
 
             carrer, numero = parse_carrer_numero(address)
+            print(f"[DEBUG] parse_carrer_numero → carrer='{carrer}', numero='{numero}'")
+
             if not carrer:
                 results.append({
                     "lat": lat,
@@ -1879,9 +1884,14 @@ class ThirdPartyServiceView(APIView):
                 continue
 
             edifici, match_type = buscar_edifici(carrer, numero)
+            print(f"[DEBUG] buscar_edifici → edifici={edifici}, match_type='{match_type}'")
+            if edifici:
+                print(f"[DEBUG] edifici.puntuacioBase={edifici.puntuacioBase}")
 
-            if edifici and edifici.puntuacioBase:
-                score = round(edifici.puntuacioBase, 2)
+            puntuacio = edifici.puntuacioBase or edifici.puntuacioBaseOpenData if edifici else None
+
+            if puntuacio:
+                score = round(puntuacio, 2)
             else:
                 score = round(random.uniform(0, 100), 2)
                 match_type = "cap"
@@ -1907,11 +1917,11 @@ class AdminFincaEdificiAltaView(APIView):
                 {"error": "El teu compte d'administrador encara està pendent de validació o ha estat rebutjat."},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
+
         serializer = ReclamarEdificiAdminSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
+
         data = serializer.validated_data
 
         # Buscar si la localització / edifici ja existeix
@@ -1929,11 +1939,11 @@ class AdminFincaEdificiAltaView(APIView):
             if edifici.administradorFinca:
                 if edifici.administradorFinca == request.user:
                     return Response({"message": "Ja ets l'administrador d'aquest edifici."}, status=status.HTTP_200_OK)
-                
+
                 # Registrem l'intent denegat per auditoria
                 log_denial(request, "Vincular edifici", "L'edifici ja té un administrador assignat", edifici.idEdifici)
                 return Response(
-                    {"error": "Aquest edifici ja té un administrador de finca assignat."}, 
+                    {"error": "Aquest edifici ja té un administrador de finca assignat."},
                     status=status.HTTP_409_CONFLICT
                 )
             

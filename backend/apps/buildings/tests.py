@@ -1577,17 +1577,17 @@ class OpenDataClassificacioFontTests(TestCase):
 #   4. MilloresImplementadesTests→ llistar per edifici
 #   5. DadesEnergetiquesViewTests→ CRUD + permisos
 #   6. AutocompleteCarrersTests  → endpoint autocomplete
- 
+
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
- 
+
 from rest_framework import status
 from rest_framework.test import APITestCase
 from unittest.mock import patch, MagicMock
- 
+
 from django.contrib.auth import get_user_model
- 
+
 from apps.accounts.models import RoleChoices
 from apps.buildings.models import (
     Edifici, Habitatge, Localitzacio, GrupComparable,
@@ -1607,16 +1607,16 @@ from apps.buildings.permissions import (
     EsOwnerOAdminHabitatge,
     EsOwnerOAdminDadesEnergetiques,
 )
- 
+
 User = get_user_model()
- 
- 
+
+
 # ============================================================================
 # Base compartida
 # ============================================================================
- 
+
 class BaseTestData(APITestCase):
- 
+
     @classmethod
     def _create_user(cls, email, role, is_superuser=False):
         if is_superuser:
@@ -1625,13 +1625,13 @@ class BaseTestData(APITestCase):
         user.profile.role = role
         user.profile.save(update_fields=["role"])
         return user
- 
+
     @classmethod
     def _create_grup(cls, id=1):
         return GrupComparable.objects.create(
             idGrup=id, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="100-200"
         )
- 
+
     @classmethod
     def _create_edifici(cls, administrador, grup, numero=1, carrer="Carrer test"):
         loc = Localitzacio.objects.create(
@@ -1643,26 +1643,26 @@ class BaseTestData(APITestCase):
             reglament="CTE", orientacioPrincipal="Sud",
             localitzacio=loc, administradorFinca=administrador, grupComparable=grup,
         )
- 
+
     @classmethod
     def _create_habitatge(cls, edifici, ref="REF001", usuari=None):
         return Habitatge.objects.create(
             referenciaCadastral=ref, planta="1", porta="A",
             superficie=80, edifici=edifici, usuari=usuari,
         )
- 
- 
+
+
 # ============================================================================
 # 1. PERMISSIONS — cobreix les 5 classes directament
 # ============================================================================
- 
+
 class EsAdminEdificiPermissionTests(BaseTestData):
     """
     Cobreix EsAdminEdifici:
     - has_permission: rol admin ✅, owner ❌, no autenticat ❌
     - has_object_permission: admin del edifici ✅, admin d'un altre edifici ❌
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.admin = cls._create_user("admin_perm@example.com", RoleChoices.ADMIN)
@@ -1671,31 +1671,31 @@ class EsAdminEdificiPermissionTests(BaseTestData):
         cls.tenant = cls._create_user("tenant_perm@example.com", RoleChoices.TENANT)
         cls.grup = cls._create_grup(id=20)
         cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=20)
- 
+
     def test_admin_pot_crear_edifici(self):
         """RBAC: rol admin → has_permission=True."""
         self.client.force_authenticate(user=self.admin)
         # POST a edifici-list sense cos vàlid, però el 400 confirma que el permís passa
         response = self.client.post(reverse("edifici-list"), {}, format="json")
         self.assertNotEqual(response.status_code, status.HTTP_403_FORBIDDEN)
- 
+
     def test_owner_no_pot_crear_edifici(self):
         """RBAC: rol owner → has_permission=False → 403."""
         self.client.force_authenticate(user=self.owner)
         response = self.client.post(reverse("edifici-list"), {}, format="json")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
- 
+
     def test_tenant_no_pot_crear_edifici(self):
         """RBAC: rol tenant → has_permission=False → 403."""
         self.client.force_authenticate(user=self.tenant)
         response = self.client.post(reverse("edifici-list"), {}, format="json")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
- 
+
     def test_no_autenticat_no_pot_crear_edifici(self):
         """Sense token → 401."""
         response = self.client.post(reverse("edifici-list"), {}, format="json")
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
- 
+
     def test_admin_propi_pot_esborrar_edifici(self):
         """ABAC: admin de l'edifici → DELETE retorna 204."""
         self.client.force_authenticate(user=self.admin)
@@ -1703,7 +1703,7 @@ class EsAdminEdificiPermissionTests(BaseTestData):
             reverse("edifici-detail", args=[self.edifici.idEdifici])
         )
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
- 
+
     def test_admin_aliè_no_pot_esborrar_edifici(self):
         """ABAC: admin2 no és l'administrador d'aquest edifici → 403."""
         self.client.force_authenticate(user=self.admin2)
@@ -1714,8 +1714,8 @@ class EsAdminEdificiPermissionTests(BaseTestData):
             response.status_code,
             [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
         )
- 
- 
+
+
 class EsAdminOPropietariEdificiPermissionTests(BaseTestData):
     """
     Cobreix EsAdminOPropietariEdifici:
@@ -1724,7 +1724,7 @@ class EsAdminOPropietariEdificiPermissionTests(BaseTestData):
     - Tenant → PATCH 403
     - Owner amb habitatge → GET 200
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.admin = cls._create_user("admin_abac@example.com", RoleChoices.ADMIN)
@@ -1735,13 +1735,13 @@ class EsAdminOPropietariEdificiPermissionTests(BaseTestData):
         cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=21)
         cls._create_habitatge(cls.edifici, ref="REF-ABAC1", usuari=cls.tenant)
         cls._create_habitatge(cls.edifici, ref="REF-ABAC2", usuari=cls.owner)
- 
+
     def test_tenant_amb_habitatge_pot_veure_edifici(self):
         """ABAC: tenant vinculat → GET /edificis/{id}/ → 200."""
         self.client.force_authenticate(user=self.tenant)
         response = self.client.get(reverse("edifici-detail", args=[self.edifici.idEdifici]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
- 
+
     def test_tenant_sense_habitatge_no_veu_edifici(self):
         """ABAC: tenant sense vinculació → 403 o 404."""
         self.client.force_authenticate(user=self.tenant2)
@@ -1750,7 +1750,7 @@ class EsAdminOPropietariEdificiPermissionTests(BaseTestData):
             response.status_code,
             [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
         )
- 
+
     def test_tenant_no_pot_patch_edifici(self):
         """Matriu RBAC: tenant → PATCH → 403."""
         self.client.force_authenticate(user=self.tenant)
@@ -1759,14 +1759,14 @@ class EsAdminOPropietariEdificiPermissionTests(BaseTestData):
             {"orientacioPrincipal": "Nord"}, format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
- 
+
     def test_owner_amb_habitatge_pot_veure_edifici(self):
         """ABAC: owner vinculat → GET → 200."""
         self.client.force_authenticate(user=self.owner)
         response = self.client.get(reverse("edifici-detail", args=[self.edifici.idEdifici]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
- 
- 
+
+
 class EsAdminOPropietariHabitatgePermissionTests(BaseTestData):
     """
     Cobreix EsAdminOPropietariHabitatge:
@@ -1775,7 +1775,7 @@ class EsAdminOPropietariHabitatgePermissionTests(BaseTestData):
     - Tenant del habitatge → GET 200
     - Usuari sense relació → 403/404
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.admin = cls._create_user("admin_hab@example.com", RoleChoices.ADMIN)
@@ -1785,17 +1785,17 @@ class EsAdminOPropietariHabitatgePermissionTests(BaseTestData):
         cls.grup = cls._create_grup(id=22)
         cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=22)
         cls.habitatge = cls._create_habitatge(cls.edifici, ref="REF-HAB1", usuari=cls.owner)
- 
+
     def test_admin_pot_veure_habitatge(self):
         self.client.force_authenticate(user=self.admin)
         response = self.client.get(reverse("habitatge-detail", args=[self.habitatge.pk]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
- 
+
     def test_owner_pot_veure_el_seu_habitatge(self):
         self.client.force_authenticate(user=self.owner)
         response = self.client.get(reverse("habitatge-detail", args=[self.habitatge.pk]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
- 
+
     def test_usuari_sense_relacio_no_pot_veure_habitatge(self):
         self.client.force_authenticate(user=self.other)
         response = self.client.get(reverse("habitatge-detail", args=[self.habitatge.pk]))
@@ -1803,8 +1803,8 @@ class EsAdminOPropietariHabitatgePermissionTests(BaseTestData):
             response.status_code,
             [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
         )
- 
- 
+
+
 class EsOwnerOAdminHabitatgePermissionTests(BaseTestData):
     """
     Cobreix EsOwnerOAdminHabitatge:
@@ -1812,7 +1812,7 @@ class EsOwnerOAdminHabitatgePermissionTests(BaseTestData):
     - Owner del habitatge → pot esborrar (204)
     - Owner aliè → no pot esborrar (403/404)
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.admin = cls._create_user("admin_owadm@example.com", RoleChoices.ADMIN)
@@ -1822,13 +1822,13 @@ class EsOwnerOAdminHabitatgePermissionTests(BaseTestData):
         cls.grup = cls._create_grup(id=23)
         cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=23)
         cls.habitatge = cls._create_habitatge(cls.edifici, ref="REF-OWA1", usuari=cls.owner)
- 
+
     def test_tenant_no_pot_esborrar_habitatge(self):
         """Tenant no té permís d'escriptura sobre habitatges."""
         self.client.force_authenticate(user=self.tenant)
         response = self.client.delete(reverse("habitatge-detail", args=[self.habitatge.pk]))
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
- 
+
     def test_owner_aliè_no_pot_esborrar_habitatge(self):
         """Owner sense relació amb l'habitatge → 403/404."""
         self.client.force_authenticate(user=self.owner2)
@@ -1837,17 +1837,17 @@ class EsOwnerOAdminHabitatgePermissionTests(BaseTestData):
             response.status_code,
             [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
         )
- 
+
     def test_no_autenticat_no_pot_esborrar_habitatge(self):
         """Sense token → 401."""
         response = self.client.delete(reverse("habitatge-detail", args=[self.habitatge.pk]))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
- 
- 
+
+
 # ============================================================================
 # 2. SERIALIZERS — casos no coberts
 # ============================================================================
- 
+
 class HabitatgeDetailSerializerTests(TestCase):
     """
     Cobreix HabitatgeDetailSerializer:
@@ -1855,7 +1855,7 @@ class HabitatgeDetailSerializerTests(TestCase):
     - anyReforma futur → error
     - anyReforma anterior a la construcció → error
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.admin = User.objects.create_user(
@@ -1875,7 +1875,7 @@ class HabitatgeDetailSerializerTests(TestCase):
             reglament="CTE", orientacioPrincipal="Sud",
             localitzacio=loc, administradorFinca=cls.admin, grupComparable=cls.grup,
         )
- 
+
     def _base_data(self, **kwargs):
         base = {
             "referenciaCadastral": "REF-SER1",
@@ -1886,37 +1886,37 @@ class HabitatgeDetailSerializerTests(TestCase):
         }
         base.update(kwargs)
         return base
- 
+
     def test_superficie_zero_invalida(self):
         s = HabitatgeDetailSerializer(data=self._base_data(superficie=0))
         self.assertFalse(s.is_valid())
         self.assertIn("superficie", s.errors)
- 
+
     def test_superficie_negativa_invalida(self):
         s = HabitatgeDetailSerializer(data=self._base_data(superficie=-10))
         self.assertFalse(s.is_valid())
         self.assertIn("superficie", s.errors)
- 
+
     def test_any_reforma_futur_invalid(self):
         any_futur = timezone.now().year + 1
         s = HabitatgeDetailSerializer(data=self._base_data(anyReforma=any_futur))
         self.assertFalse(s.is_valid())
         self.assertIn("anyReforma", s.errors)
- 
+
     def test_any_reforma_anterior_a_construccio_invalid(self):
         s = HabitatgeDetailSerializer(data=self._base_data(anyReforma=1999))
         self.assertFalse(s.is_valid())
         self.assertIn("anyReforma", s.errors)
- 
+
     def test_any_reforma_valid(self):
         s = HabitatgeDetailSerializer(data=self._base_data(anyReforma=2010))
         self.assertTrue(s.is_valid(), msg=s.errors)
- 
- 
+
+
 # ============================================================================
 # 3. HabitatgeViewSet — CRUD + permisos
 # ============================================================================
- 
+
 class HabitatgeViewTests(BaseTestData):
     """
     Cobreix HabitatgeViewSet:
@@ -1925,7 +1925,7 @@ class HabitatgeViewTests(BaseTestData):
     - Tenant: list/detail, no escriptura
     - Sense token → 401
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.admin = cls._create_user("admin_hv@example.com", RoleChoices.ADMIN)
@@ -1939,13 +1939,13 @@ class HabitatgeViewTests(BaseTestData):
         cls.habitatge_tenant = cls._create_habitatge(
             cls.edifici, ref="REF-HV2", usuari=cls.tenant
         )
- 
+
     def test_admin_list_habitatges(self):
         self.client.force_authenticate(user=self.admin)
         response = self.client.get(reverse("habitatge-list"))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertGreaterEqual(len(response.data), 2)
- 
+
     def test_owner_veu_nomes_el_seu_habitatge(self):
         self.client.force_authenticate(user=self.owner)
         response = self.client.get(reverse("habitatge-list"))
@@ -1953,7 +1953,7 @@ class HabitatgeViewTests(BaseTestData):
         refs = [h["referenciaCadastral"] for h in response.data]
         self.assertIn("REF-HV1", refs)
         self.assertNotIn("REF-HV2", refs)
- 
+
     def test_tenant_veu_nomes_el_seu_habitatge(self):
         self.client.force_authenticate(user=self.tenant)
         response = self.client.get(reverse("habitatge-list"))
@@ -1961,7 +1961,7 @@ class HabitatgeViewTests(BaseTestData):
         refs = [h["referenciaCadastral"] for h in response.data]
         self.assertIn("REF-HV2", refs)
         self.assertNotIn("REF-HV1", refs)
- 
+
     def test_tenant_no_pot_patch_habitatge(self):
         self.client.force_authenticate(user=self.tenant)
         response = self.client.patch(
@@ -1969,23 +1969,23 @@ class HabitatgeViewTests(BaseTestData):
             {"superficie": 90}, format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
- 
+
     def test_owner_pot_veure_el_seu_habitatge_detail(self):
         self.client.force_authenticate(user=self.owner)
         response = self.client.get(
             reverse("habitatge-detail", args=[self.habitatge_owner.pk])
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
- 
+
     def test_sense_token_retorna_401(self):
         response = self.client.get(reverse("habitatge-list"))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
- 
- 
+
+
 # ============================================================================
 # 4. MilloresImplementadesViewTests
 # ============================================================================
- 
+
 class MilloresImplementadesViewTests(BaseTestData):
     """
     Cobreix l'action millores_implementades a EdificiViewSet:
@@ -2013,16 +2013,16 @@ class MilloresImplementadesViewTests(BaseTestData):
             millora=cls.millora,
             edifici=cls.edifici,
         )
- 
+
     def _url(self):
         return reverse("edifici-millores-implementades", args=[self.edifici.idEdifici])
- 
+
     def test_admin_veu_millores_implementades(self):
         self.client.force_authenticate(user=self.admin)
         response = self.client.get(self._url())
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
- 
+
     def test_edifici_sense_millores_retorna_llista_buida(self):
         """Un edifici sense millores retorna 200 amb llista buida."""
         loc = Localitzacio.objects.create(
@@ -2040,7 +2040,7 @@ class MilloresImplementadesViewTests(BaseTestData):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, [])
- 
+
     def test_usuari_sense_acces_no_veu_millores(self):
         self.client.force_authenticate(user=self.other)
         response = self.client.get(self._url())
@@ -2048,16 +2048,16 @@ class MilloresImplementadesViewTests(BaseTestData):
             response.status_code,
             [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
         )
- 
+
     def test_sense_token_retorna_401(self):
         response = self.client.get(self._url())
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
- 
- 
+
+
 # ============================================================================
 # 5. DadesEnergetiquesViewTests
 # ============================================================================
- 
+
 class DadesEnergetiquesViewTests(BaseTestData):
     """
     Cobreix DadesEnergetiquesViewSet i l'action dades_energetiques de EdificiViewSet:
@@ -2066,7 +2066,7 @@ class DadesEnergetiquesViewTests(BaseTestData):
     - Usuari sense relació → 403/404
     - Sense token → 401
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.admin = cls._create_user("admin_de@example.com", RoleChoices.ADMIN)
@@ -2075,7 +2075,7 @@ class DadesEnergetiquesViewTests(BaseTestData):
         cls.grup = cls._create_grup(id=70)
         cls.edifici = cls._create_edifici(cls.admin, cls.grup, numero=70)
         cls.habitatge = cls._create_habitatge(cls.edifici, ref="REF-DE1", usuari=cls.owner)
- 
+
         cls.dades = DadesEnergetiques.objects.create(
             consumEnergiaPrimaria=80.0,
             consumEnergiaFinal=60.0,
@@ -2093,22 +2093,22 @@ class DadesEnergetiquesViewTests(BaseTestData):
         )
         cls.habitatge.dadesEnergetiques = cls.dades
         cls.habitatge.save(update_fields=["dadesEnergetiques"])
- 
+
     def _url_action(self):
         return reverse("edifici-dades-energetiques", args=[self.edifici.idEdifici])
- 
+
     def test_admin_veu_dades_energetiques_de_ledifici(self):
         self.client.force_authenticate(user=self.admin)
         response = self.client.get(self._url_action())
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
- 
+
     def test_owner_veu_les_seves_dades_energetiques(self):
         self.client.force_authenticate(user=self.owner)
         response = self.client.get(self._url_action())
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertGreaterEqual(len(response.data), 1)
- 
+
     def test_altre_usuari_sense_acces_a_dades_energetiques(self):
         self.client.force_authenticate(user=self.other)
         response = self.client.get(self._url_action())
@@ -2116,11 +2116,11 @@ class DadesEnergetiquesViewTests(BaseTestData):
             response.status_code,
             [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
         )
- 
+
     def test_sense_token_retorna_401(self):
         response = self.client.get(self._url_action())
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
- 
+
     def test_habitatge_sense_dades_energetiques_no_apareix(self):
         """Un habitatge sense dades energètiques no apareix a la resposta."""
         self._create_habitatge(self.edifici, ref="REF-DE-BUIT")
@@ -2197,7 +2197,7 @@ class TestDadesEnergetiquesValidacio(BaseTestData):
 # ============================================================================
 # 6. AutocompleteCarrersTests
 # ============================================================================
- 
+
 class AutocompleteCarrersTests(BaseTestData):
     """
     Cobreix autocomplete_carrers:
@@ -2206,7 +2206,7 @@ class AutocompleteCarrersTests(BaseTestData):
     - sense token → 401
     - stopwords soles → llista buida o pocs resultats
     """
- 
+
     @classmethod
     def setUpTestData(cls):
         cls.admin = cls._create_user("admin_ac@example.com", RoleChoices.ADMIN)
@@ -2214,27 +2214,27 @@ class AutocompleteCarrersTests(BaseTestData):
             codi_via="001", codi_carrer_ine="001", nom_oficial="Carrer de Mallorca",
             nom_curt="Mallorca", tipus_via="Carrer", nre_min=1, nre_max=500,
         )
- 
+
     def _url(self):
         return reverse("autocomplete-carrers")
- 
+
     def test_query_curta_retorna_buida(self):
         self.client.force_authenticate(user=self.admin)
         response = self.client.get(self._url(), {"q": "M"})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, [])
- 
+
     def test_query_valida_retorna_resultats(self):
         self.client.force_authenticate(user=self.admin)
         response = self.client.get(self._url(), {"q": "Mallorca"})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         noms = [r["nom_oficial"] for r in response.data]
         self.assertIn("Carrer de Mallorca", noms)
- 
+
     def test_sense_token_retorna_401(self):
         response = self.client.get(self._url(), {"q": "Mallorca"})
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
- 
+
     def test_query_sense_q_retorna_buida(self):
         """Sense paràmetre q → query buida → retorna []."""
         self.client.force_authenticate(user=self.admin)
@@ -2261,14 +2261,14 @@ class MotorSimulacioUnitTests(BaseTestData):
         self.edifici.superficieTotal = 1000.0
         self.edifici.puntuacioBase = 50.0
         self.edifici.save()
-        
+
         self.millora_sate = CatalegMillora.objects.create(
             nom="Aïllament SATE",
             categoria="Envolupant",
             costMinim=40.0,
             costMaxim=60.0,
             estalviEnergeticEstimat=20.0,
-            impactePunts=15.0, 
+            impactePunts=15.0,
             nivellConfianca="alt",
             unitatBase="m2",
             parametresBase={
@@ -2302,11 +2302,11 @@ class MotorSimulacioUnitTests(BaseTestData):
         self.assertIn("despres", resultat)
         self.assertIn("delta", resultat)
         self.assertIn("items", resultat)
-        
+
         self.assertEqual(resultat["delta"]["incrementScore"], 15.0)
-        
+
         self.assertEqual(resultat["despres"]["score"], 65.0)
-        
+
         self.assertGreater(resultat["delta"]["reduccioConsumKwhAny"], 0)
         self.assertGreater(resultat["delta"]["estalviAnualEstimatiu"], 0)
 
@@ -2328,9 +2328,9 @@ class MotorSimulacioUnitTests(BaseTestData):
                 }
             }
         )
-        
+
         resultat = simular_millores(self.edifici, [{"millora": millora_fv, "quantitat": 3, "coberturaPercent": 100}])
-        
+
         self.assertGreater(resultat["items"][0]["produccioFotovoltaicaKwhAny"], 0)
         self.assertGreater(resultat["delta"]["reduccioConsumKwhAny"], 0)
 
@@ -2351,48 +2351,48 @@ class MotorSimulacioUnitTests(BaseTestData):
                 }
             }
         )
-        
+
         resultat = simular_millores(self.edifici, [{"millora": millora_clima, "quantitat": 2, "coberturaPercent": 100}])
-        
+
         self.assertGreater(resultat["delta"]["reduccioEmissionsKgCO2Any"], 0)
         self.assertEqual(resultat["despres"]["score"], 75.0)
 
     def test_simular_edge_cases_i_altres_categories(self):
         """
-        Test 'escombra' per netejar les línies de codi (coverage) 
+        Test 'escombra' per netejar les línies de codi (coverage)
         d'altres tipologies i casos extrems de l'engine.
         """
 
         resultat_buit = simular_millores(self.edifici, [])
         self.assertEqual(resultat_buit["delta"]["incrementScore"], 0.0)
         self.assertEqual(resultat_buit["delta"]["reduccioConsumKwhAny"], 0.0)
-        
+
         millora_led = CatalegMillora.objects.create(
-            nom="Llums LED", categoria="Il·luminació", 
-            costMinim=10, costMaxim=20, estalviEnergeticEstimat=5, 
+            nom="Llums LED", categoria="Il·luminació",
+            costMinim=10, costMaxim=20, estalviEnergeticEstimat=5,
             impactePunts=2, unitatBase="m2",
             parametresBase={"impactes": {"reduccio_consum_electric_total_tipica": 0.15}}
         )
-        
+
         millora_finestres = CatalegMillora.objects.create(
-            nom="Finestres PVC", categoria="Envolupant", 
-            costMinim=200, costMaxim=300, estalviEnergeticEstimat=15, 
+            nom="Finestres PVC", categoria="Envolupant",
+            costMinim=200, costMaxim=300, estalviEnergeticEstimat=15,
             impactePunts=10, unitatBase="m2",
             parametresBase={
                 "impactes": {
-                    "reduccio_demanda_calefaccio": 0.15, 
+                    "reduccio_demanda_calefaccio": 0.15,
                     "reduccio_demanda_refrigeracio": 0.10
                 }
             }
         )
-        
+
         input_motor = [
             {"millora": millora_led, "quantitat": 100, "coberturaPercent": 50},
             {"millora": millora_finestres, "quantitat": 20, "coberturaPercent": 100}
         ]
-        
+
         resultat = simular_millores(self.edifici, input_motor)
-        
+
         self.assertGreater(resultat["delta"]["costTotalEstimat"], 0)
         self.assertGreater(resultat["delta"]["estalviAnualEstimatiu"], 0)
         self.assertGreater(resultat["despres"]["score"], self.edifici.puntuacioBase)
@@ -2402,15 +2402,15 @@ class MotorSimulacioUnitTests(BaseTestData):
 class MotorSimulacioEspecificUnitTests(BaseTestData):
     def setUp(self):
         super().setUp()
-        
+
         self.admin = self._create_user("admin_sim_especific@example.com", RoleChoices.ADMIN)
         self.grup = GrupComparable.objects.create(
             idGrup=888, # Un ID diferent per evitar xocs
-            zonaClimatica="C2", 
-            tipologia="Residencial", 
+            zonaClimatica="C2",
+            tipologia="Residencial",
             rangSuperficie="0-100"
         )
-        
+
         self.edifici = self._create_edifici(self.admin, self.grup, numero=88)
 
         self.edifici.superficieTotal = 1000.0
@@ -2433,10 +2433,10 @@ class MotorSimulacioEspecificUnitTests(BaseTestData):
                 }
             }
         )
-        
+
         items = [{"millora": millora_fv, "quantitat": 10, "coberturaPercent": 100}]
         resultat = simular_millores(self.edifici, items)
-        
+
         self.assertGreater(resultat["delta"]["reduccioConsumKwhAny"], 0)
         self.assertEqual(resultat["items"][0]["produccioFotovoltaicaKwhAny"], 1500 * 10 * 0.85)
 
@@ -2454,10 +2454,10 @@ class MotorSimulacioEspecificUnitTests(BaseTestData):
                 }
             }
         )
-        
+
         items = [{"millora": millora_aero, "quantitat": 1, "coberturaPercent": 100}]
         resultat = simular_millores(self.edifici, items)
-        
+
         self.assertGreater(resultat["delta"]["reduccioEmissionsKgCO2Any"], 0)
 
     def test_simulacio_envolupant_i_infiltracions(self):
@@ -2475,10 +2475,10 @@ class MotorSimulacioEspecificUnitTests(BaseTestData):
                 }
             }
         )
-        
+
         items = [{"millora": millora_sate, "quantitat": None, "coberturaPercent": 50}]
         resultat = simular_millores(self.edifici, items)
-        
+
         parcial = resultat["items"][0]
         self.assertGreater(parcial["reduccioConsumKwhAny"], 0)
         self.assertEqual(parcial["quantitatAplicada"], 500)
@@ -2487,12 +2487,12 @@ class MotorSimulacioEspecificUnitTests(BaseTestData):
         """Prova que si l'edifici no té consums/emissions calculats, usa els FALLBACKS definits al motor"""
         edifici_buit = self._create_edifici(self.admin, self.grup, numero=101)
         edifici_buit.superficieTotal = 100
-        edifici_buit.consumFinalKwhAny = None 
+        edifici_buit.consumFinalKwhAny = None
         edifici_buit.emissionsKgCO2Any = None
         edifici_buit.save()
 
         resultat = simular_millores(edifici_buit, [])
-        
+
         self.assertEqual(resultat["abans"]["consumFinalKwhAny"], 11000)
         self.assertIsNotNone(resultat["abans"]["score"])
 
@@ -2505,10 +2505,10 @@ class MotorSimulacioEspecificUnitTests(BaseTestData):
             unitatBase=UnitatBaseMillora.M2,
             parametresBase={"impactes": {"reduccio_demanda_calefaccio": 0.50}}
         )
-        
+
         items = [{"millora": millora_buda, "quantitat": 0, "coberturaPercent": 0}]
         resultat = simular_millores(self.edifici, items)
-        
+
         self.assertEqual(resultat["delta"]["reduccioConsumKwhAny"], 0)
         self.assertEqual(resultat["delta"]["reduccioEmissionsKgCO2Any"], 0)
 
@@ -2521,24 +2521,24 @@ class MotorSimulacioEspecificUnitTests(BaseTestData):
             unitatBase=UnitatBaseMillora.EDIFICI,
             parametresBase={"impactes": {"reduccio_emissions_calefaccio": 5.0}} # 500% de reducció per forçar límits
         )
-        
+
         items = [{"millora": millora_extrema, "quantitat": 1, "coberturaPercent": 100}]
         resultat = simular_millores(self.edifici, items)
-        
+
         self.assertLessEqual(resultat["delta"]["reduccioConsumPercent"], 100.0)
         self.assertGreaterEqual(resultat["despres"]["consumFinalKwhAny"], 0.0)
 
     def test_score_base_amb_historial_bhs(self):
         """Cobreix les línies 29-30 creant un historial BHS real a la BD"""
         from apps.buildings.models import BuildingHealthScore
-        
+
         BuildingHealthScore.objects.create(
             edificio=self.edifici,
             version="1.0",
             score=88.5,
             pesos={"clima": 0.5, "envolupant": 0.5} # Camp JSON obligatori
         )
-        
+
         resultat = simular_millores(self.edifici, [])
         self.assertEqual(resultat["abans"]["score"], 88.5)
 
@@ -2546,7 +2546,7 @@ class MotorSimulacioEspecificUnitTests(BaseTestData):
         """Cobreix les línies 40 i 66-81 creant dades energètiques reals"""
         from apps.buildings.models import Habitatge, DadesEnergetiques
         from django.utils import timezone
-        
+
         dades = DadesEnergetiques.objects.create(
             consumEnergiaPrimaria=2500,
             consumEnergiaFinal=2000,
@@ -2567,7 +2567,7 @@ class MotorSimulacioEspecificUnitTests(BaseTestData):
             motiuCertificacio="Simulació Test",
             dataEntrada=timezone.now().date() # Camp Data obligatori
         )
-        
+
         Habitatge.objects.create(
             referenciaCadastral="9876543AB1234C0001DE", # PK
             planta="1",
@@ -2576,16 +2576,16 @@ class MotorSimulacioEspecificUnitTests(BaseTestData):
             edifici=self.edifici,
             dadesEnergetiques=dades
         )
-            
+
         resultat = simular_millores(self.edifici, [])
-        
+
         self.assertEqual(resultat["abans"]["origenDades"], "dades_energetiques_habitatges")
         self.assertEqual(resultat["abans"]["consumFinalKwhAny"], 2000)
 
     def test_inferir_quantitats_per_totes_unitats(self):
         """Cobreix les línies 84-98 inferint automàticament quantitats segons la unitat"""
         from apps.buildings.models import UnitatBaseMillora, CatalegMillora
-        
+
         unitats = [
             UnitatBaseMillora.M2,
             UnitatBaseMillora.UNITAT,
@@ -2595,7 +2595,7 @@ class MotorSimulacioEspecificUnitTests(BaseTestData):
             UnitatBaseMillora.EDIFICI,
             "INVENTADA"
         ]
-        
+
         for idx, unitat in enumerate(unitats):
             millora = CatalegMillora.objects.create(
                 idMillora=9200 + idx,
@@ -2618,23 +2618,23 @@ class MotorSimulacioIntegrationTests(BaseTestData):
 
     def setUp(self):
         super().setUp()
-        
+
         self.admin = self._create_user("admin_simulacio@example.com", RoleChoices.ADMIN)
         self.grup = GrupComparable.objects.create(
             idGrup=98, zonaClimatica="C2", tipologia="Residencial", rangSuperficie="0-100"
         )
         self.edifici = self._create_edifici(self.admin, self.grup, numero=2)
-        
+
         self.edifici.puntuacioBase = 50.0
         self.edifici.save()
-        
+
         self.millora_sate = CatalegMillora.objects.create(
             nom="Aïllament SATE",
             categoria="Envolupant",
             costMinim=40.0,
             costMaxim=60.0,
             estalviEnergeticEstimat=20.0,
-            impactePunts=15.0, 
+            impactePunts=15.0,
             nivellConfianca="alt",
             unitatBase="m2",
             parametresBase={
@@ -2647,13 +2647,13 @@ class MotorSimulacioIntegrationTests(BaseTestData):
 
     def test_api_simulacio_preview_retorna_200_i_dades_correctes(self):
         """
-        Validem que cridant a l'endpoint (POST) amb DRF obtenim 
+        Validem que cridant a l'endpoint (POST) amb DRF obtenim
         el JSON sencer de la simulació per poder-lo mostrar a Flutter.
         """
         self.client.force_authenticate(user=self.admin)
-        
+
         url = reverse('edifici-simulacions-preview', args=[self.edifici.idEdifici])
-        
+
         payload = {
             "millores": [
                 {
@@ -2663,22 +2663,22 @@ class MotorSimulacioIntegrationTests(BaseTestData):
                 }
             ]
         }
-        
+
         response = self.client.post(url, payload, format='json')
-        
+
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        
+
         self.assertIn("abans", response.data)
         self.assertIn("despres", response.data)
         self.assertIn("delta", response.data)
-        
+
         self.assertEqual(response.data["delta"]["incrementScore"], 15.0)
 
     def test_api_simulacio_get_historial(self):
         """Cobreix el mètode GET per llistar l'historial de simulacions d'un edifici."""
         self.client.force_authenticate(user=self.admin)
         url = reverse('edifici-simulacions', args=[self.edifici.idEdifici])
-        
+
         sim = SimulacioMillora.objects.create(
             edifici=self.edifici,
             descripcio="Simulació antiga",
@@ -2690,7 +2690,7 @@ class MotorSimulacioIntegrationTests(BaseTestData):
             resultat={"fake": "data"},
             versioMotor="SIM-1.0"
         )
-        
+
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
@@ -2700,10 +2700,10 @@ class MotorSimulacioIntegrationTests(BaseTestData):
         """Cobreix el control d'errors del views.py (Exceptions i dades invàlides)."""
         self.client.force_authenticate(user=self.admin)
         url = reverse('edifici-simulacions', args=[self.edifici.idEdifici])
-        
+
         resp_400 = self.client.post(url, {"un_camp_erroni": 123}, format='json')
         self.assertEqual(resp_400.status_code, status.HTTP_400_BAD_REQUEST)
-        
+
         payload_invalid = {"millores": [{"milloraId": 99999, "quantitat": 1}]}
         resp_invalid = self.client.post(url, payload_invalid, format='json')
         self.assertEqual(resp_invalid.status_code, status.HTTP_400_BAD_REQUEST)
@@ -3011,9 +3011,9 @@ class TestRestriccionsHabitatge(BaseTestData):
         # Creem un edifici i una localització de prova (necessaris per crear un habitatge)
         loc = Localitzacio.objects.create(carrer="Carrer Prova", numero=1, codiPostal="08000")
         edifici = Edifici.objects.create(
-            localitzacio=loc, 
-            anyConstruccio=2000, 
-            superficieTotal=100, 
+            localitzacio=loc,
+            anyConstruccio=2000,
+            superficieTotal=100,
             administradorFinca=admin
         )
 
@@ -3152,10 +3152,10 @@ class TestFluxSolicitudHabitatge(BaseTestData):
         # Preparem dades: Un admin, un llogater i dos habitatges
         admin = self._create_user(email="admin_llista@test.com", role=RoleChoices.ADMIN)
         tenant = self._create_user(email="tenant_espera@test.com", role=RoleChoices.TENANT)
-        
+
         loc = Localitzacio.objects.create(carrer="Carrer Balmes", numero=5, codiPostal="08007")
         edifici = Edifici.objects.create(localitzacio=loc, anyConstruccio=2000, superficieTotal=500, administradorFinca=admin)
-        
+
         # Habitatge 1: En revisió (hauria de sortir a la llista)
         h_pendent = Habitatge.objects.create(
             referenciaCadastral="PENDENT11111", planta="1", porta="1", superficie=50, edifici=edifici,

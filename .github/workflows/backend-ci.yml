@@ -24,6 +24,7 @@ on:
       - "docs/**"
       - "README.md"
       - ".github/workflows/backend-ci.yml"
+      - ".github/workflows/**"
 
   workflow_dispatch:
 

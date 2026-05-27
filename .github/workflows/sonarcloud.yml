@@ -1,4 +1,4 @@
-﻿name: SonarCloud
+name: SonarCloud
 
 on:
   push:
@@ -24,13 +24,22 @@ jobs:
 
       - name: Generate Python coverage for SonarCloud
         run: |
-          docker compose exec -T web coverage run --source=apps,config manage.py test apps.accounts -v 2
+          docker compose exec -T web coverage run --source=apps,config manage.py test -v 2
           docker compose exec -T web coverage xml -o coverage.xml
           test -f backend/coverage.xml || docker compose cp web:/app/coverage.xml backend/coverage.xml
+          python - <<'PY'
+          from pathlib import Path
+
+          coverage_file = Path("backend/coverage.xml")
+          text = coverage_file.read_text(encoding="utf-8")
+          backend_path = Path("backend").resolve().as_posix()
+          text = text.replace("<source>/app</source>", f"<source>{backend_path}</source>")
+          coverage_file.write_text(text, encoding="utf-8")
+          PY
           ls -lh backend/coverage.xml
 
       - name: SonarCloud Scan
-        uses: SonarSource/sonarqube-scan-action@v5
+        uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:

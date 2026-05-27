@@ -29,8 +29,18 @@ def get_stream_client() -> StreamChat:
 
 
 def get_stream_user_id(user) -> str:
-    """Retorna un identificador estable per a GetStream basat en l'ID de Django."""
-    return f"user_{user.id}"
+    """Retorna un identificador estable per a GetStream basat en l'ID de Django.
+
+    Per defecte (`chat_stream_id_version == 1`), retorna "user_{id}". Si el
+    user_id antic queda tombstoned a GetStream (per un hard-delete irreversible),
+    es pot bumpar `chat_stream_id_version` perquè aquesta funció emeti
+    "user_{id}_v{N}" — un identificador nou que GetStream tracta com un
+    usuari verge.
+    """
+    version = getattr(user, "chat_stream_id_version", 1) or 1
+    if version <= 1:
+        return f"user_{user.id}"
+    return f"user_{user.id}_v{version}"
 
 
 def sync_user_to_stream(client: StreamChat, user) -> None:

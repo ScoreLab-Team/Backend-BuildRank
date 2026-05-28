@@ -36,6 +36,14 @@ class User(AbstractUser):
         default=AuthProvider.PASSWORD,
     )
 
+    # Versió del user_id que s'usa a GetStream. Per defecte 1 → el user_id és
+    # "user_{id}". Si el user_id antic queda tombstoned a GetStream (per un
+    # hard-delete que no es pot revertir), s'incrementa aquesta versió i el
+    # nou user_id passa a ser "user_{id}_v{N}", que GetStream tracta com un
+    # usuari nou. La pèrdua és només dels missatges/canals previs d'aquell
+    # usuari; la resta del compte Django (perfil, edificis, etc.) es manté.
+    chat_stream_id_version = models.PositiveSmallIntegerField(default=1)
+
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
 

@@ -142,11 +142,45 @@ class SyncUserToStreamTests(TestCase):
         from apps.chat.services import get_stream_client, sync_user_to_stream
         mock_client = MagicMock()
         mock_sc.return_value = mock_client
+        # Tots els intents fallen (inclou el retry post-bump) → warning final.
         mock_client.upsert_user.side_effect = Exception("User was deleted")
         mock_client.reactivate_user.side_effect = Exception("Cannot reactivate hard-deleted")
         client = get_stream_client()
         sync_user_to_stream(client, self.user)  # no ha de llançar excepció
         mock_logger.warning.assert_called()
+
+    @patch("apps.chat.services.logger")
+    @patch("apps.chat.services.StreamChat")
+    def test_sync_auto_bumps_version_on_tombstone(self, mock_sc, mock_logger):
+        """Si el user_id està tombstoned, bumpa la versió i reintenta amb el
+        nou ID sense intervenció manual (no cal cap script)."""
+        from apps.chat.services import get_stream_client, sync_user_to_stream
+        mock_client = MagicMock()
+        mock_sc.return_value = mock_client
+        # Primer upsert falla ("was deleted"), reactivate també falla
+        # (hard-deleted), el segon upsert (amb ID versionat) té èxit.
+        mock_client.upsert_user.side_effect = [
+            Exception("User was deleted"),
+            None,
+        ]
+        mock_client.reactivate_user.side_effect = Exception("Cannot reactivate")
+
+        self.assertEqual(self.user.chat_stream_id_version, 1)
+
+        client = get_stream_client()
+        sync_user_to_stream(client, self.user)
+
+        # La versió s'ha incrementat persistentment.
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.chat_stream_id_version, 2)
+
+        # El segon upsert s'ha fet amb l'ID versionat nou.
+        self.assertEqual(mock_client.upsert_user.call_count, 2)
+        second_call_args = mock_client.upsert_user.call_args_list[1][0][0]
+        self.assertEqual(second_call_args["id"], f"user_{self.user.id}_v2")
+
+        # Es logga un info (no un warning) perquè la recuperació ha funcionat.
+        mock_logger.info.assert_called()
  
     @patch("apps.chat.services.StreamChat")
     def test_sync_raises_non_deleted_exception(self, mock_sc):
@@ -157,6 +191,36 @@ class SyncUserToStreamTests(TestCase):
         client = get_stream_client()
         with self.assertRaises(Exception):
             sync_user_to_stream(client, self.user)
+
+    @override_settings(
+        STREAM_API_KEY="k",
+        STREAM_API_SECRET="s",
+        STREAM_TOKEN_EXPIRATION_SECONDS=3600,
+    )
+    @patch("apps.chat.services.StreamChat")
+    def test_token_uses_bumped_id_after_tombstone(self, mock_sc):
+        """Regressió: si l'usuari té un user_id tombstoned, el token emès ha
+        d'usar el NOU ID (bumpat), no l'antic. Si no, GetStream rebutja la
+        connexió WebSocket."""
+        from apps.chat.services import create_stream_token_for_user
+        mock_client = MagicMock()
+        mock_sc.return_value = mock_client
+        # Primer upsert falla, reactivate falla, retry amb v2 reïx.
+        mock_client.upsert_user.side_effect = [
+            Exception("User was deleted"),
+            None,
+        ]
+        mock_client.reactivate_user.side_effect = Exception("hard-deleted")
+        mock_client.create_token.return_value = "fake.jwt.token"
+
+        create_stream_token_for_user(self.user)
+
+        # create_token s'ha cridat amb l'ID bumpat (v2), no l'antic.
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.chat_stream_id_version, 2)
+        token_call_args = mock_client.create_token.call_args
+        token_user_id = token_call_args[0][0]
+        self.assertEqual(token_user_id, f"user_{self.user.id}_v2")
  
  
 # ---------------------------------------------------------------------------

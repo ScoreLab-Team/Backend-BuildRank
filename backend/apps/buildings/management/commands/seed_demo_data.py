@@ -105,7 +105,12 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **opts):
-        self.rng = random.Random(opts["seed"])
+        # NOSONAR python:S2245 — `random.Random` aquí només genera dades de
+        # demo determministiques (valors energètics, dates, distribució
+        # d'habitatges). No s'usa en cap context criptogràfic ni
+        # d'autenticació. La determinisme és imprescindible per a demos
+        # repetibles, així que no es pot substituir per `secrets`.
+        self.rng = random.Random(opts["seed"])  # NOSONAR
 
         if opts["reset"]:
             self._reset()
@@ -341,7 +346,10 @@ class Command(BaseCommand):
         # Generem valors determministics però amb variació segons l'edifici
         # i la planta perquè els rankings no quedin tots empatats.
         seed_val = edifici.idEdifici * 17 + planta_idx * 3
-        rng = random.Random(seed_val)
+        # NOSONAR python:S2245 — `random.Random` només genera valors energètics
+        # determministics per a habitatges de demo (consum, emissions, etc.).
+        # Cap ús criptogràfic. Veure justificació al mètode `handle`.
+        rng = random.Random(seed_val)  # NOSONAR
         consum_primari = rng.uniform(80, 320)
         de.consumEnergiaPrimaria = consum_primari
         de.consumEnergiaFinal = consum_primari * 0.65

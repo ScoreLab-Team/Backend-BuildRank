@@ -1902,3 +1902,118 @@ class TwinBuildingDirectChatTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("target_edifici_id", response.data["detail"])
+
+
+# ---------------------------------------------------------------------------
+# services.py — get_stream_user_id (chat_stream_id_version branch)
+# ---------------------------------------------------------------------------
+
+class GetStreamUserIdVersionTests(TestCase):
+    """Cobreix la lògica de versionat de user_id introduïda perquè usuaris
+    amb el seu user_id antic tombstoned a GetStream puguin reconnectar amb
+    un identificador nou."""
+
+    def setUp(self):
+        from apps.chat.services import get_stream_user_id
+        self._get = get_stream_user_id
+        self.user = User.objects.create_user(
+            email="versioned@test.com",
+            password="StrongPass123!",
+        )
+
+    def test_default_version_returns_plain_user_id(self):
+        # Version per defecte (1) → format "user_{id}" tradicional.
+        self.assertEqual(self.user.chat_stream_id_version, 1)
+        self.assertEqual(self._get(self.user), f"user_{self.user.id}")
+
+    def test_bumped_version_returns_versioned_user_id(self):
+        # En bumpar la versió, l'id passa a "user_{id}_v{N}".
+        self.user.chat_stream_id_version = 2
+        self.user.save(update_fields=["chat_stream_id_version"])
+        self.assertEqual(self._get(self.user), f"user_{self.user.id}_v2")
+
+        self.user.chat_stream_id_version = 5
+        self.user.save(update_fields=["chat_stream_id_version"])
+        self.assertEqual(self._get(self.user), f"user_{self.user.id}_v5")
+
+    def test_zero_or_none_version_falls_back_to_default(self):
+        # Defensiu: si algú força el camp a 0 (o None per objectes en memòria),
+        # el helper ha de retornar el format per defecte sense petar.
+        self.user.chat_stream_id_version = 0
+        self.user.save(update_fields=["chat_stream_id_version"])
+        self.assertEqual(self._get(self.user), f"user_{self.user.id}")
+
+
+# ---------------------------------------------------------------------------
+# management/commands/bump_stream_user_id
+# ---------------------------------------------------------------------------
+
+class BumpStreamUserIdCommandTests(TestCase):
+    """Cobreix el command que bumpa chat_stream_id_version per a usuaris
+    afectats per un hard-delete a GetStream."""
+
+    def setUp(self):
+        from io import StringIO
+        self._StringIO = StringIO
+        self.user_a = User.objects.create_user(
+            email="bump_a@test.com",
+            password="StrongPass123!",
+        )
+        self.user_b = User.objects.create_user(
+            email="bump_b@test.com",
+            password="StrongPass123!",
+        )
+
+    def _call(self, *args):
+        from django.core.management import call_command
+        out = self._StringIO()
+        call_command("bump_stream_user_id", *args, stdout=out)
+        return out.getvalue()
+
+    def test_bump_by_ids_increments_versions(self):
+        output = self._call("--ids", str(self.user_a.id), str(self.user_b.id))
+        self.user_a.refresh_from_db()
+        self.user_b.refresh_from_db()
+        self.assertEqual(self.user_a.chat_stream_id_version, 2)
+        self.assertEqual(self.user_b.chat_stream_id_version, 2)
+        # El missatge final inclou el nou user_id format versionat.
+        self.assertIn(f"user_{self.user_a.id}_v2", output)
+        self.assertIn(f"user_{self.user_b.id}_v2", output)
+
+    def test_bump_by_emails_increments_versions(self):
+        self._call("--emails", self.user_a.email)
+        self.user_a.refresh_from_db()
+        self.user_b.refresh_from_db()
+        self.assertEqual(self.user_a.chat_stream_id_version, 2)
+        # L'altre usuari no s'ha tocat.
+        self.assertEqual(self.user_b.chat_stream_id_version, 1)
+
+    def test_bump_with_missing_id_warns_and_skips(self):
+        missing_id = 999999
+        output = self._call("--ids", str(self.user_a.id), str(missing_id))
+        self.user_a.refresh_from_db()
+        self.assertEqual(self.user_a.chat_stream_id_version, 2)
+        self.assertIn("no trobats", output)
+        self.assertIn(str(missing_id), output)
+
+    def test_bump_with_missing_email_warns_and_skips(self):
+        output = self._call("--emails", self.user_a.email, "ghost@test.com")
+        self.user_a.refresh_from_db()
+        self.assertEqual(self.user_a.chat_stream_id_version, 2)
+        self.assertIn("no trobats", output)
+        self.assertIn("ghost@test.com", output)
+
+    def test_bump_with_no_matching_users_prints_nothing_to_process(self):
+        output = self._call("--ids", "999998", "999999")
+        self.user_a.refresh_from_db()
+        self.user_b.refresh_from_db()
+        # No s'ha tocat ningú.
+        self.assertEqual(self.user_a.chat_stream_id_version, 1)
+        self.assertEqual(self.user_b.chat_stream_id_version, 1)
+        self.assertIn("Cap usuari per processar", output)
+
+    def test_bump_twice_keeps_incrementing(self):
+        self._call("--ids", str(self.user_a.id))
+        self._call("--ids", str(self.user_a.id))
+        self.user_a.refresh_from_db()
+        self.assertEqual(self.user_a.chat_stream_id_version, 3)

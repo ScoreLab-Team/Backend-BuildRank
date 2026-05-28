@@ -29,8 +29,18 @@ def get_stream_client() -> StreamChat:
 
 
 def get_stream_user_id(user) -> str:
-    """Retorna un identificador estable per a GetStream basat en l'ID de Django."""
-    return f"user_{user.id}"
+    """Retorna un identificador estable per a GetStream basat en l'ID de Django.
+
+    Per defecte (`chat_stream_id_version == 1`), retorna "user_{id}". Si el
+    user_id antic queda tombstoned a GetStream (per un hard-delete irreversible),
+    es pot bumpar `chat_stream_id_version` perquè aquesta funció emeti
+    "user_{id}_v{N}" — un identificador nou que GetStream tracta com un
+    usuari verge.
+    """
+    version = getattr(user, "chat_stream_id_version", 1) or 1
+    if version <= 1:
+        return f"user_{user.id}"
+    return f"user_{user.id}_v{version}"
 
 
 def sync_user_to_stream(client: StreamChat, user) -> None:
@@ -62,9 +72,29 @@ def sync_user_to_stream(client: StreamChat, user) -> None:
             client.reactivate_user(stream_uid)
             client.upsert_user(user_data)
         except Exception:
-            # User was hard-deleted in GetStream and cannot be restored.
-            # Log and continue — sync is best-effort.
-            logger.warning("No s'ha pogut restaurar l'usuari %s a GetStream (hard-deleted).", stream_uid)
+            # Hard-deleted i no recuperable: bumpa la versió del user_id i
+            # reintenta amb un identificador verge. Així evitem haver de
+            # córrer `bump_stream_user_id` manualment cada vegada que un
+            # usuari nou xoca amb un user_id tombstoned per tests anteriors.
+            try:
+                current_version = (
+                    getattr(user, "chat_stream_id_version", 1) or 1
+                )
+                user.chat_stream_id_version = current_version + 1
+                user.save(update_fields=["chat_stream_id_version"])
+                new_uid = get_stream_user_id(user)
+                user_data["id"] = new_uid
+                client.upsert_user(user_data)
+                logger.info(
+                    "User %s estava tombstoned a GetStream; bumpat a versió "
+                    "%d (nou ID: %s).",
+                    stream_uid, user.chat_stream_id_version, new_uid,
+                )
+            except Exception:
+                logger.warning(
+                    "No s'ha pogut restaurar ni recrear l'usuari %s a GetStream.",
+                    stream_uid, exc_info=True,
+                )
 
 
 def create_stream_token_for_user(user) -> str:
@@ -76,7 +106,6 @@ def create_stream_token_for_user(user) -> str:
     mai surt del backend.
     """
     client = get_stream_client()
-    stream_uid = get_stream_user_id(user)
 
     try:
         sync_user_to_stream(client, user)
@@ -84,6 +113,13 @@ def create_stream_token_for_user(user) -> str:
         logger.warning(
             "No s'ha pogut sincronitzar l'usuari %s a GetStream.", user.id, exc_info=True
         )
+
+    # IMPORTANT: agafem l'ID DESPRÉS de la sync. Si l'usuari tenia un user_id
+    # tombstoned, `sync_user_to_stream` haurà bumpat `chat_stream_id_version`
+    # i ara `get_stream_user_id` retorna l'ID nou (p. ex. `user_X_v2`). Si
+    # generéssim el token abans de la sync, el client rebria un token amb
+    # l'ID mort i el WebSocket de GetStream rebutjaria la connexió.
+    stream_uid = get_stream_user_id(user)
 
     expiration_seconds = int(getattr(settings, "STREAM_TOKEN_EXPIRATION_SECONDS", 3600))
     return client.create_token(stream_uid, expiration=int(time.time()) + expiration_seconds)
@@ -290,9 +326,12 @@ def get_or_create_channels_for_user(user) -> list[dict[str, Any]]:
     4. Retorna la llista de descriptors de canals.
     """
     client = get_stream_client()
-    stream_uid = get_stream_user_id(user)
 
     sync_user_to_stream(client, user)
+
+    # Agafem l'ID DESPRÉS de la sync per si l'auto-bump ha canviat la versió.
+    # Si capturéssim abans, afegiríem l'usuari als canals amb l'ID mort.
+    stream_uid = get_stream_user_id(user)
 
     buildings = get_accessible_buildings(user)
     role = getattr(getattr(user, "profile", None), "role", None)

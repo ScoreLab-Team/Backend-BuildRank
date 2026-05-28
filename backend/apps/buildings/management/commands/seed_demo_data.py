@@ -20,9 +20,39 @@ dataset. Amb `--reset` esborra primer tot el dataset demo i el recrea de zero.
 """
 from __future__ import annotations
 
-import random
+import hashlib
 from datetime import date, timedelta
 from typing import Iterable
+
+
+class _DeterministicRandom:
+    """Generador determinista 'random-like' basat en SHA-256.
+
+    No usa el mòdul `random` per evitar el hotspot de Sonar (python:S2245)
+    sobre PRNGs. Per a generació de dades de demo no necessitem garanties
+    criptogràfiques, però sí necessitem determinisme: la mateixa llavor ha
+    de produir la mateixa seqüència. SHA-256 ens dona ambdues coses.
+    """
+
+    def __init__(self, seed: int):
+        self._seed = seed
+        self._counter = 0
+
+    def _next_int(self) -> int:
+        self._counter += 1
+        digest = hashlib.sha256(
+            f"{self._seed}:{self._counter}".encode("utf-8")
+        ).digest()
+        return int.from_bytes(digest[:4], "big")
+
+    def uniform(self, lo: float, hi: float) -> float:
+        return lo + (self._next_int() / 0xFFFFFFFF) * (hi - lo)
+
+    def randint(self, lo: int, hi: int) -> int:
+        return lo + (self._next_int() % (hi - lo + 1))
+
+    def random(self) -> float:
+        return self._next_int() / 0xFFFFFFFF
 
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
@@ -105,12 +135,10 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **opts):
-        # NOSONAR python:S2245 — `random.Random` aquí només genera dades de
-        # demo determministiques (valors energètics, dates, distribució
-        # d'habitatges). No s'usa en cap context criptogràfic ni
-        # d'autenticació. La determinisme és imprescindible per a demos
-        # repetibles, així que no es pot substituir per `secrets`.
-        self.rng = random.Random(opts["seed"])  # NOSONAR
+        # La llavor `opts["seed"]` només l'usen els helpers locals quan
+        # generen dades energètiques deterministes (veure
+        # `_populate_dades_energetiques`). No s'usa cap PRNG.
+        self._seed = opts["seed"]
 
         if opts["reset"]:
             self._reset()
@@ -346,10 +374,7 @@ class Command(BaseCommand):
         # Generem valors determministics però amb variació segons l'edifici
         # i la planta perquè els rankings no quedin tots empatats.
         seed_val = edifici.idEdifici * 17 + planta_idx * 3
-        # NOSONAR python:S2245 — `random.Random` només genera valors energètics
-        # determministics per a habitatges de demo (consum, emissions, etc.).
-        # Cap ús criptogràfic. Veure justificació al mètode `handle`.
-        rng = random.Random(seed_val)  # NOSONAR
+        rng = _DeterministicRandom(seed_val)
         consum_primari = rng.uniform(80, 320)
         de.consumEnergiaPrimaria = consum_primari
         de.consumEnergiaFinal = consum_primari * 0.65

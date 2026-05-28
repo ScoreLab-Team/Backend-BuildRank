@@ -21,6 +21,7 @@ dataset. Amb `--reset` esborra primer tot el dataset demo i el recrea de zero.
 from __future__ import annotations
 
 import hashlib
+import os
 from datetime import date, timedelta
 from typing import Iterable
 
@@ -77,7 +78,9 @@ from apps.seasons.models import Temporada
 User = get_user_model()
 
 DEMO_EMAIL_DOMAIN = "buildrank.demo"
-DEMO_PASSWORD = "Demo1234!"  # només per dades de demo — no usar mai en producció
+# Llegim el secret de l'entorn perquè no quedi com a literal al repositori.
+# Si no s'ha configurat, fem servir un fallback de demo (mai en producció).
+DEMO_PASSWORD = os.environ.get("DEMO_SEED_PASSWORD") or "Demo1234!"  # noqa: S105
 
 # ---------------------------------------------------------------------------
 # Dades fixes (Barcelona, codis postals reals, carrers comuns)
@@ -298,52 +301,61 @@ class Command(BaseCommand):
         return edificis
 
     # ------------------------------------------------- habitatges + energètic
-    def _seed_habitatges_amb_dades(
-        self, edificis: list[Edifici], owners: list[User],
-    ):
-        self.stdout.write("Creant habitatges + dades energètiques...")
+    @staticmethod
+    def _n_habitatges_for_owner(idx: int) -> int:
+        # Primers 3 propietaris: 3 habitatges; següents 2: 2; resta: 1.
+        if idx < 3:
+            return 3
+        if idx < 5:
+            return 2
+        return 1
 
-        # Assignem propietaris en ronda. Els primers 3 propietaris reben 3
-        # habitatges en edificis diferents per cobrir el cas "propietaris amb
-        # 2 o 3 habitatges en edificis diferents".
-        owner_assignments: list[tuple[User, Edifici, int]] = []
+    def _build_owner_assignments(
+        self, edificis: list[Edifici], owners: list[User],
+    ) -> list[tuple[User | None, Edifici, int]]:
         # (owner, edifici, planta) — planta serveix per fer la cadastral única
+        assignments: list[tuple[User | None, Edifici, int]] = []
         for o_idx, owner in enumerate(owners):
-            n_habitatges = 3 if o_idx < 3 else (2 if o_idx < 5 else 1)
+            n_habitatges = self._n_habitatges_for_owner(o_idx)
             for h in range(n_habitatges):
                 edifici = edificis[(o_idx * 4 + h * 5) % len(edificis)]
-                owner_assignments.append((owner, edifici, h + 1))
+                assignments.append((owner, edifici, h + 1))
 
-        # També afegim 1-2 habitatges sense propietari per cobrir 2-4 per
-        # edifici. Comptem habitatges actuals per edifici i emplenem fins a 2-4.
+        # Afegim habitatges sense propietari fins a 2-4 per edifici.
         edifici_count = {e.idEdifici: 0 for e in edificis}
-        for _, e, _ in owner_assignments:
+        for _, e, _ in assignments:
             edifici_count[e.idEdifici] += 1
 
         unowned_planta_counter = {e.idEdifici: 50 for e in edificis}
         for e in edificis:
             target = 2 + (e.idEdifici % 3)  # 2, 3 o 4 habitatges per edifici
             while edifici_count[e.idEdifici] < target:
-                owner_assignments.append((None, e, unowned_planta_counter[e.idEdifici]))
+                assignments.append((None, e, unowned_planta_counter[e.idEdifici]))
                 unowned_planta_counter[e.idEdifici] += 1
                 edifici_count[e.idEdifici] += 1
+        return assignments
 
-        # Creació real
+    @staticmethod
+    def _get_or_init_dades_energetiques(ref: str) -> DadesEnergetiques:
+        # Reutilitzem la DE existent si ja n'hi ha una; altrament en creem una nova.
+        existing = (
+            Habitatge.objects.filter(referenciaCadastral=ref)
+            .select_related("dadesEnergetiques")
+            .first()
+        )
+        if existing and existing.dadesEnergetiques:
+            return existing.dadesEnergetiques
+        return DadesEnergetiques()
+
+    def _seed_habitatges_amb_dades(
+        self, edificis: list[Edifici], owners: list[User],
+    ):
+        self.stdout.write("Creant habitatges + dades energètiques...")
+        owner_assignments = self._build_owner_assignments(edificis, owners)
+
         for owner, edifici, planta_idx in owner_assignments:
             ref = self._build_cadastral(edifici, planta_idx)
-            # Primer creem (o reutilitzem) la DadesEnergetiques d'aquest
-            # habitatge. La relació 1:1 viu a Habitatge.dadesEnergetiques,
-            # així que primer la DE i després la lliguem.
-            existing = (
-                Habitatge.objects.filter(referenciaCadastral=ref)
-                .select_related("dadesEnergetiques")
-                .first()
-            )
-            de = (
-                existing.dadesEnergetiques
-                if existing and existing.dadesEnergetiques
-                else DadesEnergetiques()
-            )
+            de = self._get_or_init_dades_energetiques(ref)
             self._populate_dades_energetiques(de, edifici, planta_idx)
             de.save()
 
@@ -412,7 +424,7 @@ class Command(BaseCommand):
             ),
         ]
         for nom, data_inici, data_fi in specs:
-            t, created = Temporada.objects.get_or_create(
+            t, _ = Temporada.objects.get_or_create(
                 nom=nom,
                 defaults={
                     "dataInici": data_inici,
